@@ -35,8 +35,10 @@ using namespace android;
 struct fields_t {
     jfieldID context;
     jclass bitmapClazz;
-    jmethodID bitmapConstructor;
+    jfieldID nativeBitmap;
     jmethodID createBitmapMethod;
+    jclass configClazz;
+    jmethodID createConfigMethod;
 };
 
 static fields_t fields;
@@ -131,6 +133,61 @@ static void android_media_MediaMetadataRetriever_setDataSourceFD(JNIEnv *env, jo
     process_media_retriever_call(env, retriever->setDataSource(fd, offset, length), "java/lang/RuntimeException", "setDataSource failed");
 }
 
+template<typename T>
+static void rotate0(T* dst, const T* src, size_t width, size_t height)
+{
+    memcpy(dst, src, width * height * sizeof(T));
+}
+
+template<typename T>
+static void rotate90(T* dst, const T* src, size_t width, size_t height)
+{
+    for (size_t i = 0; i < height; ++i) {
+        for (size_t j = 0; j < width; ++j) {
+            dst[j * height + height - 1 - i] = src[i * width + j];
+        }
+    }
+}
+
+template<typename T>
+static void rotate180(T* dst, const T* src, size_t width, size_t height)
+{
+    for (size_t i = 0; i < height; ++i) {
+        for (size_t j = 0; j < width; ++j) {
+            dst[(height - 1 - i) * width + width - 1 - j] = src[i * width + j];
+        }
+    }
+}
+
+template<typename T>
+static void rotate270(T* dst, const T* src, size_t width, size_t height)
+{
+    for (size_t i = 0; i < height; ++i) {
+        for (size_t j = 0; j < width; ++j) {
+            dst[(width - 1 - j) * height + i] = src[i * width + j];
+        }
+    }
+}
+
+template<typename T>
+static void rotate(T *dst, const T *src, size_t width, size_t height, int angle)
+{
+    switch (angle) {
+        case 0:
+            rotate0(dst, src, width, height);
+            break;
+        case 90:
+            rotate90(dst, src, width, height);
+            break;
+        case 180:
+            rotate180(dst, src, width, height);
+            break;
+        case 270:
+            rotate270(dst, src, width, height);
+            break;
+    }
+}
+
 static jobject android_media_MediaMetadataRetriever_getFrameAtTime(JNIEnv *env, jobject thiz, jlong timeUs, jint option)
 {
     LOGV("getFrameAtTime: %lld us option: %d", timeUs, option);
@@ -151,71 +208,44 @@ static jobject android_media_MediaMetadataRetriever_getFrameAtTime(JNIEnv *env, 
         return NULL;
     }
 
-    jobject matrix = NULL;
-    if (videoFrame->mRotationAngle != 0) {
-        LOGD("Create a rotation matrix: %d degrees", videoFrame->mRotationAngle);
-        jclass matrixClazz = env->FindClass("android/graphics/Matrix");
-        if (matrixClazz == NULL) {
-            jniThrowException(env, "java/lang/RuntimeException",
-                "Can't find android/graphics/Matrix");
-            return NULL;
-        }
-        jmethodID matrixConstructor =
-            env->GetMethodID(matrixClazz, "<init>", "()V");
-        if (matrixConstructor == NULL) {
-            jniThrowException(env, "java/lang/RuntimeException",
-                "Can't find Matrix constructor");
-            return NULL;
-        }
-        matrix =
-            env->NewObject(matrixClazz, matrixConstructor);
-        if (matrix == NULL) {
-            LOGE("Could not create a Matrix object");
-            return NULL;
-        }
+    LOGV("Dimension = %dx%d and bytes = %d",
+            videoFrame->mDisplayWidth,
+            videoFrame->mDisplayHeight,
+            videoFrame->mSize);
 
-        LOGV("Rotate the matrix: %d degrees", videoFrame->mRotationAngle);
-        jmethodID setRotateMethod =
-                env->GetMethodID(matrixClazz, "setRotate", "(F)V");
-        if (setRotateMethod == NULL) {
-            jniThrowException(env, "java/lang/RuntimeException",
-                "Can't find Matrix setRotate method");
-            return NULL;
-        }
-        env->CallVoidMethod(matrix, setRotateMethod, 1.0 * videoFrame->mRotationAngle);
-        env->DeleteLocalRef(matrixClazz);
+    jobject config = env->CallStaticObjectMethod(
+                        fields.configClazz,
+                        fields.createConfigMethod,
+                        SkBitmap::kRGB_565_Config);
+
+    size_t width, height;
+    if (videoFrame->mRotationAngle == 90 || videoFrame->mRotationAngle == 270) {
+        width = videoFrame->mDisplayHeight;
+        height = videoFrame->mDisplayWidth;
+    } else {
+        width = videoFrame->mDisplayWidth;
+        height = videoFrame->mDisplayHeight;
     }
 
-    // Create a SkBitmap to hold the pixels
-    SkBitmap *bitmap = new SkBitmap();
-    if (bitmap == NULL) {
-        LOGE("getFrameAtTime: cannot instantiate a SkBitmap object.");
-        return NULL;
-    }
-    bitmap->setConfig(SkBitmap::kRGB_565_Config, videoFrame->mDisplayWidth, videoFrame->mDisplayHeight);
-    if (!bitmap->allocPixels()) {
-        delete bitmap;
-        LOGE("failed to allocate pixel buffer");
-        return NULL;
-    }
-    memcpy((uint8_t*)bitmap->getPixels(), (uint8_t*)videoFrame + sizeof(VideoFrame), videoFrame->mSize);
+    jobject jBitmap = env->CallStaticObjectMethod(
+                            fields.bitmapClazz,
+                            fields.createBitmapMethod,
+                            width,
+                            height,
+                            config);
 
-    // Since internally SkBitmap uses reference count to manage the reference to
-    // its pixels, it is important that the pixels (along with SkBitmap) be
-    // available after creating the Bitmap is returned to Java app.
-    jobject jSrcBitmap = env->NewObject(fields.bitmapClazz,
-            fields.bitmapConstructor, (int) bitmap, true, NULL, -1);
+    SkBitmap *bitmap =
+            (SkBitmap *) env->GetIntField(jBitmap, fields.nativeBitmap);
 
-    LOGV("Return a new bitmap constructed with the rotation matrix");
-    return env->CallStaticObjectMethod(
-                fields.bitmapClazz, fields.createBitmapMethod,
-                jSrcBitmap,                     // source Bitmap
-                0,                              // x
-                0,                              // y
-                videoFrame->mDisplayWidth,      // width
-                videoFrame->mDisplayHeight,     // height
-                matrix,                         // transform matrix
-                false);                         // filter
+    bitmap->lockPixels();
+    rotate((uint16_t*)bitmap->getPixels(),
+           (uint16_t*)((char*)videoFrame + sizeof(VideoFrame)),
+           videoFrame->mDisplayWidth,
+           videoFrame->mDisplayHeight,
+           videoFrame->mRotationAngle);
+    bitmap->unlockPixels();
+
+    return jBitmap;
 }
 
 static jbyteArray android_media_MediaMetadataRetriever_getEmbeddedPicture(
@@ -287,7 +317,6 @@ static void android_media_MediaMetadataRetriever_release(JNIEnv *env, jobject th
 static void android_media_MediaMetadataRetriever_native_finalize(JNIEnv *env, jobject thiz)
 {
     LOGV("native_finalize");
-    
     // No lock is needed, since android_media_MediaMetadataRetriever_release() is protected
     android_media_MediaMetadataRetriever_release(env, thiz);
 }
@@ -314,19 +343,33 @@ static void android_media_MediaMetadataRetriever_native_init(JNIEnv *env)
         jniThrowException(env, "java/lang/RuntimeException", "Can't find android/graphics/Bitmap");
         return;
     }
-
-    fields.bitmapConstructor = env->GetMethodID(fields.bitmapClazz, "<init>", "(IZ[BI)V");
-    if (fields.bitmapConstructor == NULL) {
-        jniThrowException(env, "java/lang/RuntimeException", "Can't find Bitmap constructor");
-        return;
-    }
     fields.createBitmapMethod =
             env->GetStaticMethodID(fields.bitmapClazz, "createBitmap",
-                    "(Landroid/graphics/Bitmap;IIIILandroid/graphics/Matrix;Z)"
+                    "(IILandroid/graphics/Bitmap$Config;)"
                     "Landroid/graphics/Bitmap;");
     if (fields.createBitmapMethod == NULL) {
         jniThrowException(env, "java/lang/RuntimeException",
-                "Can't find Bitmap.createBitmap method");
+                "Can't find Bitmap.createBitmap(int, int, Config)  method");
+        return;
+    }
+    fields.nativeBitmap = env->GetFieldID(fields.bitmapClazz, "mNativeBitmap", "I");
+    if (fields.nativeBitmap == NULL) {
+        jniThrowException(env, "java/lang/RuntimeException",
+                "Can't find Bitmap.mNativeBitmap field");
+    }
+
+    fields.configClazz = env->FindClass("android/graphics/Bitmap$Config");
+    if (fields.configClazz == NULL) {
+        jniThrowException(env, "java/lang/RuntimeException",
+                               "Can't find Bitmap$Config class");
+        return;
+    }
+    fields.createConfigMethod =
+            env->GetStaticMethodID(fields.configClazz, "nativeToConfig",
+                    "(I)Landroid/graphics/Bitmap$Config;");
+    if (fields.createConfigMethod == NULL) {
+        jniThrowException(env, "java/lang/RuntimeException",
+                "Can't find Bitmap$Config.nativeToConfig(int)  method");
         return;
     }
 }

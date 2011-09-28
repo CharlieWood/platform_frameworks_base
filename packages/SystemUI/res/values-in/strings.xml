@@ -19,23 +19,29 @@
 
 <resources xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
-    <string name="app_label" msgid="4489004083283879149">"Bilah Status"</string>
+    <string name="app_label" msgid="7164937344850004466">"Sistem UI"</string>
     <string name="status_bar_clear_all_button" msgid="7774721344716731603">"Bersihkan"</string>
+    <string name="status_bar_do_not_disturb_button" msgid="5812628897510997853">"Jangan ganggu"</string>
+    <string name="status_bar_please_disturb_button" msgid="3345398298841572813">"Tampilkan pemberitahuan"</string>
     <string name="status_bar_no_notifications_title" msgid="4755261167193833213">"Tidak ada pemberitahuan"</string>
     <string name="status_bar_ongoing_events_title" msgid="1682504513316879202">"Berkelanjutan"</string>
     <string name="status_bar_latest_events_title" msgid="6594767438577593172">"Pemberitahuan"</string>
     <string name="battery_low_title" msgid="7923774589611311406">"Harap hubungkan ke pengisi daya"</string>
-    <string name="battery_low_subtitle" msgid="7388781709819722764">"Baterai kekurangan daya:"</string>
-    <string name="battery_low_percent_format" msgid="696154104579022959">"<xliff:g id="NUMBER">%d%%</xliff:g> atau kurang yang tersisa."</string>
+    <string name="battery_low_subtitle" msgid="1752040062087829196">"Baterai semakin lemah."</string>
+    <string name="battery_low_percent_format" msgid="1077244949318261761">"<xliff:g id="NUMBER">%d%%</xliff:g> tersisa"</string>
+    <string name="invalid_charger" msgid="4549105996740522523">"Pengisian daya USB tidak didukung."\n"Gunakan hanya pengisi daya yang disediakan."</string>
     <string name="battery_low_why" msgid="7279169609518386372">"Penggunaan baterai"</string>
-    <!-- no translation found for usb_accessory_permission_prompt (3969745913539898765) -->
-    <skip />
-    <!-- no translation found for usb_device_confirm_prompt (2727793581411868504) -->
-    <skip />
-    <!-- no translation found for usb_accessory_confirm_prompt (3947430407252730383) -->
-    <skip />
-    <string name="usb_accessory_uri_prompt" msgid="6332150684964235705">"Tidak ada aplikasi terpasang yang bekerja dengan aksesori USB ini. Pelajari aksesori ini lebih lanjut di <xliff:g id="URL">%1$s</xliff:g>"</string>
-    <string name="title_usb_accessory" msgid="4966265263465181372">"Aksesori USB"</string>
-    <string name="label_view" msgid="6304565553218192990">"Lihat"</string>
-    <string name="always_use_accessory" msgid="1210954576979621596">"Gunakan secara bawaan untuk aksesori USB ini"</string>
+    <string name="status_bar_settings_settings_button" msgid="3023889916699270224">"Setelan"</string>
+    <string name="status_bar_settings_wifi_button" msgid="1733928151698311923">"Wi-Fi"</string>
+    <string name="status_bar_settings_airplane" msgid="4879879698500955300">"Mode pesawat"</string>
+    <string name="status_bar_settings_rotation_lock" msgid="8361452930058000609">"Kunci orientasi layar"</string>
+    <string name="status_bar_settings_mute_label" msgid="554682549917429396">"BISUKAN"</string>
+    <string name="status_bar_settings_auto_brightness_label" msgid="511453614962324674">"AUTO"</string>
+    <string name="status_bar_settings_notifications" msgid="397146176280905137">"Pemberitahuan"</string>
+    <string name="recent_tasks_title" msgid="3691764623638127888">"Terbaru"</string>
+    <string name="recent_tasks_empty" msgid="1905484479067697884">"Tidak ada aplikasi terbaru."</string>
+    <string name="recent_tasks_app_label" msgid="3796483981246752469">"Apps"</string>
+    <string name="bluetooth_tethered" msgid="7094101612161133267">"Bluetooth tertambat"</string>
+    <string name="status_bar_input_method_settings_configure_input_methods" msgid="737483394044014246">"Konfigurasikan metode masukan"</string>
+    <string name="status_bar_use_physical_keyboard" msgid="3695516942412442936">"Gunakan keyboard fisik"</string>
 </resources>

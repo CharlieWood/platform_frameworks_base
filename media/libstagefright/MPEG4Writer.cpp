@@ -33,6 +33,10 @@
 #include <media/stagefright/MediaSource.h>
 #include <media/stagefright/Utils.h>
 #include <media/mediarecorder.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include "include/ESDS.h"
 
@@ -64,7 +68,7 @@ public:
     bool isAvc() const { return mIsAvc; }
     bool isAudio() const { return mIsAudio; }
     bool isMPEG4() const { return mIsMPEG4; }
-    void addChunkOffset(off_t offset);
+    void addChunkOffset(off64_t offset);
     status_t dump(int fd, const Vector<String16>& args) const;
 
 private:
@@ -74,6 +78,7 @@ private:
     volatile bool mDone;
     volatile bool mPaused;
     volatile bool mResumed;
+    volatile bool mStarted;
     bool mIsAvc;
     bool mIsAudio;
     bool mIsMPEG4;
@@ -99,7 +104,7 @@ private:
     List<MediaBuffer *> mChunkSamples;
 
     size_t              mNumStcoTableEntries;
-    List<off_t>         mChunkOffsets;
+    List<off64_t>         mChunkOffsets;
 
     size_t              mNumStscTableEntries;
     struct StscTableEntry {
@@ -214,7 +219,8 @@ private:
 };
 
 MPEG4Writer::MPEG4Writer(const char *filename)
-    : mFile(fopen(filename, "wb")),
+    : mFd(-1),
+      mInitCheck(NO_INIT),
       mUse4ByteNalLength(true),
       mUse32BitOffset(true),
       mIsFileSizeLimitExplicitlyRequested(false),
@@ -224,11 +230,16 @@ MPEG4Writer::MPEG4Writer(const char *filename)
       mMdatOffset(0),
       mEstimatedMoovBoxSize(0),
       mInterleaveDurationUs(1000000) {
-    CHECK(mFile != NULL);
+
+    mFd = open(filename, O_CREAT | O_LARGEFILE | O_TRUNC);
+    if (mFd >= 0) {
+        mInitCheck = OK;
+    }
 }
 
 MPEG4Writer::MPEG4Writer(int fd)
-    : mFile(fdopen(fd, "wb")),
+    : mFd(dup(fd)),
+      mInitCheck(mFd < 0? NO_INIT: OK),
       mUse4ByteNalLength(true),
       mUse32BitOffset(true),
       mIsFileSizeLimitExplicitlyRequested(false),
@@ -238,7 +249,6 @@ MPEG4Writer::MPEG4Writer(int fd)
       mMdatOffset(0),
       mEstimatedMoovBoxSize(0),
       mInterleaveDurationUs(1000000) {
-    CHECK(mFile != NULL);
 }
 
 MPEG4Writer::~MPEG4Writer() {
@@ -368,7 +378,7 @@ int64_t MPEG4Writer::estimateMoovBoxSize(int32_t bitRate) {
 }
 
 status_t MPEG4Writer::start(MetaData *param) {
-    if (mFile == NULL) {
+    if (mInitCheck != OK) {
         return UNKNOWN_ERROR;
     }
 
@@ -459,13 +469,13 @@ status_t MPEG4Writer::start(MetaData *param) {
         mEstimatedMoovBoxSize = estimateMoovBoxSize(bitRate);
     }
     CHECK(mEstimatedMoovBoxSize >= 8);
-    fseeko(mFile, mFreeBoxOffset, SEEK_SET);
+    lseek64(mFd, mFreeBoxOffset, SEEK_SET);
     writeInt32(mEstimatedMoovBoxSize);
     write("free", 4);
 
     mMdatOffset = mFreeBoxOffset + mEstimatedMoovBoxSize;
     mOffset = mMdatOffset;
-    fseeko(mFile, mMdatOffset, SEEK_SET);
+    lseek64(mFd, mMdatOffset, SEEK_SET);
     if (mUse32BitOffset) {
         write("????mdat", 8);
     } else {
@@ -491,7 +501,7 @@ bool MPEG4Writer::use32BitFileOffset() const {
 }
 
 status_t MPEG4Writer::pause() {
-    if (mFile == NULL) {
+    if (mInitCheck != OK) {
         return OK;
     }
     mPaused = true;
@@ -507,7 +517,7 @@ status_t MPEG4Writer::pause() {
 }
 
 void MPEG4Writer::stopWriterThread() {
-    LOGV("stopWriterThread");
+    LOGD("Stopping writer thread");
 
     {
         Mutex::Autolock autolock(mLock);
@@ -518,6 +528,7 @@ void MPEG4Writer::stopWriterThread() {
 
     void *dummy;
     pthread_join(mThread, &dummy);
+    LOGD("Writer thread stopped");
 }
 
 /*
@@ -572,13 +583,15 @@ void MPEG4Writer::writeCompositionMatrix(int degrees) {
     writeInt32(0x40000000);  // w
 }
 
+
 status_t MPEG4Writer::stop() {
-    if (mFile == NULL) {
+    if (mInitCheck != OK) {
         return OK;
     }
 
     status_t err = OK;
     int64_t maxDurationUs = 0;
+    int64_t minDurationUs = 0x7fffffffffffffffLL;
     for (List<Track *>::iterator it = mTracks.begin();
          it != mTracks.end(); ++it) {
         status_t status = (*it)->stop();
@@ -590,34 +603,42 @@ status_t MPEG4Writer::stop() {
         if (durationUs > maxDurationUs) {
             maxDurationUs = durationUs;
         }
+        if (durationUs < minDurationUs) {
+            minDurationUs = durationUs;
+        }
+    }
+
+    if (mTracks.size() > 1) {
+        LOGD("Duration from tracks range is [%lld, %lld] us",
+            minDurationUs, maxDurationUs);
     }
 
     stopWriterThread();
 
     // Do not write out movie header on error.
     if (err != OK) {
-        fflush(mFile);
-        fclose(mFile);
-        mFile = NULL;
+        close(mFd);
+        mFd = -1;
+        mInitCheck = NO_INIT;
         mStarted = false;
         return err;
     }
 
     // Fix up the size of the 'mdat' chunk.
     if (mUse32BitOffset) {
-        fseeko(mFile, mMdatOffset, SEEK_SET);
+        lseek64(mFd, mMdatOffset, SEEK_SET);
         int32_t size = htonl(static_cast<int32_t>(mOffset - mMdatOffset));
-        fwrite(&size, 1, 4, mFile);
+        ::write(mFd, &size, 4);
     } else {
-        fseeko(mFile, mMdatOffset + 8, SEEK_SET);
+        lseek64(mFd, mMdatOffset + 8, SEEK_SET);
         int64_t size = mOffset - mMdatOffset;
         size = hton64(size);
-        fwrite(&size, 1, 8, mFile);
+        ::write(mFd, &size, 8);
     }
-    fseeko(mFile, mOffset, SEEK_SET);
+    lseek64(mFd, mOffset, SEEK_SET);
 
     time_t now = time(NULL);
-    const off_t moovOffset = mOffset;
+    const off64_t moovOffset = mOffset;
     mWriteMoovBoxToMemory = true;
     mMoovBoxBuffer = (uint8_t *) malloc(mEstimatedMoovBoxSize);
     mMoovBoxBufferOffset = 0;
@@ -637,7 +658,7 @@ status_t MPEG4Writer::stop() {
         writeInt16(0);             // reserved
         writeInt32(0);             // reserved
         writeInt32(0);             // reserved
-        writeCompositionMatrix(0);
+        writeCompositionMatrix(0); // matrix
         writeInt32(0);             // predefined
         writeInt32(0);             // predefined
         writeInt32(0);             // predefined
@@ -659,12 +680,12 @@ status_t MPEG4Writer::stop() {
         CHECK(mMoovBoxBufferOffset + 8 <= mEstimatedMoovBoxSize);
 
         // Moov box
-        fseeko(mFile, mFreeBoxOffset, SEEK_SET);
+        lseek64(mFd, mFreeBoxOffset, SEEK_SET);
         mOffset = mFreeBoxOffset;
-        write(mMoovBoxBuffer, 1, mMoovBoxBufferOffset, mFile);
+        write(mMoovBoxBuffer, 1, mMoovBoxBufferOffset);
 
         // Free box
-        fseeko(mFile, mOffset, SEEK_SET);
+        lseek64(mFd, mOffset, SEEK_SET);
         writeInt32(mEstimatedMoovBoxSize - mMoovBoxBufferOffset);
         write("free", 4);
 
@@ -678,9 +699,9 @@ status_t MPEG4Writer::stop() {
 
     CHECK(mBoxes.empty());
 
-    fflush(mFile);
-    fclose(mFile);
-    mFile = NULL;
+    close(mFd);
+    mFd = -1;
+    mInitCheck = NO_INIT;
     mStarted = false;
     return err;
 }
@@ -698,11 +719,12 @@ void MPEG4Writer::unlock() {
     mLock.unlock();
 }
 
-off_t MPEG4Writer::addSample_l(MediaBuffer *buffer) {
-    off_t old_offset = mOffset;
+off64_t MPEG4Writer::addSample_l(MediaBuffer *buffer) {
+    off64_t old_offset = mOffset;
 
-    fwrite((const uint8_t *)buffer->data() + buffer->range_offset(),
-           1, buffer->range_length(), mFile);
+    ::write(mFd,
+          (const uint8_t *)buffer->data() + buffer->range_offset(),
+          buffer->range_length());
 
     mOffset += buffer->range_length();
 
@@ -723,33 +745,34 @@ static void StripStartcode(MediaBuffer *buffer) {
     }
 }
 
-off_t MPEG4Writer::addLengthPrefixedSample_l(MediaBuffer *buffer) {
-    off_t old_offset = mOffset;
+off64_t MPEG4Writer::addLengthPrefixedSample_l(MediaBuffer *buffer) {
+    off64_t old_offset = mOffset;
 
     size_t length = buffer->range_length();
 
     if (mUse4ByteNalLength) {
         uint8_t x = length >> 24;
-        fwrite(&x, 1, 1, mFile);
+        ::write(mFd, &x, 1);
         x = (length >> 16) & 0xff;
-        fwrite(&x, 1, 1, mFile);
+        ::write(mFd, &x, 1);
         x = (length >> 8) & 0xff;
-        fwrite(&x, 1, 1, mFile);
+        ::write(mFd, &x, 1);
         x = length & 0xff;
-        fwrite(&x, 1, 1, mFile);
+        ::write(mFd, &x, 1);
 
-        fwrite((const uint8_t *)buffer->data() + buffer->range_offset(),
-                1, length, mFile);
+        ::write(mFd,
+              (const uint8_t *)buffer->data() + buffer->range_offset(),
+              length);
+
         mOffset += length + 4;
     } else {
         CHECK(length < 65536);
 
         uint8_t x = length >> 8;
-        fwrite(&x, 1, 1, mFile);
+        ::write(mFd, &x, 1);
         x = length & 0xff;
-        fwrite(&x, 1, 1, mFile);
-        fwrite((const uint8_t *)buffer->data() + buffer->range_offset(),
-                1, length, mFile);
+        ::write(mFd, &x, 1);
+        ::write(mFd, (const uint8_t *)buffer->data() + buffer->range_offset(), length);
         mOffset += length + 2;
     }
 
@@ -757,19 +780,21 @@ off_t MPEG4Writer::addLengthPrefixedSample_l(MediaBuffer *buffer) {
 }
 
 size_t MPEG4Writer::write(
-        const void *ptr, size_t size, size_t nmemb, FILE *stream) {
+        const void *ptr, size_t size, size_t nmemb) {
 
     const size_t bytes = size * nmemb;
     if (mWriteMoovBoxToMemory) {
-        off_t moovBoxSize = 8 + mMoovBoxBufferOffset + bytes;
+        // This happens only when we write the moov box at the end of
+        // recording, not for each output video/audio frame we receive.
+        off64_t moovBoxSize = 8 + mMoovBoxBufferOffset + bytes;
         if (moovBoxSize > mEstimatedMoovBoxSize) {
-            for (List<off_t>::iterator it = mBoxes.begin();
+            for (List<off64_t>::iterator it = mBoxes.begin();
                  it != mBoxes.end(); ++it) {
                 (*it) += mOffset;
             }
-            fseeko(mFile, mOffset, SEEK_SET);
-            fwrite(mMoovBoxBuffer, 1, mMoovBoxBufferOffset, stream);
-            fwrite(ptr, size, nmemb, stream);
+            lseek64(mFd, mOffset, SEEK_SET);
+            ::write(mFd, mMoovBoxBuffer, mMoovBoxBufferOffset);
+            ::write(mFd, ptr, size * nmemb);
             mOffset += (bytes + mMoovBoxBufferOffset);
             free(mMoovBoxBuffer);
             mMoovBoxBuffer = NULL;
@@ -781,7 +806,7 @@ size_t MPEG4Writer::write(
             mMoovBoxBufferOffset += bytes;
         }
     } else {
-        fwrite(ptr, size, nmemb, stream);
+        ::write(mFd, ptr, size * nmemb);
         mOffset += bytes;
     }
     return bytes;
@@ -800,51 +825,51 @@ void MPEG4Writer::beginBox(const char *fourcc) {
 void MPEG4Writer::endBox() {
     CHECK(!mBoxes.empty());
 
-    off_t offset = *--mBoxes.end();
+    off64_t offset = *--mBoxes.end();
     mBoxes.erase(--mBoxes.end());
 
     if (mWriteMoovBoxToMemory) {
        int32_t x = htonl(mMoovBoxBufferOffset - offset);
        memcpy(mMoovBoxBuffer + offset, &x, 4);
     } else {
-        fseeko(mFile, offset, SEEK_SET);
+        lseek64(mFd, offset, SEEK_SET);
         writeInt32(mOffset - offset);
         mOffset -= 4;
-        fseeko(mFile, mOffset, SEEK_SET);
+        lseek64(mFd, mOffset, SEEK_SET);
     }
 }
 
 void MPEG4Writer::writeInt8(int8_t x) {
-    write(&x, 1, 1, mFile);
+    write(&x, 1, 1);
 }
 
 void MPEG4Writer::writeInt16(int16_t x) {
     x = htons(x);
-    write(&x, 1, 2, mFile);
+    write(&x, 1, 2);
 }
 
 void MPEG4Writer::writeInt32(int32_t x) {
     x = htonl(x);
-    write(&x, 1, 4, mFile);
+    write(&x, 1, 4);
 }
 
 void MPEG4Writer::writeInt64(int64_t x) {
     x = hton64(x);
-    write(&x, 1, 8, mFile);
+    write(&x, 1, 8);
 }
 
 void MPEG4Writer::writeCString(const char *s) {
     size_t n = strlen(s);
-    write(s, 1, n + 1, mFile);
+    write(s, 1, n + 1);
 }
 
 void MPEG4Writer::writeFourcc(const char *s) {
     CHECK_EQ(strlen(s), 4);
-    write(s, 1, 4, mFile);
+    write(s, 1, 4);
 }
 
 void MPEG4Writer::write(const void *data, size_t size) {
-    write(data, 1, size, mFile);
+    write(data, 1, size);
 }
 
 bool MPEG4Writer::isFileStreamable() const {
@@ -927,6 +952,7 @@ MPEG4Writer::Track::Track(
       mDone(false),
       mPaused(false),
       mResumed(false),
+      mStarted(false),
       mTrackDurationUs(0),
       mEstimatedTrackSizeBytes(0),
       mSamplesHaveSameSize(true),
@@ -988,7 +1014,7 @@ void MPEG4Writer::Track::addOneSttsTableEntry(
     ++mNumSttsTableEntries;
 }
 
-void MPEG4Writer::Track::addChunkOffset(off_t offset) {
+void MPEG4Writer::Track::addChunkOffset(off64_t offset) {
     ++mNumStcoTableEntries;
     mChunkOffsets.push_back(offset);
 }
@@ -1096,41 +1122,41 @@ void MPEG4Writer::bufferChunk(const Chunk& chunk) {
     CHECK("Received a chunk for a unknown track" == 0);
 }
 
-void MPEG4Writer::writeFirstChunk(ChunkInfo* info) {
-    LOGV("writeFirstChunk: %p", info->mTrack);
+void MPEG4Writer::writeChunkToFile(Chunk* chunk) {
+    LOGV("writeChunkToFile: %lld from %s track",
+        chunk.mTimestampUs, chunk.mTrack->isAudio()? "audio": "video");
 
-    List<Chunk>::iterator chunkIt = info->mChunks.begin();
-    for (List<MediaBuffer *>::iterator it = chunkIt->mSamples.begin();
-         it != chunkIt->mSamples.end(); ++it) {
+    int32_t isFirstSample = true;
+    while (!chunk->mSamples.empty()) {
+        List<MediaBuffer *>::iterator it = chunk->mSamples.begin();
 
-        off_t offset = info->mTrack->isAvc()
-                            ? addLengthPrefixedSample_l(*it)
-                            : addSample_l(*it);
-        if (it == chunkIt->mSamples.begin()) {
-            info->mTrack->addChunkOffset(offset);
+        off64_t offset = chunk->mTrack->isAvc()
+                                ? addLengthPrefixedSample_l(*it)
+                                : addSample_l(*it);
+
+        if (isFirstSample) {
+            chunk->mTrack->addChunkOffset(offset);
+            isFirstSample = false;
         }
-    }
 
-    // Done with the current chunk.
-    // Release all the samples in this chunk.
-    while (!chunkIt->mSamples.empty()) {
-        List<MediaBuffer *>::iterator it = chunkIt->mSamples.begin();
         (*it)->release();
         (*it) = NULL;
-        chunkIt->mSamples.erase(it);
+        chunk->mSamples.erase(it);
     }
-    chunkIt->mSamples.clear();
-    info->mChunks.erase(chunkIt);
+    chunk->mSamples.clear();
 }
 
-void MPEG4Writer::writeChunks() {
-    LOGV("writeChunks");
+void MPEG4Writer::writeAllChunks() {
+    LOGV("writeAllChunks");
     size_t outstandingChunks = 0;
     while (!mChunkInfos.empty()) {
         List<ChunkInfo>::iterator it = mChunkInfos.begin();
         while (!it->mChunks.empty()) {
-            CHECK_EQ(OK, writeOneChunk());
-            ++outstandingChunks;
+            Chunk chunk;
+            if (findChunkToWrite(&chunk)) {
+                writeChunkToFile(&chunk);
+                ++outstandingChunks;
+            }
         }
         it->mTrack = NULL;
         mChunkInfos.erase(it);
@@ -1139,8 +1165,8 @@ void MPEG4Writer::writeChunks() {
     LOGD("%d chunks are written in the last batch", outstandingChunks);
 }
 
-status_t MPEG4Writer::writeOneChunk() {
-    LOGV("writeOneChunk");
+bool MPEG4Writer::findChunkToWrite(Chunk *chunk) {
+    LOGV("findChunkToWrite");
 
     // Find the smallest timestamp, and write that chunk out
     // XXX: What if some track is just too slow?
@@ -1159,38 +1185,50 @@ status_t MPEG4Writer::writeOneChunk() {
 
     if (track == NULL) {
         LOGV("Nothing to be written after all");
-        return OK;
+        return false;
     }
 
     if (mIsFirstChunk) {
         mIsFirstChunk = false;
     }
+
     for (List<ChunkInfo>::iterator it = mChunkInfos.begin();
          it != mChunkInfos.end(); ++it) {
         if (it->mTrack == track) {
-            writeFirstChunk(&(*it));
+            *chunk = *(it->mChunks.begin());
+            it->mChunks.erase(it->mChunks.begin());
+            CHECK_EQ(chunk->mTrack, track);
+            return true;
         }
     }
-    return OK;
+
+    return false;
 }
 
 void MPEG4Writer::threadFunc() {
     LOGV("threadFunc");
 
     prctl(PR_SET_NAME, (unsigned long)"MPEG4Writer", 0, 0, 0);
+
+    Mutex::Autolock autoLock(mLock);
     while (!mDone) {
-        {
-            Mutex::Autolock autolock(mLock);
+        Chunk chunk;
+        bool chunkFound = false;
+
+        while (!mDone && !(chunkFound = findChunkToWrite(&chunk))) {
             mChunkReadyCondition.wait(mLock);
-            CHECK_EQ(writeOneChunk(), OK);
+        }
+
+        // Actual write without holding the lock in order to
+        // reduce the blocking time for media track threads.
+        if (chunkFound) {
+            mLock.unlock();
+            writeChunkToFile(&chunk);
+            mLock.lock();
         }
     }
 
-    {
-        // Write ALL samples
-        Mutex::Autolock autolock(mLock);
-        writeChunks();
-    }
+    writeAllChunks();
 }
 
 status_t MPEG4Writer::startWriterThread() {
@@ -1228,7 +1266,7 @@ status_t MPEG4Writer::Track::start(MetaData *params) {
     }
 
     int32_t rotationDegrees;
-    if (!mIsAudio && params && params->findInt32(kKeyRotationDegree, &rotationDegrees)) {
+    if (!mIsAudio && params && params->findInt32(kKeyRotation, &rotationDegrees)) {
         mRotation = rotationDegrees;
     }
 
@@ -1243,7 +1281,21 @@ status_t MPEG4Writer::Track::start(MetaData *params) {
     initTrackingProgressStatus(params);
 
     sp<MetaData> meta = new MetaData;
+    if (mIsRealTimeRecording && mOwner->numTracks() > 1) {
+        /*
+         * This extra delay of accepting incoming audio/video signals
+         * helps to align a/v start time at the beginning of a recording
+         * session, and it also helps eliminate the "recording" sound for
+         * camcorder applications.
+         *
+         * Ideally, this platform-specific value should be defined
+         * in media_profiles.xml file
+         */
+        startTimeUs += 700000;
+    }
+
     meta->setInt64(kKeyTime, startTimeUs);
+
     status_t err = mSource->start(meta.get());
     if (err != OK) {
         mDone = mReachedEOS = true;
@@ -1255,6 +1307,7 @@ status_t MPEG4Writer::Track::start(MetaData *params) {
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
 
     mDone = false;
+    mStarted = true;
     mTrackDurationUs = 0;
     mReachedEOS = false;
     mEstimatedTrackSizeBytes = 0;
@@ -1282,10 +1335,15 @@ status_t MPEG4Writer::Track::pause() {
 }
 
 status_t MPEG4Writer::Track::stop() {
+    LOGD("Stopping %s track", mIsAudio? "Audio": "Video");
+    if (!mStarted) {
+        LOGE("Stop() called but track is not started");
+        return ERROR_END_OF_STREAM;
+    }
+
     if (mDone) {
         return OK;
     }
-
     mDone = true;
 
     void *dummy;
@@ -1293,6 +1351,7 @@ status_t MPEG4Writer::Track::stop() {
 
     status_t err = (status_t) dummy;
 
+    LOGD("Stopping %s track source", mIsAudio? "Audio": "Video");
     {
         status_t status = mSource->stop();
         if (err == OK && status != OK && status != ERROR_END_OF_STREAM) {
@@ -1300,6 +1359,7 @@ status_t MPEG4Writer::Track::stop() {
         }
     }
 
+    LOGD("%s track stopped", mIsAudio? "Audio": "Video");
     return err;
 }
 
@@ -1716,6 +1776,8 @@ status_t MPEG4Writer::Track::threadEntry() {
     } else {
         prctl(PR_SET_NAME, (unsigned long)"VideoTrackEncoding", 0, 0, 0);
     }
+    setpriority(PRIO_PROCESS, 0, ANDROID_PRIORITY_AUDIO);
+
     sp<MetaData> meta_data;
 
     mNumSamples = 0;
@@ -1896,7 +1958,11 @@ status_t MPEG4Writer::Track::threadEntry() {
                      ((timestampUs * mTimeScale + 500000LL) / 1000000LL -
                      (lastTimestampUs * mTimeScale + 500000LL) / 1000000LL);
 
-            if (currDurationTicks != lastDurationTicks) {
+            // Force the first sample to have its own stts entry so that
+            // we can adjust its value later to maintain the A/V sync.
+            if (mNumSamples == 3 || currDurationTicks != lastDurationTicks) {
+                LOGV("%s lastDurationUs: %lld us, currDurationTicks: %lld us",
+                        mIsAudio? "Audio": "Video", lastDurationUs, currDurationTicks);
                 addOneSttsTableEntry(sampleCount, lastDurationUs);
                 sampleCount = 1;
             } else {
@@ -1909,6 +1975,8 @@ status_t MPEG4Writer::Track::threadEntry() {
             }
             previousSampleSize = sampleSize;
         }
+        LOGV("%s timestampUs/lastTimestampUs: %lld/%lld",
+                mIsAudio? "Audio": "Video", timestampUs, lastTimestampUs);
         lastDurationUs = timestampUs - lastTimestampUs;
         lastDurationTicks = currDurationTicks;
         lastTimestampUs = timestampUs;
@@ -1924,7 +1992,7 @@ status_t MPEG4Writer::Track::threadEntry() {
             trackProgressStatus(timestampUs);
         }
         if (mOwner->numTracks() == 1) {
-            off_t offset = mIsAvc? mOwner->addLengthPrefixedSample_l(copy)
+            off64_t offset = mIsAvc? mOwner->addLengthPrefixedSample_l(copy)
                                  : mOwner->addSample_l(copy);
             if (mChunkOffsets.empty()) {
                 addChunkOffset(offset);
@@ -1980,7 +2048,16 @@ status_t MPEG4Writer::Track::threadEntry() {
     } else {
         ++sampleCount;  // Count for the last sample
     }
-    addOneSttsTableEntry(sampleCount, lastDurationUs);
+
+    if (mNumSamples <= 2) {
+        addOneSttsTableEntry(1, lastDurationUs);
+        if (sampleCount - 1 > 0) {
+            addOneSttsTableEntry(sampleCount - 1, lastDurationUs);
+        }
+    } else {
+        addOneSttsTableEntry(sampleCount, lastDurationUs);
+    }
+
     mTrackDurationUs += lastDurationUs;
     mReachedEOS = true;
     LOGI("Received total/0-length (%d/%d) buffers and encoded %d frames. - %s",
@@ -2105,6 +2182,9 @@ void MPEG4Writer::Track::writeTrackHeader(
     int32_t mvhdTimeScale = mOwner->getTimeScale();
     int64_t trakDurationUs = getDurationUs();
 
+    // Compensate for small start time difference from different media tracks
+    int64_t trackStartTimeOffsetUs = 0;
+
     mOwner->beginBox("trak");
 
       mOwner->beginBox("tkhd");
@@ -2125,7 +2205,7 @@ void MPEG4Writer::Track::writeTrackHeader(
         mOwner->writeInt16(mIsAudio ? 0x100 : 0);  // volume
         mOwner->writeInt16(0);             // reserved
 
-        mOwner->writeCompositionMatrix(mRotation);
+        mOwner->writeCompositionMatrix(mRotation);       // matrix
 
         if (mIsAudio) {
             mOwner->writeInt32(0);
@@ -2143,26 +2223,8 @@ void MPEG4Writer::Track::writeTrackHeader(
 
       int64_t moovStartTimeUs = mOwner->getStartTimestampUs();
       if (mStartTimestampUs != moovStartTimeUs) {
-        mOwner->beginBox("edts");
-          mOwner->beginBox("elst");
-            mOwner->writeInt32(0);           // version=0, flags=0: 32-bit time
-            mOwner->writeInt32(2);           // never ends with an empty list
-
-            // First elst entry: specify the starting time offset
-            int64_t offsetUs = mStartTimestampUs - moovStartTimeUs;
-            LOGV("OffsetUs: %lld", offsetUs);
-            int32_t seg = (offsetUs * mvhdTimeScale + 5E5) / 1E6;
-            mOwner->writeInt32(seg);         // in mvhd timecale
-            mOwner->writeInt32(-1);          // starting time offset
-            mOwner->writeInt32(1 << 16);     // rate = 1.0
-
-            // Second elst entry: specify the track duration
-            seg = (trakDurationUs * mvhdTimeScale + 5E5) / 1E6;
-            mOwner->writeInt32(seg);         // in mvhd timescale
-            mOwner->writeInt32(0);
-            mOwner->writeInt32(1 << 16);
-          mOwner->endBox();
-        mOwner->endBox();
+          CHECK(mStartTimestampUs > moovStartTimeUs);
+          trackStartTimeOffsetUs = mStartTimestampUs - moovStartTimeUs;
       }
 
       mOwner->beginBox("mdia");
@@ -2262,6 +2324,9 @@ void MPEG4Writer::Track::writeTrackHeader(
                     mOwner->beginBox("esds");
                         CHECK(mCodecSpecificData);
                         CHECK(mCodecSpecificDataSize > 0);
+
+                        // Make sure all sizes encode to a single byte.
+                        CHECK(mCodecSpecificDataSize + 23 < 128);
 
                         mOwner->writeInt32(0);     // version=0, flags=0
                         mOwner->writeInt8(0x03);   // ES_DescrTag
@@ -2415,7 +2480,7 @@ void MPEG4Writer::Track::writeTrackHeader(
           mOwner->beginBox("stts");
             mOwner->writeInt32(0);  // version=0, flags=0
             mOwner->writeInt32(mNumSttsTableEntries);
-            int64_t prevTimestampUs = 0;
+            int64_t prevTimestampUs = trackStartTimeOffsetUs;
             for (List<SttsTableEntry>::iterator it = mSttsTableEntries.begin();
                  it != mSttsTableEntries.end(); ++it) {
                 mOwner->writeInt32(it->sampleCount);
@@ -2472,7 +2537,7 @@ void MPEG4Writer::Track::writeTrackHeader(
           mOwner->beginBox(use32BitOffset? "stco": "co64");
             mOwner->writeInt32(0);  // version=0, flags=0
             mOwner->writeInt32(mNumStcoTableEntries);
-            for (List<off_t>::iterator it = mChunkOffsets.begin();
+            for (List<off64_t>::iterator it = mChunkOffsets.begin();
                  it != mChunkOffsets.end(); ++it) {
                 if (use32BitOffset) {
                     mOwner->writeInt32(static_cast<int32_t>(*it));

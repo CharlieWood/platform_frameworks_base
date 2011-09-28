@@ -30,5 +30,9 @@ oneway interface IStatusBar
     void disable(int state);
     void animateExpand();
     void animateCollapse();
+    void setLightsOn(boolean on);
+    void setMenuKeyVisible(boolean visible);
+    void setImeWindowStatus(in IBinder token, int vis, int backDisposition);
+    void setHardKeyboardStatus(boolean available, boolean enabled);
 }
 

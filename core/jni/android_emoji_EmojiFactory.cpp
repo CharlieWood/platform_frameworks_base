@@ -4,6 +4,7 @@
 #define LOG_TAG "EmojiFactory_jni"
 #include <utils/Log.h>
 #include <utils/String8.h>
+#include <utils/String16.h>
 
 #include "EmojiFactory.h"
 #include <nativehelper/JNIHelp.h>
@@ -184,7 +185,7 @@ static jobject android_emoji_EmojiFactory_getBitmapFromAndroidPua(
   jobject obj = env->AllocObject(gBitmap_class);
   if (obj) {
     env->CallVoidMethod(obj, gBitmap_constructorMethodID,
-                        reinterpret_cast<jint>(bitmap), false, NULL, -1);
+                        reinterpret_cast<jint>(bitmap), NULL, false, NULL, -1);
     if (env->ExceptionCheck() != 0) {
       LOGE("*** Uncaught exception returned from Java call!\n");
       env->ExceptionDescribe();
@@ -297,7 +298,7 @@ static jfieldID getFieldIDCheck(JNIEnv* env, jclass clazz,
 int register_android_emoji_EmojiFactory(JNIEnv* env) {
   gBitmap_class = make_globalref(env, "android/graphics/Bitmap");
   gBitmap_constructorMethodID = env->GetMethodID(gBitmap_class, "<init>",
-                                                 "(IZ[BI)V");
+                                                 "(I[BZ[BI)V");
   gEmojiFactory_class = make_globalref(env, "android/emoji/EmojiFactory");
   gEmojiFactory_constructorMethodID = env->GetMethodID(
       gEmojiFactory_class, "<init>", "(ILjava/lang/String;)V");

@@ -1,0 +1,74 @@
+<!--
+  Copyright (C) 2006 The Android Open Source Project
+ 
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+ 
+       http://www.apache.org/licenses/LICENSE-2.0
+ 
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+
+<!--    android:background="@drawable/status_bar_closed_default_background" -->
+<com.android.systemui.statusbar.tablet.NotificationPanel
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:systemui="http://schemas.android.com/apk/res/com.android.systemui"
+    android:id="@+id/panel_root"
+    android:layout_height="match_parent"
+    android:layout_width="match_parent"
+    android:gravity="right"
+    android:background="@drawable/notify_panel_bg_protect_tiled"
+    >
+
+    <RelativeLayout
+        android:id="@+id/content_parent"
+        android:layout_height="wrap_content"
+        android:layout_width="match_parent"
+        android:layout_alignParentBottom="true"
+        android:layout_alignParentRight="true"
+        android:layout_marginBottom="-27dip"
+        >
+
+        <include layout="@layout/status_bar_notification_panel_title"
+            android:layout_width="471dp"
+            android:layout_height="465dp"
+            android:layout_alignParentTop="true"
+            android:layout_alignParentRight="true"
+            />
+
+        <LinearLayout
+            android:id="@+id/content_frame"
+            android:background="@drawable/notify_panel_notify_bg"
+            android:layout_height="wrap_content"
+            android:layout_width="447dp"
+            android:orientation="vertical"
+            android:layout_alignParentRight="true"
+            android:layout_alignParentTop="true"
+            android:layout_marginTop="352dp"
+            >
+            <ScrollView
+                android:id="@+id/notification_scroller"
+                android:layout_height="wrap_content"
+                android:layout_width="match_parent"
+                android:layout_weight="1"
+                >
+                <LinearLayout
+                    android:id="@+id/content"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_horizontal|bottom"
+                    android:orientation="vertical"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:descendantFocusability="afterDescendants"
+                    />
+            </ScrollView>
+        </LinearLayout>
+    </RelativeLayout>
+
+</com.android.systemui.statusbar.tablet.NotificationPanel>

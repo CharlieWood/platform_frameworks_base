@@ -29,7 +29,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "CursorWindow.h"
+#include "binder/CursorWindow.h"
 #include "sqlite3_exception.h"
 #include "android_util_Binder.h"
 
@@ -50,49 +50,47 @@ CursorWindow * get_window_from_object(JNIEnv * env, jobject javaWindow)
     return GET_WINDOW(env, javaWindow);
 }
 
-static void native_init_empty(JNIEnv * env, jobject object, jboolean localOnly)
+static jint native_init_empty(JNIEnv * env, jobject object, jint cursorWindowSize,
+        jboolean localOnly)
 {
     uint8_t * data;
     size_t size;
     CursorWindow * window;
 
-    window = new CursorWindow(MAX_WINDOW_SIZE);
+    window = new CursorWindow(cursorWindowSize);
     if (!window) {
-        jniThrowException(env, "java/lang/RuntimeException", "No memory for native window object");
-        return;
+        return 1;
     }
-
     if (!window->initBuffer(localOnly)) {
-        jniThrowException(env, "java/lang/IllegalStateException", "Couldn't init cursor window");
         delete window;
-        return;
+        return 1;
     }
 
-LOG_WINDOW("native_init_empty: window = %p", window);
+    LOG_WINDOW("native_init_empty: window = %p", window);
     SET_WINDOW(env, object, window);
+    return 0;
 }
 
-static void native_init_memory(JNIEnv * env, jobject object, jobject memObj)
+static jint native_init_memory(JNIEnv * env, jobject object, jobject memObj)
 {
     sp<IMemory> memory = interface_cast<IMemory>(ibinderForJavaObject(env, memObj));
     if (memory == NULL) {
         jniThrowException(env, "java/lang/IllegalStateException", "Couldn't get native binder");
-        return;
+        return 1;
     }
 
     CursorWindow * window = new CursorWindow();
     if (!window) {
-        jniThrowException(env, "java/lang/RuntimeException", "No memory for native window object");
-        return;
+        return 1;
     }
     if (!window->setMemory(memory)) {
-        jniThrowException(env, "java/lang/RuntimeException", "No memory in memObj");
         delete window;
-        return;
+        return 1;
     }
 
-LOG_WINDOW("native_init_memory: numRows = %d, numColumns = %d, window = %p", window->getNumRows(), window->getNumColumns(), window);
+    LOG_WINDOW("native_init_memory: numRows = %d, numColumns = %d, window = %p", window->getNumRows(), window->getNumColumns(), window);
     SET_WINDOW(env, object, window);
+    return 0;
 }
 
 static jobject native_getBinder(JNIEnv * env, jobject object)
@@ -131,8 +129,9 @@ LOG_WINDOW("Closing window %p", window);
 
 static void throwExceptionWithRowCol(JNIEnv * env, jint row, jint column)
 {
-    char buf[100];
-    snprintf(buf, sizeof(buf), "get field slot from row %d col %d failed", row, column);
+    char buf[200];
+    snprintf(buf, sizeof(buf), "Couldn't read row %d, col %d from CursorWindow. Make sure the Cursor is initialized correctly before accessing data from it",
+            row, column);
     jniThrowException(env, "java/lang/IllegalStateException", buf);
 }
 
@@ -209,7 +208,10 @@ LOG_WINDOW("Getting blob for %d,%d from %p", row, column, window);
     uint8_t type = field.type;
     if (type == FIELD_TYPE_BLOB || type == FIELD_TYPE_STRING) {
         jbyteArray byteArray = env->NewByteArray(field.data.buffer.size);
-        LOG_ASSERT(byteArray, "Native could not create new byte[]");
+        if (!byteArray) {
+            throw_sqlite3_exception(env, "Native could not create new byte[]");
+            return NULL;
+        }
         env->SetByteArrayRegion(byteArray, 0, field.data.buffer.size,
             (const jbyte*)window->offsetToPtr(field.data.buffer.offset));
         return byteArray;
@@ -223,70 +225,6 @@ LOG_WINDOW("Getting blob for %d,%d from %p", row, column, window);
         throwUnknowTypeException(env, type);
     }
     return NULL;
-}
-
-static jboolean isBlob_native(JNIEnv* env, jobject object, jint row, jint column)
-{
-    int32_t err;
-    CursorWindow * window = GET_WINDOW(env, object);
-LOG_WINDOW("Checking if column is a blob or null for %d,%d from %p", row, column, window);
-
-    field_slot_t field;
-    err = window->read_field_slot(row, column, &field);
-    if (err != 0) {
-        throwExceptionWithRowCol(env, row, column);
-        return NULL;
-    }
-
-    return field.type == FIELD_TYPE_BLOB || field.type == FIELD_TYPE_NULL;
-}
-
-static jboolean isString_native(JNIEnv* env, jobject object, jint row, jint column)
-{
-    int32_t err;
-    CursorWindow * window = GET_WINDOW(env, object);
-LOG_WINDOW("Checking if column is a string or null for %d,%d from %p", row, column, window);
-
-    field_slot_t field;
-    err = window->read_field_slot(row, column, &field);
-    if (err != 0) {
-        throwExceptionWithRowCol(env, row, column);
-        return NULL;
-    }
-
-    return field.type == FIELD_TYPE_STRING || field.type == FIELD_TYPE_NULL;
-}
-
-static jboolean isInteger_native(JNIEnv* env, jobject object, jint row, jint column)
-{
-    int32_t err;
-    CursorWindow * window = GET_WINDOW(env, object);
-LOG_WINDOW("Checking if column is an integer for %d,%d from %p", row, column, window);
-
-    field_slot_t field;
-    err = window->read_field_slot(row, column, &field);
-    if (err != 0) {
-        throwExceptionWithRowCol(env, row, column);
-        return NULL;
-    }
-
-    return field.type == FIELD_TYPE_INTEGER;
-}
-
-static jboolean isFloat_native(JNIEnv* env, jobject object, jint row, jint column)
-{
-    int32_t err;
-    CursorWindow * window = GET_WINDOW(env, object);
-LOG_WINDOW("Checking if column is a float for %d,%d from %p", row, column, window);
-
-    field_slot_t field;
-    err = window->read_field_slot(row, column, &field);
-    if (err != 0) {
-        throwExceptionWithRowCol(env, row, column);
-        return NULL;
-    }
-
-    return field.type == FIELD_TYPE_FLOAT;
 }
 
 static jstring getString_native(JNIEnv* env, jobject object, jint row, jint column)
@@ -487,10 +425,9 @@ LOG_WINDOW("Getting double for %d,%d from %p", row, column, window);
     }
 }
 
-static jboolean isNull_native(JNIEnv* env, jobject object, jint row, jint column)
+bool isNull_native(CursorWindow *window, jint row, jint column)
 {
-    CursorWindow * window = GET_WINDOW(env, object);
-LOG_WINDOW("Checking for NULL at %d,%d from %p", row, column, window);
+    LOG_WINDOW("Checking for NULL at %d,%d from %p", row, column, window);
 
     bool isNull;
     if (window->getNull(row, column, &isNull)) {
@@ -652,21 +589,39 @@ static void freeLastRow(JNIEnv * env, jobject object) {
     window->freeLastRow();
 }
 
+static jint getType_native(JNIEnv* env, jobject object, jint row, jint column)
+{
+    int32_t err;
+    CursorWindow * window = GET_WINDOW(env, object);
+    LOG_WINDOW("returning column type affinity for %d,%d from %p", row, column, window);
+
+    if (isNull_native(window, row, column)) {
+      return FIELD_TYPE_NULL;
+    }
+
+    field_slot_t field;
+    err = window->read_field_slot(row, column, &field);
+    if (err != 0) {
+        throwExceptionWithRowCol(env, row, column);
+        return NULL;
+    }
+
+    return field.type;
+}
+
 static JNINativeMethod sMethods[] =
 {
      /* name, signature, funcPtr */
-    {"native_init", "(Z)V", (void *)native_init_empty},
-    {"native_init", "(Landroid/os/IBinder;)V", (void *)native_init_memory},
+    {"native_init", "(IZ)I", (void *)native_init_empty},
+    {"native_init", "(Landroid/os/IBinder;)I", (void *)native_init_memory},
     {"native_getBinder", "()Landroid/os/IBinder;", (void *)native_getBinder},
     {"native_clear", "()V", (void *)native_clear},
     {"close_native", "()V", (void *)native_close},
     {"getLong_native", "(II)J", (void *)getLong_native},
     {"getBlob_native", "(II)[B", (void *)getBlob_native},
-    {"isBlob_native", "(II)Z", (void *)isBlob_native},
     {"getString_native", "(II)Ljava/lang/String;", (void *)getString_native},
     {"copyStringToBuffer_native", "(IIILandroid/database/CharArrayBuffer;)[C", (void *)copyStringToBuffer_native},
     {"getDouble_native", "(II)D", (void *)getDouble_native},
-    {"isNull_native", "(II)Z", (void *)isNull_native},
     {"getNumRows_native", "()I", (void *)getNumRows},
     {"setNumColumns_native", "(I)Z", (void *)setNumColumns},
     {"allocRow_native", "()Z", (void *)allocRow},
@@ -676,9 +631,7 @@ static JNINativeMethod sMethods[] =
     {"putDouble_native", "(DII)Z", (void *)putDouble_native},
     {"freeLastRow_native", "()V", (void *)freeLastRow},
     {"putNull_native", "(II)Z", (void *)putNull_native},
-    {"isString_native", "(II)Z", (void *)isString_native},
-    {"isFloat_native", "(II)Z", (void *)isFloat_native},
-    {"isInteger_native", "(II)Z", (void *)isInteger_native},
+    {"getType_native", "(II)I", (void *)getType_native},
 };
 
 int register_android_database_CursorWindow(JNIEnv * env)

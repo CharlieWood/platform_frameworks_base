@@ -18,6 +18,7 @@ package android.content.res;
 
 import android.content.pm.ApplicationInfo;
 import android.graphics.Canvas;
+import android.graphics.PointF;
 import android.graphics.Rect;
 import android.graphics.Region;
 import android.util.DisplayMetrics;
@@ -288,6 +289,7 @@ public class CompatibilityInfo {
         
         private Rect mContentInsetsBuffer = null;
         private Rect mVisibleInsetsBuffer = null;
+        private Region mTouchableAreaBuffer = null;
         
         Translator(float applicationScale, float applicationInvertedScale) {
             this.applicationScale = applicationScale;
@@ -369,6 +371,17 @@ public class CompatibilityInfo {
         }
 
         /**
+         * Translate a Point in screen coordinates into the app window's coordinates.
+         */
+        public void translatePointInScreenToAppWindow(PointF point) {
+            final float scale = applicationInvertedScale;
+            if (scale != 1.0f) {
+                point.x *= scale;
+                point.y *= scale;
+            }
+        }
+
+        /**
          * Translate the location of the sub window.
          * @param params
          */
@@ -389,13 +402,24 @@ public class CompatibilityInfo {
 
         /**
          * Translate the visible insets in application window to Screen. This uses
-         * the internal buffer for content insets to avoid extra object allocation.
+         * the internal buffer for visible insets to avoid extra object allocation.
          */
-        public Rect getTranslatedVisbileInsets(Rect visibleInsets) {
+        public Rect getTranslatedVisibleInsets(Rect visibleInsets) {
             if (mVisibleInsetsBuffer == null) mVisibleInsetsBuffer = new Rect();
             mVisibleInsetsBuffer.set(visibleInsets);
             translateRectInAppWindowToScreen(mVisibleInsetsBuffer);
             return mVisibleInsetsBuffer;
+        }
+
+        /**
+         * Translate the touchable area in application window to Screen. This uses
+         * the internal buffer for touchable area to avoid extra object allocation.
+         */
+        public Region getTranslatedTouchableArea(Region touchableArea) {
+            if (mTouchableAreaBuffer == null) mTouchableAreaBuffer = new Region();
+            mTouchableAreaBuffer.set(touchableArea);
+            mTouchableAreaBuffer.scale(applicationScale);
+            return mTouchableAreaBuffer;
         }
     }
 

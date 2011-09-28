@@ -92,7 +92,6 @@ public class SparseArray<E> {
 
     /**
      * Removes the mapping at the specified index.
-     * @hide
      */
     public void removeAt(int index) {
         if (mValues[index] != DELETED) {

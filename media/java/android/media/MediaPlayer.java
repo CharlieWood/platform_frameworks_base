@@ -30,6 +30,7 @@ import android.util.Log;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.graphics.Bitmap;
+import android.graphics.SurfaceTexture;
 import android.media.AudioManager;
 
 import java.io.FileDescriptor;
@@ -379,6 +380,11 @@ import java.lang.ref.WeakReference;
  *     <td>{} </p></td>
  *     <td>This method can be called in any state and calling it does not change
  *         the object state. </p></td></tr>
+ * <tr><td>setTexture </p></td>
+ *     <td>any </p></td>
+ *     <td>{} </p></td>
+ *     <td>This method can be called in any state and calling it does not change
+ *         the object state. </p></td></tr>
  * <tr><td>setLooping </p></td>
  *     <td>{Idle, Initialized, Stopped, Prepared, Started, Paused,
  *         PlaybackCompleted}</p></td>
@@ -503,6 +509,7 @@ public class MediaPlayer
     private int mListenerContext; // accessed by native methods
     private Surface mSurface; // accessed by native methods
     private SurfaceHolder  mSurfaceHolder;
+    private SurfaceTexture mSurfaceTexture; // accessed by native methods
     private EventHandler mEventHandler;
     private PowerManager.WakeLock mWakeLock = null;
     private boolean mScreenOnWhilePlaying;
@@ -533,9 +540,10 @@ public class MediaPlayer
     }
 
     /*
-     * Update the MediaPlayer ISurface. Call after updating mSurface.
+     * Update the MediaPlayer ISurface and ISurfaceTexture.
+     * Call after updating mSurface and/or mSurfaceTexture.
      */
-    private native void _setVideoSurface();
+    private native void _setVideoSurfaceOrSurfaceTexture();
 
     /**
      * Create a request parcel which can be routed to the native media
@@ -577,11 +585,20 @@ public class MediaPlayer
     }
 
     /**
-     * Sets the SurfaceHolder to use for displaying the video portion of the media.
-     * This call is optional. Not calling it when playing back a video will
+     * Sets the {@link SurfaceHolder} to use for displaying the video
+     * portion of the media.  A surface must be set if a display is
+     * needed.  Not calling this method when playing back a video will
      * result in only the audio track being played.
      *
      * @param sh the SurfaceHolder to use for video display
+     */
+    /*
+     * This portion of comment has a non-Javadoc prefix so as not to refer to a
+     * hidden method. When unhidden, merge it with the previous javadoc comment.
+     *
+     * Either a surface or surface texture must be set if a display or video sink
+     * is needed.  Not calling this method or {@link #setTexture(SurfaceTexture)}
+     * when playing back a video will result in only the audio track being played.
      */
     public void setDisplay(SurfaceHolder sh) {
         mSurfaceHolder = sh;
@@ -590,7 +607,29 @@ public class MediaPlayer
         } else {
             mSurface = null;
         }
-        _setVideoSurface();
+        mSurfaceTexture = null;
+        _setVideoSurfaceOrSurfaceTexture();
+        updateSurfaceScreenOn();
+    }
+
+    /**
+     * Sets the {@link SurfaceTexture} to be used as the sink for the
+     * video portion of the media. Either a surface or surface texture
+     * must be set if a video sink is needed.  The same surface texture
+     * can be re-set without harm. Setting a surface texture will un-set
+     * any surface that was set via {@link #setDisplay(SurfaceHolder)}.
+     * Not calling this method or {@link #setDisplay(SurfaceHolder)}
+     * when playing back a video will result in only the audio track
+     * being played. Note that if a SurfaceTexture is used, the value
+     * set via setScreenOnWhilePlaying has no effect.
+     *
+     * @hide
+     */
+    public void setTexture(SurfaceTexture st) {
+        mSurfaceHolder = null;
+        mSurface = null;
+        mSurfaceTexture = st;
+        _setVideoSurfaceOrSurfaceTexture();
         updateSurfaceScreenOn();
     }
 
@@ -644,6 +683,8 @@ public class MediaPlayer
 
         return null;
     }
+
+    // Note no convenience method to create a MediaPlayer with SurfaceTexture sink.
 
     /**
      * Convenience method to create a MediaPlayer for a given resource id.
@@ -1055,7 +1096,14 @@ public class MediaPlayer
     /**
      * Releases resources associated with this MediaPlayer object.
      * It is considered good practice to call this method when you're
-     * done using the MediaPlayer.
+     * done using the MediaPlayer. For instance, whenever the Activity
+     * of an application is paused, this method should be invoked to
+     * release the MediaPlayer object. In addition to unnecessary resources
+     * (such as memory and instances of codecs) being hold, failure to
+     * call this method immediately if a MediaPlayer object is no longer
+     * needed may also lead to continuous battery consumption for mobile
+     * devices, and playback failure if no multiple instances of the
+     * same codec is supported on a device.
      */
     public void release() {
         stayAwake(false);
@@ -1085,53 +1133,6 @@ public class MediaPlayer
     }
 
     private native void _reset();
-
-    /**
-     * Suspends the MediaPlayer. The only methods that may be called while
-     * suspended are {@link #reset()}, {@link #release()} and {@link #resume()}.
-     * MediaPlayer will release its hardware resources as far as
-     * possible and reasonable. A successfully suspended MediaPlayer will
-     * cease sending events.
-     * If suspension is successful, this method returns true, otherwise
-     * false is returned and the player's state is not affected.
-     * @hide
-     */
-    public boolean suspend() {
-        if (native_suspend_resume(true) < 0) {
-            return false;
-        }
-
-        stayAwake(false);
-
-        // make sure none of the listeners get called anymore
-        mEventHandler.removeCallbacksAndMessages(null);
-
-        return true;
-    }
-
-    /**
-     * Resumes the MediaPlayer. Only to be called after a previous (successful)
-     * call to {@link #suspend()}.
-     * MediaPlayer will return to a state close to what it was in before
-     * suspension.
-     * @hide
-     */
-    public boolean resume() {
-        if (native_suspend_resume(false) < 0) {
-            return false;
-        }
-
-        if (isPlaying()) {
-            stayAwake(true);
-        }
-
-        return true;
-    }
-
-    /**
-     * @hide
-     */
-    private native int native_suspend_resume(boolean isSuspend);
 
     /**
      * Sets the audio stream type for this MediaPlayer. See {@link AudioManager}
@@ -1275,6 +1276,14 @@ public class MediaPlayer
     private native final void native_setup(Object mediaplayer_this);
     private native final void native_finalize();
 
+    /**
+     * @param reply Parcel with audio/video duration info for battery
+                    tracking usage
+     * @return The status code.
+     * {@hide}
+     */
+    public native static int native_pullBatteryData(Parcel reply);
+
     @Override
     protected void finalize() { native_finalize(); }
 
@@ -1347,9 +1356,9 @@ public class MediaPlayer
                 return;
 
             case MEDIA_INFO:
-                // For PV specific code values (msg.arg2) look in
-                // opencore/pvmi/pvmf/include/pvmf_return_codes.h
-                Log.i(TAG, "Info (" + msg.arg1 + "," + msg.arg2 + ")");
+                if (msg.arg1 != MEDIA_INFO_VIDEO_TRACK_LAGGING) {
+                    Log.i(TAG, "Info (" + msg.arg1 + "," + msg.arg2 + ")");
+                }
                 if (mOnInfoListener != null) {
                     mOnInfoListener.onInfo(mMediaPlayer, msg.arg1, msg.arg2);
                 }

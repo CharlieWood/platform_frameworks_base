@@ -113,7 +113,13 @@ public class KeyguardViewManager implements KeyguardWindowController {
                     flags, PixelFormat.TRANSLUCENT);
             lp.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN;
             lp.windowAnimations = com.android.internal.R.style.Animation_LockScreen;
-            lp.screenOrientation = ActivityInfo.SCREEN_ORIENTATION_NOSENSOR;
+
+            // TODO: Sometimes we get the wrong value for the sensor resource we use to configure
+            // this.  However, the current UI design has LockScreen always respond to orientation so
+            // we don't need this for the time-being.
+            //
+            // For reference, the configuration variable is R.bool.config_enableLockScreenRotation
+            lp.screenOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR;
             lp.setTitle("Keyguard");
             mWindowLayoutParams = lp;
 

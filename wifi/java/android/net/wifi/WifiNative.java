@@ -16,8 +16,6 @@
 
 package android.net.wifi;
 
-import android.net.DhcpInfo;
-
 /**
  * Native calls for sending requests to the supplicant daemon, and for
  * receiving asynchronous events. All methods of the form "xxxxCommand()"
@@ -37,16 +35,28 @@ public class WifiNative {
     static final int BLUETOOTH_COEXISTENCE_MODE_ENABLED = 0;
     static final int BLUETOOTH_COEXISTENCE_MODE_DISABLED = 1;
     static final int BLUETOOTH_COEXISTENCE_MODE_SENSE = 2;
-    
+
     public native static String getErrorString(int errorCode);
 
     public native static boolean loadDriver();
-    
+
+    public native static boolean isDriverLoaded();
+
     public native static boolean unloadDriver();
 
     public native static boolean startSupplicant();
-    
+
+    /* Does a graceful shutdown of supplicant.
+     *
+     * Note that underneath we use a harsh-sounding "terminate" supplicant command
+     * for a graceful stop and a mild-sounding "stop" interface
+     * to kill the process
+     */
     public native static boolean stopSupplicant();
+
+    /* Sends a kill signal to supplicant. To be used when we have lost connection
+       or when the supplicant is hung */
+    public native static boolean killSupplicant();
 
     public native static boolean connectToSupplicant();
 
@@ -55,7 +65,7 @@ public class WifiNative {
     public native static boolean pingCommand();
 
     public native static boolean scanCommand(boolean forceActive);
-    
+
     public native static boolean setScanModeCommand(boolean setActive);
 
     public native static String listNetworksCommand();
@@ -69,7 +79,7 @@ public class WifiNative {
     public native static boolean removeNetworkCommand(int netId);
 
     public native static boolean enableNetworkCommand(int netId, boolean disableOthers);
-    
+
     public native static boolean disableNetworkCommand(int netId);
 
     public native static boolean reconnectCommand();
@@ -109,15 +119,15 @@ public class WifiNative {
 
     public native static boolean setPowerModeCommand(int mode);
 
+    public native static int getBandCommand();
+
+    public native static boolean setBandCommand(int band);
+
     public native static int getPowerModeCommand();
-
-    public native static boolean setNumAllowedChannelsCommand(int numChannels);
-
-    public native static int getNumAllowedChannelsCommand();
 
     /**
      * Sets the bluetooth coexistence mode.
-     * 
+     *
      * @param mode One of {@link #BLUETOOTH_COEXISTENCE_MODE_DISABLED},
      *            {@link #BLUETOOTH_COEXISTENCE_MODE_ENABLED}, or
      *            {@link #BLUETOOTH_COEXISTENCE_MODE_SENSE}.
@@ -134,7 +144,7 @@ public class WifiNative {
      * @return {@code true} if the command succeeded, {@code false} otherwise.
      */
     public native static boolean setBluetoothCoexistenceScanModeCommand(boolean setCoexScanMode);
-    
+
     public native static boolean saveConfigCommand();
 
     public native static boolean reloadConfigCommand();
@@ -145,15 +155,21 @@ public class WifiNative {
 
     public native static boolean clearBlacklistCommand();
 
-    public native static boolean doDhcpRequest(DhcpInfo results);
+    public native static boolean startWpsPbcCommand(String bssid);
 
-    public native static String getDhcpError();
+    public native static boolean startWpsWithPinFromAccessPointCommand(String bssid, String apPin);
+
+    public native static String startWpsWithPinFromDeviceCommand(String bssid);
 
     public native static boolean setSuspendOptimizationsCommand(boolean enabled);
+
+    public native static boolean setCountryCodeCommand(String countryCode);
 
     /**
      * Wait for the supplicant to send an event, returning the event string.
      * @return the event string sent by the supplicant.
      */
     public native static String waitForEvent();
+
+    public native static void enableBackgroundScan(boolean enable);
 }

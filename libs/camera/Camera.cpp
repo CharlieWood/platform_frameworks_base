@@ -80,8 +80,9 @@ sp<Camera> Camera::create(const sp<ICamera>& camera)
         c->mStatus = NO_ERROR;
         c->mCamera = camera;
         camera->asBinder()->linkToDeath(c);
+        return c;
     }
-    return c;
+    return 0;
 }
 
 void Camera::init()
@@ -167,31 +168,33 @@ status_t Camera::unlock()
     return c->unlock();
 }
 
-// pass the buffered ISurface to the camera service
+// pass the buffered Surface to the camera service
 status_t Camera::setPreviewDisplay(const sp<Surface>& surface)
 {
-    LOGV("setPreviewDisplay");
+    LOGV("setPreviewDisplay(%p)", surface.get());
     sp <ICamera> c = mCamera;
     if (c == 0) return NO_INIT;
     if (surface != 0) {
-        return c->setPreviewDisplay(surface->getISurface());
+        return c->setPreviewDisplay(surface);
     } else {
         LOGD("app passed NULL surface");
         return c->setPreviewDisplay(0);
     }
 }
 
-status_t Camera::setPreviewDisplay(const sp<ISurface>& surface)
+// pass the buffered ISurfaceTexture to the camera service
+status_t Camera::setPreviewTexture(const sp<ISurfaceTexture>& surfaceTexture)
 {
-    LOGV("setPreviewDisplay");
-    if (surface == 0) {
-        LOGD("app passed NULL surface");
-    }
+    LOGV("setPreviewTexture(%p)", surfaceTexture.get());
     sp <ICamera> c = mCamera;
     if (c == 0) return NO_INIT;
-    return c->setPreviewDisplay(surface);
+    if (surfaceTexture != 0) {
+        return c->setPreviewTexture(surfaceTexture);
+    } else {
+        LOGD("app passed NULL surface");
+        return c->setPreviewTexture(0);
+    }
 }
-
 
 // start preview mode
 status_t Camera::startPreview()
@@ -200,6 +203,31 @@ status_t Camera::startPreview()
     sp <ICamera> c = mCamera;
     if (c == 0) return NO_INIT;
     return c->startPreview();
+}
+
+int32_t Camera::getNumberOfVideoBuffers() const
+{
+    LOGV("getNumberOfVideoBuffers");
+    sp <ICamera> c = mCamera;
+    if (c == 0) return 0;
+    return c->getNumberOfVideoBuffers();
+}
+
+sp<IMemory> Camera::getVideoBuffer(int32_t index) const
+{
+    LOGV("getVideoBuffer: %d", index);
+    sp <ICamera> c = mCamera;
+    if (c == 0) return 0;
+    return c->getVideoBuffer(index);
+}
+
+status_t Camera::storeMetaDataInBuffers(bool enabled)
+{
+    LOGV("storeMetaDataInBuffers: %s",
+            enabled? "true": "false");
+    sp <ICamera> c = mCamera;
+    if (c == 0) return NO_INIT;
+    return c->storeMetaDataInBuffers(enabled);
 }
 
 // start recording mode, must call setPreviewDisplay first
@@ -273,12 +301,12 @@ status_t Camera::cancelAutoFocus()
 }
 
 // take a picture
-status_t Camera::takePicture()
+status_t Camera::takePicture(int msgType)
 {
-    LOGV("takePicture");
+    LOGV("takePicture: 0x%x", msgType);
     sp <ICamera> c = mCamera;
     if (c == 0) return NO_INIT;
-    return c->takePicture();
+    return c->takePicture(msgType);
 }
 
 // set preview/capture parameters - key/value pairs
@@ -378,4 +406,3 @@ void Camera::DeathNotifier::binderDied(const wp<IBinder>& who) {
 }
 
 }; // namespace android
-

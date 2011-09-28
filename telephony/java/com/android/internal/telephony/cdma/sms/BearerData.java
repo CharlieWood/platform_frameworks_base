@@ -34,9 +34,6 @@ import com.android.internal.telephony.SmsMessageBase.TextEncodingDetails;
 import com.android.internal.util.BitwiseInputStream;
 import com.android.internal.util.BitwiseOutputStream;
 
-import android.content.res.Resources;
-
-
 
 /**
  * An object to encode and decode CDMA SMS bearer data.
@@ -45,13 +42,13 @@ public final class BearerData {
     private final static String LOG_TAG = "SMS";
 
     /**
-     * Bearer Data Subparameter Indentifiers
+     * Bearer Data Subparameter Identifiers
      * (See 3GPP2 C.S0015-B, v2.0, table 4.5-1)
      * NOTE: Commented subparameter types are not implemented.
      */
     private final static byte SUBPARAM_MESSAGE_IDENTIFIER               = 0x00;
     private final static byte SUBPARAM_USER_DATA                        = 0x01;
-    private final static byte SUBPARAM_USER_REPONSE_CODE                = 0x02;
+    private final static byte SUBPARAM_USER_RESPONSE_CODE               = 0x02;
     private final static byte SUBPARAM_MESSAGE_CENTER_TIME_STAMP        = 0x03;
     private final static byte SUBPARAM_VALIDITY_PERIOD_ABSOLUTE         = 0x04;
     private final static byte SUBPARAM_VALIDITY_PERIOD_RELATIVE         = 0x05;
@@ -501,7 +498,7 @@ public final class BearerData {
              * stringToGsm7BitPacked, and potentially directly support
              * access to the main bitwise stream from encode/decode.
              */
-            byte[] fullData = GsmAlphabet.stringToGsm7BitPacked(msg, septetOffset, !force, 0, 0);
+            byte[] fullData = GsmAlphabet.stringToGsm7BitPacked(msg, septetOffset, !force);
             Gsm7bitCodingResult result = new Gsm7bitCodingResult();
             result.data = new byte[fullData.length - 1];
             System.arraycopy(fullData, 1, result.data, 0, fullData.length - 1);
@@ -697,7 +694,7 @@ public final class BearerData {
     /*
      * TODO(cleanup): CdmaSmsAddress encoding should make use of
      * CdmaSmsAddress.parse provided that DTMF encoding is unified,
-     * and the difference in 4bit vs 8bit is resolved.
+     * and the difference in 4-bit vs. 8-bit is resolved.
      */
 
     private static void encodeCdmaSmsAddress(CdmaSmsAddress addr) throws CodingException {
@@ -805,6 +802,7 @@ public final class BearerData {
      * (See 3GPP2 C.R1001-F, v1.0, section 4.5 for layout details)
      *
      * @param bData an instance of BearerData.
+     *
      * @return byte array of raw encoded SMS bearer data.
      */
     public static byte[] encode(BearerData bData) {
@@ -912,16 +910,6 @@ public final class BearerData {
         return true;
     }
 
-    private static String decodeUtf8(byte[] data, int offset, int numFields)
-        throws CodingException
-    {
-        try {
-            return new String(data, offset, numFields, "UTF-8");
-        } catch (java.io.UnsupportedEncodingException ex) {
-            throw new CodingException("UTF-8 decode failed: " + ex);
-        }
-    }
-
     private static String decodeUtf16(byte[] data, int offset, int numFields)
         throws CodingException
     {
@@ -976,8 +964,7 @@ public final class BearerData {
         int offsetSeptets = (offsetBits + 6) / 7;
         numFields -= offsetSeptets;
         int paddingBits = (offsetSeptets * 7) - offsetBits;
-        String result = GsmAlphabet.gsm7BitPackedToString(data, offset, numFields, paddingBits,
-                0, 0);
+        String result = GsmAlphabet.gsm7BitPackedToString(data, offset, numFields, paddingBits);
         if (result == null) {
             throw new CodingException("7bit GSM decoding failed");
         }
@@ -1007,15 +994,9 @@ public final class BearerData {
         }
         switch (userData.msgEncoding) {
         case UserData.ENCODING_OCTET:
-            /*
-            *  Octet decoding depends on the carrier service.
-            */
-            boolean decodingtypeUTF8 = Resources.getSystem()
-                    .getBoolean(com.android.internal.R.bool.config_sms_utf8_support);
-
             // Strip off any padding bytes, meaning any differences between the length of the
-            // array and the target length specified by numFields.  This is to avoid any
-            // confusion by code elsewhere that only considers the payload array length.
+            // array and the target length specified by numFields.  This is to avoid any confusion
+            // by code elsewhere that only considers the payload array length.
             byte[] payload = new byte[userData.numFields];
             int copyLen = userData.numFields < userData.payload.length
                     ? userData.numFields : userData.payload.length;
@@ -1023,13 +1004,9 @@ public final class BearerData {
             System.arraycopy(userData.payload, 0, payload, 0, copyLen);
             userData.payload = payload;
 
-            if (!decodingtypeUTF8) {
-                // There are many devices in the market that send 8bit text sms (latin encoded) as
-                // octet encoded.
-                userData.payloadStr = decodeLatin(userData.payload, offset, userData.numFields);
-            } else {
-                userData.payloadStr = decodeUtf8(userData.payload, offset, userData.numFields);
-            }
+            // There are many devices in the market that send 8bit text sms (latin encoded) as
+            // octet encoded.
+            userData.payloadStr = decodeLatin(userData.payload, offset, userData.numFields);
             break;
         case UserData.ENCODING_IA5:
         case UserData.ENCODING_7BIT_ASCII:
@@ -1575,7 +1552,7 @@ public final class BearerData {
                 case SUBPARAM_USER_DATA:
                     decodeSuccess = decodeUserData(bData, inStream);
                     break;
-                case SUBPARAM_USER_REPONSE_CODE:
+                case SUBPARAM_USER_RESPONSE_CODE:
                     decodeSuccess = decodeUserResponseCode(bData, inStream);
                     break;
                 case SUBPARAM_REPLY_OPTION:

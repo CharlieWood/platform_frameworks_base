@@ -25,6 +25,7 @@
 #include <utils/List.h>
 #include <utils/RefBase.h>
 #include <utils/threads.h>
+#include <drm/DrmManagerClient.h>
 
 namespace android {
 
@@ -47,13 +48,13 @@ public:
 
     virtual status_t initCheck() const = 0;
 
-    virtual ssize_t readAt(off_t offset, void *data, size_t size) = 0;
+    virtual ssize_t readAt(off64_t offset, void *data, size_t size) = 0;
 
     // Convenience methods:
-    bool getUInt16(off_t offset, uint16_t *x);
+    bool getUInt16(off64_t offset, uint16_t *x);
 
     // May return ERROR_UNSUPPORTED.
-    virtual status_t getSize(off_t *size);
+    virtual status_t getSize(off64_t *size);
 
     virtual uint32_t flags() {
         return 0;
@@ -72,6 +73,16 @@ public:
 
     static void RegisterSniffer(SnifferFunc func);
     static void RegisterDefaultSniffers();
+
+    // for DRM
+    virtual DecryptHandle* DrmInitialization() {
+        return NULL;
+    }
+    virtual void getDrmInfo(DecryptHandle **handle, DrmManagerClient **client) {};
+
+    virtual String8 getUri() {
+        return String8();
+    }
 
 protected:
     virtual ~DataSource() {}

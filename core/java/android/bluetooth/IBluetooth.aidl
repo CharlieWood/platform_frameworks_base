@@ -17,6 +17,7 @@
 package android.bluetooth;
 
 import android.bluetooth.IBluetoothCallback;
+import android.bluetooth.BluetoothDevice;
 import android.os.ParcelUuid;
 
 /**
@@ -34,6 +35,7 @@ interface IBluetooth
     String getAddress();
     String getName();
     boolean setName(in String name);
+    ParcelUuid[] getUuids();
 
     int getScanMode();
     boolean setScanMode(int mode, int duration);
@@ -45,6 +47,8 @@ interface IBluetooth
     boolean cancelDiscovery();
     boolean isDiscovering();
     byte[] readOutOfBandData();
+
+    int getAdapterConnectionState();
 
     boolean createBond(in String address);
     boolean createBondOutOfBand(in String address, in byte[] hash, in byte[] randomizer);
@@ -76,4 +80,23 @@ interface IBluetooth
     boolean connectHeadset(String address);
     boolean disconnectHeadset(String address);
     boolean notifyIncomingConnection(String address);
+
+    // HID profile APIs
+    boolean connectInputDevice(in BluetoothDevice device);
+    boolean disconnectInputDevice(in BluetoothDevice device);
+    List<BluetoothDevice> getConnectedInputDevices();
+    List<BluetoothDevice> getInputDevicesMatchingConnectionStates(in int[] states);
+    int getInputDeviceConnectionState(in BluetoothDevice device);
+    boolean setInputDevicePriority(in BluetoothDevice device, int priority);
+    int getInputDevicePriority(in BluetoothDevice device);
+
+    boolean isTetheringOn();
+    void setBluetoothTethering(boolean value);
+    int getPanDeviceConnectionState(in BluetoothDevice device);
+    List<BluetoothDevice> getConnectedPanDevices();
+    List<BluetoothDevice> getPanDevicesMatchingConnectionStates(in int[] states);
+    boolean connectPanDevice(in BluetoothDevice device);
+    boolean disconnectPanDevice(in BluetoothDevice device);
+
+    void sendConnectionStateChange(in BluetoothDevice device, int state, int prevState);
 }

@@ -44,6 +44,7 @@ public class Touch {
         int left = Integer.MAX_VALUE;
         int right = 0;
         Alignment a = null;
+        boolean ltr = true;
 
         for (int i = top; i <= bottom; i++) {
             left = (int) Math.min(left, layout.getLineLeft(i));
@@ -51,6 +52,7 @@ public class Touch {
 
             if (a == null) {
                 a = layout.getParagraphAlignment(i);
+                ltr = layout.getParagraphDirection(i) > 0;
             }
         }
 
@@ -58,10 +60,12 @@ public class Touch {
         int width = widget.getWidth();
         int diff = 0;
 
+        // align_opposite does NOT mean align_right, we need the paragraph
+        // direction to resolve it to left or right
         if (right - left < width - padding) {
             if (a == Alignment.ALIGN_CENTER) {
                 diff = (width - padding - (right - left)) / 2;
-            } else if (a == Alignment.ALIGN_OPPOSITE) {
+            } else if (ltr == (a == Alignment.ALIGN_OPPOSITE)) {
                 diff = width - padding - (right - left);
             }
         }
@@ -70,24 +74,6 @@ public class Touch {
         x = Math.max(x, left - diff);
 
         widget.scrollTo(x, y);
-    }
-
-    /**
-     * @hide
-     * Returns the maximum scroll value in x.
-     */
-    public static int getMaxScrollX(TextView widget, Layout layout, int y) {
-        int top = layout.getLineForVertical(y);
-        int bottom = layout.getLineForVertical(y + widget.getHeight()
-                - widget.getTotalPaddingTop() -widget.getTotalPaddingBottom());
-        int left = Integer.MAX_VALUE;
-        int right = 0;
-        for (int i = top; i <= bottom; i++) {
-            left = (int) Math.min(left, layout.getLineLeft(i));
-            right = (int) Math.max(right, layout.getLineRight(i));
-        }
-        return right - left - widget.getWidth() - widget.getTotalPaddingLeft()
-                - widget.getTotalPaddingRight();
     }
 
     /**
@@ -139,10 +125,11 @@ public class Touch {
 
                 if (ds[0].mFarEnough) {
                     ds[0].mUsed = true;
-                    boolean cap = (MetaKeyKeyListener.getMetaState(buffer,
-                                   KeyEvent.META_SHIFT_ON) == 1) ||
-                                   (MetaKeyKeyListener.getMetaState(buffer,
-                                    MetaKeyKeyListener.META_SELECTING) != 0);
+                    boolean cap = (event.getMetaState() & KeyEvent.META_SHIFT_ON) != 0
+                            || MetaKeyKeyListener.getMetaState(buffer,
+                                    MetaKeyKeyListener.META_SHIFT_ON) == 1
+                            || MetaKeyKeyListener.getMetaState(buffer,
+                                    MetaKeyKeyListener.META_SELECTING) != 0;
                     float dx;
                     float dy;
                     if (cap) {

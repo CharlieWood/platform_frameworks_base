@@ -23,9 +23,12 @@
 
 #include "A2dpAudioInterface.h"
 #include "audio/liba2dp.h"
-
+#include <hardware_legacy/power.h>
 
 namespace android {
+
+static const char *sA2dpWakeLock = "A2dpOutputStream";
+#define MAX_WRITE_RETRIES  5
 
 // ----------------------------------------------------------------------------
 
@@ -257,52 +260,74 @@ status_t A2dpAudioInterface::A2dpAudioStreamOut::set(
     if (pRate) *pRate = lRate;
 
     mDevice = device;
+    mBufferDurationUs = ((bufferSize() * 1000 )/ frameSize() / sampleRate()) * 1000;
     return NO_ERROR;
 }
 
 A2dpAudioInterface::A2dpAudioStreamOut::~A2dpAudioStreamOut()
 {
     LOGV("A2dpAudioStreamOut destructor");
-    standby();
     close();
     LOGV("A2dpAudioStreamOut destructor returning from close()");
 }
 
 ssize_t A2dpAudioInterface::A2dpAudioStreamOut::write(const void* buffer, size_t bytes)
 {
-    Mutex::Autolock lock(mLock);
-
-    size_t remaining = bytes;
     status_t status = -1;
+    {
+        Mutex::Autolock lock(mLock);
 
-    if (!mBluetoothEnabled || mClosing || mSuspended) {
-        LOGV("A2dpAudioStreamOut::write(), but bluetooth disabled \
-               mBluetoothEnabled %d, mClosing %d, mSuspended %d",
-                mBluetoothEnabled, mClosing, mSuspended);
-        goto Error;
-    }
+        size_t remaining = bytes;
 
-    status = init();
-    if (status < 0)
-        goto Error;
-
-    while (remaining > 0) {
-        status = a2dp_write(mData, buffer, remaining);
-        if (status <= 0) {
-            LOGE("a2dp_write failed err: %d\n", status);
+        if (!mBluetoothEnabled || mClosing || mSuspended) {
+            LOGV("A2dpAudioStreamOut::write(), but bluetooth disabled \
+                   mBluetoothEnabled %d, mClosing %d, mSuspended %d",
+                    mBluetoothEnabled, mClosing, mSuspended);
             goto Error;
         }
-        remaining -= status;
-        buffer = ((char *)buffer) + status;
+
+        if (mStandby) {
+            acquire_wake_lock (PARTIAL_WAKE_LOCK, sA2dpWakeLock);
+            mStandby = false;
+            mLastWriteTime = systemTime();
+        }
+
+        status = init();
+        if (status < 0)
+            goto Error;
+
+        int retries = MAX_WRITE_RETRIES;
+        while (remaining > 0 && retries) {
+            status = a2dp_write(mData, buffer, remaining);
+            if (status < 0) {
+                LOGE("a2dp_write failed err: %d\n", status);
+                goto Error;
+            }
+            if (status == 0) {
+                retries--;
+            }
+            remaining -= status;
+            buffer = (char *)buffer + status;
+        }
+
+        // if A2DP sink runs abnormally fast, sleep a little so that audioflinger mixer thread
+        // does no spin and starve other threads.
+        // NOTE: It is likely that the A2DP headset is being disconnected
+        nsecs_t now = systemTime();
+        if ((uint32_t)ns2us(now - mLastWriteTime) < (mBufferDurationUs >> 2)) {
+            LOGV("A2DP sink runs too fast");
+            usleep(mBufferDurationUs - (uint32_t)ns2us(now - mLastWriteTime));
+        }
+        mLastWriteTime = now;
+        return bytes;
+
     }
-
-    mStandby = false;
-
-    return bytes;
-
 Error:
+
+    standby();
+
     // Simulate audio output timing in case of error
-    usleep(((bytes * 1000 )/ frameSize() / sampleRate()) * 1000);
+    usleep(mBufferDurationUs);
 
     return status;
 }
@@ -324,19 +349,22 @@ status_t A2dpAudioInterface::A2dpAudioStreamOut::init()
 
 status_t A2dpAudioInterface::A2dpAudioStreamOut::standby()
 {
-    int result = 0;
-
-    if (mClosing) {
-        LOGV("Ignore standby, closing");
-        return result;
-    }
-
     Mutex::Autolock lock(mLock);
+    return standby_l();
+}
+
+status_t A2dpAudioInterface::A2dpAudioStreamOut::standby_l()
+{
+    int result = NO_ERROR;
 
     if (!mStandby) {
-        result = a2dp_stop(mData);
-        if (result == 0)
-            mStandby = true;
+        LOGV_IF(mClosing || !mBluetoothEnabled, "Standby skip stop: closing %d enabled %d",
+                mClosing, mBluetoothEnabled);
+        if (!mClosing && mBluetoothEnabled) {
+            result = a2dp_stop(mData);
+        }
+        release_wake_lock(sA2dpWakeLock);
+        mStandby = true;
     }
 
     return result;
@@ -362,6 +390,9 @@ status_t A2dpAudioInterface::A2dpAudioStreamOut::setParameters(const String8& ke
     key = String8("closing");
     if (param.get(key, value) == NO_ERROR) {
         mClosing = (value == "true");
+        if (mClosing) {
+            standby();
+        }
         param.remove(key);
     }
     key = AudioParameter::keyRouting;
@@ -444,6 +475,7 @@ status_t A2dpAudioInterface::A2dpAudioStreamOut::close()
 
 status_t A2dpAudioInterface::A2dpAudioStreamOut::close_l()
 {
+    standby_l();
     if (mData) {
         LOGV("A2dpAudioStreamOut::close_l() calling a2dp_cleanup(mData)");
         a2dp_cleanup(mData);

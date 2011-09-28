@@ -19,10 +19,9 @@
 
 #include <utils/Timers.h>
 #include <camera/ICameraClient.h>
+#include <gui/ISurfaceTexture.h>
 
 namespace android {
-
-class ISurface;
 
 /*
  * A set of bit masks for specifying how the received preview frames are
@@ -67,16 +66,17 @@ class ISurface;
 
 // msgType in notifyCallback and dataCallback functions
 enum {
-    CAMERA_MSG_ERROR            = 0x001,
-    CAMERA_MSG_SHUTTER          = 0x002,
-    CAMERA_MSG_FOCUS            = 0x004,
-    CAMERA_MSG_ZOOM             = 0x008,
-    CAMERA_MSG_PREVIEW_FRAME    = 0x010,
-    CAMERA_MSG_VIDEO_FRAME      = 0x020,
-    CAMERA_MSG_POSTVIEW_FRAME   = 0x040,
-    CAMERA_MSG_RAW_IMAGE        = 0x080,
-    CAMERA_MSG_COMPRESSED_IMAGE = 0x100,
-    CAMERA_MSG_ALL_MSGS         = 0x1FF
+    CAMERA_MSG_ERROR            = 0x0001,
+    CAMERA_MSG_SHUTTER          = 0x0002,
+    CAMERA_MSG_FOCUS            = 0x0004,
+    CAMERA_MSG_ZOOM             = 0x0008,
+    CAMERA_MSG_PREVIEW_FRAME    = 0x0010,
+    CAMERA_MSG_VIDEO_FRAME      = 0x0020,
+    CAMERA_MSG_POSTVIEW_FRAME   = 0x0040,
+    CAMERA_MSG_RAW_IMAGE        = 0x0080,
+    CAMERA_MSG_COMPRESSED_IMAGE = 0x0100,
+    CAMERA_MSG_RAW_IMAGE_NOTIFY = 0x0200,
+    CAMERA_MSG_ALL_MSGS         = 0xFFFF
 };
 
 // cmdType in sendCommand functions
@@ -96,11 +96,19 @@ enum {
     // or CAMERA_MSG_COMPRESSED_IMAGE. This is not allowed to be set during
     // preview.
     CAMERA_CMD_SET_DISPLAY_ORIENTATION = 3,
+
+    // cmdType to disable/enable shutter sound.
+    // In sendCommand passing arg1 = 0 will disable,
+    // while passing arg1 = 1 will enable the shutter sound.
+    CAMERA_CMD_ENABLE_SHUTTER_SOUND = 4,
+
+    // cmdType to play recording sound.
+    CAMERA_CMD_PLAY_RECORDING_SOUND = 5,
 };
 
 // camera fatal errors
 enum {
-    CAMERA_ERROR_UKNOWN  = 1,
+    CAMERA_ERROR_UNKNOWN  = 1,
     CAMERA_ERROR_SERVER_DIED = 100
 };
 
@@ -166,9 +174,11 @@ public:
 
             status_t    getStatus() { return mStatus; }
 
-            // pass the buffered ISurface to the camera service
+            // pass the buffered Surface to the camera service
             status_t    setPreviewDisplay(const sp<Surface>& surface);
-            status_t    setPreviewDisplay(const sp<ISurface>& surface);
+
+            // pass the buffered ISurfaceTexture to the camera service
+            status_t    setPreviewTexture(const sp<ISurfaceTexture>& surfaceTexture);
 
             // start preview mode, must call setPreviewDisplay first
             status_t    startPreview();
@@ -198,7 +208,7 @@ public:
             status_t    cancelAutoFocus();
 
             // take a picture - picture returned from callback
-            status_t    takePicture();
+            status_t    takePicture(int msgType);
 
             // set preview/capture parameters - key/value pairs
             status_t    setParameters(const String8& params);
@@ -208,6 +218,15 @@ public:
 
             // send command to camera driver
             status_t    sendCommand(int32_t cmd, int32_t arg1, int32_t arg2);
+
+            // return the total number of available video buffers.
+            int32_t     getNumberOfVideoBuffers() const;
+
+            // return the individual video buffer corresponding to the given index.
+            sp<IMemory> getVideoBuffer(int32_t index) const;
+
+            // tell camera hal to store meta data or real YUV in video buffers.
+            status_t    storeMetaDataInBuffers(bool enabled);
 
             void        setListener(const sp<CameraListener>& listener);
             void        setPreviewCallbackFlags(int preview_callback_flag);

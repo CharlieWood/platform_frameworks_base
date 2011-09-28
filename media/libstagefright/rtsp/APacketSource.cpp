@@ -20,6 +20,7 @@
 
 #include "APacketSource.h"
 
+#include "ARawAudioAssembler.h"
 #include "ASessionDescription.h"
 
 #include "avc_utils.h"
@@ -373,7 +374,17 @@ static bool ExtractDimensionsFromVOLHeader(
         br.skipBits(2);  // chroma_format
         br.skipBits(1);  // low_delay
         if (br.getBits(1)) {  // vbv_parameters
-            TRESPASS();
+            br.skipBits(15);  // first_half_bit_rate
+            CHECK(br.getBits(1));  // marker_bit
+            br.skipBits(15);  // latter_half_bit_rate
+            CHECK(br.getBits(1));  // marker_bit
+            br.skipBits(15);  // first_half_vbv_buffer_size
+            CHECK(br.getBits(1));  // marker_bit
+            br.skipBits(3);  // latter_half_vbv_buffer_size
+            br.skipBits(11);  // first_half_vbv_occupancy
+            CHECK(br.getBits(1));  // marker_bit
+            br.skipBits(15);  // latter_half_vbv_occupancy
+            CHECK(br.getBits(1));  // marker_bit
         }
     }
     unsigned video_object_layer_shape = br.getBits(2);
@@ -651,6 +662,8 @@ APacketSource::APacketSource(
         mFormat->setData(
                 kKeyESDS, 0,
                 codecSpecificData->data(), codecSpecificData->size());
+    } else if (ARawAudioAssembler::Supports(desc.c_str())) {
+        ARawAudioAssembler::MakeFormat(desc.c_str(), mFormat);
     } else {
         mInitCheck = ERROR_UNSUPPORTED;
     }

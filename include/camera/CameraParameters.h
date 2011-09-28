@@ -59,6 +59,35 @@ public:
     void setPreviewSize(int width, int height);
     void getPreviewSize(int *width, int *height) const;
     void getSupportedPreviewSizes(Vector<Size> &sizes) const;
+
+    // Set the dimensions in pixels to the given width and height
+    // for video frames. The given width and height must be one
+    // of the supported dimensions returned from
+    // getSupportedVideoSizes(). Must not be called if
+    // getSupportedVideoSizes() returns an empty Vector of Size.
+    void setVideoSize(int width, int height);
+    // Retrieve the current dimensions (width and height)
+    // in pixels for video frames, which must be one of the
+    // supported dimensions returned from getSupportedVideoSizes().
+    // Must not be called if getSupportedVideoSizes() returns an
+    // empty Vector of Size.
+    void getVideoSize(int *width, int *height) const;
+    // Retrieve a Vector of supported dimensions (width and height)
+    // in pixels for video frames. If sizes returned from the method
+    // is empty, the camera does not support calls to setVideoSize()
+    // or getVideoSize(). In adddition, it also indicates that
+    // the camera only has a single output, and does not have
+    // separate output for video frames and preview frame.
+    void getSupportedVideoSizes(Vector<Size> &sizes) const;
+    // Retrieve the preferred preview size (width and height) in pixels
+    // for video recording. The given width and height must be one of
+    // supported preview sizes returned from getSupportedPreviewSizes().
+    // Must not be called if getSupportedVideoSizes() returns an empty
+    // Vector of Size. If getSupportedVideoSizes() returns an empty
+    // Vector of Size, the width and height returned from this method
+    // is invalid, and is "-1x-1".
+    void getPreferredPreviewSizeForVideo(int *width, int *height) const;
+
     void setPreviewFrameRate(int fps);
     int getPreviewFrameRate() const;
     void getPreviewFpsRange(int *min_fps, int *max_fps) const;
@@ -288,6 +317,31 @@ public:
     // Example value: "0.95,1.9,Infinity" or "0.049,0.05,0.051". Read only.
     static const char KEY_FOCUS_DISTANCES[];
 
+    // The current dimensions in pixels (width x height) for video frames.
+    // The width and height must be one of the supported sizes retrieved
+    // via KEY_SUPPORTED_VIDEO_SIZES.
+    // Example value: "1280x720". Read/write.
+    static const char KEY_VIDEO_SIZE[];
+    // A list of the supported dimensions in pixels (width x height)
+    // for video frames. See CAMERA_MSG_VIDEO_FRAME for details in
+    // frameworks/base/include/camera/Camera.h.
+    // Example: "176x144,1280x720". Read only.
+    static const char KEY_SUPPORTED_VIDEO_SIZES[];
+
+    // Preferred preview frame size in pixels for video recording.
+    // The width and height must be one of the supported sizes retrieved
+    // via KEY_SUPPORTED_PREVIEW_SIZES. This key can be used only when
+    // getSupportedVideoSizes() does not return an empty Vector of Size.
+    // Camcorder applications are recommended to set the preview size
+    // to a value that is not larger than the preferred preview size.
+    // In other words, the product of the width and height of the
+    // preview size should not be larger than that of the preferred
+    // preview size. In addition, we recommend to choos a preview size
+    // that has the same aspect ratio as the resolution of video to be
+    // recorded.
+    // Example value: "800x600". Read only.
+    static const char KEY_PREFERRED_PREVIEW_SIZE_FOR_VIDEO[];
+
     // The image format for video frames. See CAMERA_MSG_VIDEO_FRAME in
     // frameworks/base/include/camera/Camera.h.
     // Example value: "yuv420sp" or PIXEL_FORMAT_XXX constants. Read only.
@@ -361,10 +415,12 @@ public:
     // for barcode reading.
     static const char SCENE_MODE_BARCODE[];
 
-    // Formats for setPreviewFormat and setPictureFormat.
+    // Pixel color formats for KEY_PREVIEW_FORMAT, KEY_PICTURE_FORMAT,
+    // and KEY_VIDEO_FRAME_FORMAT
     static const char PIXEL_FORMAT_YUV422SP[];
     static const char PIXEL_FORMAT_YUV420SP[]; // NV21
     static const char PIXEL_FORMAT_YUV422I[]; // YUY2
+    static const char PIXEL_FORMAT_YUV420P[]; // YV12
     static const char PIXEL_FORMAT_RGB565[];
     static const char PIXEL_FORMAT_JPEG[];
 

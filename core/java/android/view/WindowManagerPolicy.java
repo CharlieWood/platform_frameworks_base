@@ -23,6 +23,9 @@ import android.os.IBinder;
 import android.os.LocalPowerManager;
 import android.view.animation.Animation;
 
+import java.io.FileDescriptor;
+import java.io.PrintWriter;
+
 /**
  * This interface supplies all UI-specific behavior of the window manager.  An
  * instance of it is created by the window manager when it starts up, and allows
@@ -84,6 +87,17 @@ public interface WindowManagerPolicy {
     public final static int FLAG_PASS_TO_USER = 0x40000000;
 
     public final static boolean WATCH_POINTER = false;
+
+    /**
+     * Sticky broadcast of the current HDMI plugged state.
+     */
+    public final static String ACTION_HDMI_PLUGGED = "android.intent.action.HDMI_PLUGGED";
+
+    /**
+     * Extra in {@link #ACTION_HDMI_PLUGGED} indicating the state: true if
+     * plugged in to HDMI, false if not.
+     */
+    public final static String EXTRA_HDMI_PLUGGED_STATE = "state";
 
     // flags for interceptKeyTq
     /**
@@ -362,6 +376,13 @@ public interface WindowManagerPolicy {
      * modify the rotation.
      */
     public final int USE_LAST_ROTATION = -1000;
+
+    /** When not otherwise specified by the activity's screenOrientation, rotation should be
+     * determined by the system (that is, using sensors). */
+    public final int USER_ROTATION_FREE = 0;
+    /** When not otherwise specified by the activity's screenOrientation, rotation is set by
+     * the user. */
+    public final int USER_ROTATION_LOCKED = 1;
     
     /**
      * Perform initialization of the policy.
@@ -466,6 +487,7 @@ public interface WindowManagerPolicy {
      *        no data is found in the resource.
      * @param labelRes The resource ID the application would like to use as its name.
      * @param icon The resource ID the application would like to use as its icon.
+     * @param windowFlags Window layout flags.
      * 
      * @return Optionally you can return the View that was used to create the
      *         window, for easy removal in removeStartingWindow.
@@ -474,7 +496,7 @@ public interface WindowManagerPolicy {
      */
     public View addStartingWindow(IBinder appToken, String packageName,
             int theme, CharSequence nonLocalizedLabel,
-            int labelRes, int icon);
+            int labelRes, int icon, int windowFlags);
 
     /**
      * Called when the first window of an application has been displayed, while
@@ -543,45 +565,46 @@ public interface WindowManagerPolicy {
      * affect the power state of the device, for example, the power keys.
      * Generally, it's best to keep as little as possible in the queue thread
      * because it's the most fragile.
-     * @param whenNanos The event time in uptime nanoseconds.
-     * @param action The key event action.
-     * @param flags The key event flags.
-     * @param keyCode The key code.
-     * @param scanCode The key's scan code.
+     * @param event The key event.
      * @param policyFlags The policy flags associated with the key.
      * @param isScreenOn True if the screen is already on
      *
      * @return The bitwise or of the {@link #ACTION_PASS_TO_USER},
      *          {@link #ACTION_POKE_USER_ACTIVITY} and {@link #ACTION_GO_TO_SLEEP} flags.
      */
-    public int interceptKeyBeforeQueueing(long whenNanos, int action, int flags,
-            int keyCode, int scanCode, int policyFlags, boolean isScreenOn);
+    public int interceptKeyBeforeQueueing(KeyEvent event, int policyFlags, boolean isScreenOn);
     
     /**
      * Called from the input dispatcher thread before a key is dispatched to a window.
      *
      * <p>Allows you to define
-     * behavior for keys that can not be overridden by applications or redirect
-     * key events to a different window.  This method is called from the
-     * input thread, with no locks held.
-     * 
-     * <p>Note that if you change the window a key is dispatched to, the new
-     * target window will receive the key event without having input focus.
+     * behavior for keys that can not be overridden by applications.
+     * This method is called from the input thread, with no locks held.
      * 
      * @param win The window that currently has focus.  This is where the key
      *            event will normally go.
-     * @param action The key event action.
-     * @param flags The key event flags.
-     * @param keyCode The key code.
-     * @param scanCode The key's scan code.
-     * @param metaState bit mask of meta keys that are held.
-     * @param repeatCount Number of times a key down has repeated.
+     * @param event The key event.
      * @param policyFlags The policy flags associated with the key.
      * @return Returns true if the policy consumed the event and it should
      * not be further dispatched.
      */
-    public boolean interceptKeyBeforeDispatching(WindowState win, int action, int flags,
-            int keyCode, int scanCode, int metaState, int repeatCount, int policyFlags);
+    public boolean interceptKeyBeforeDispatching(WindowState win, KeyEvent event, int policyFlags);
+
+    /**
+     * Called from the input dispatcher thread when an application did not handle
+     * a key that was dispatched to it.
+     *
+     * <p>Allows you to define default global behavior for keys that were not handled
+     * by applications.  This method is called from the input thread, with no locks held.
+     * 
+     * @param win The window that currently has focus.  This is where the key
+     *            event will normally go.
+     * @param event The key event.
+     * @param policyFlags The policy flags associated with the key.
+     * @return Returns an alternate key event to redispatch as a fallback, or null to give up.
+     * The caller is responsible for recycling the key event.
+     */
+    public KeyEvent dispatchUnhandledKey(WindowState win, KeyEvent event, int policyFlags);
 
     /**
      * Called when layout of the windows is about to start.
@@ -672,6 +695,12 @@ public interface WindowManagerPolicy {
      * immediately.
      */
     public boolean allowAppAnimationsLw();
+
+
+    /**
+     * A new window has been focused.
+     */
+    public void focusChanged(WindowState lastFocus, WindowState newFocus);
     
     /**
      * Called after the screen turns off.
@@ -723,6 +752,24 @@ public interface WindowManagerPolicy {
      * @see android.app.KeyguardManager#exitKeyguardSecurely(android.app.KeyguardManager.OnKeyguardExitResult)
      */
     void exitKeyguardSecurely(OnKeyguardExitResult callback);
+
+    /**
+     * isKeyguardLocked
+     *
+     * Return whether the keyguard is currently locked.
+     *
+     * @return true if in keyguard is locked.
+     */
+    public boolean isKeyguardLocked();
+
+    /**
+     * isKeyguardSecure
+     *
+     * Return whether the keyguard requires a password to unlock.
+     *
+     * @return true if in keyguard is secure.
+     */
+    public boolean isKeyguardSecure();
 
     /**
      * inKeyguardRestrictedKeyInputMode
@@ -787,4 +834,25 @@ public interface WindowManagerPolicy {
      * Return false to disable key repeat events from being generated.
      */
     public boolean allowKeyRepeat();
+
+    /**
+     * Inform the policy that the user has chosen a preferred orientation ("rotation lock"). 
+     *
+     * @param mode One of {@link WindowManagerPolicy#USER_ROTATION_LOCKED} or
+     *             {@link * WindowManagerPolicy#USER_ROTATION_FREE}. 
+     * @param rotation One of {@link Surface#ROTATION_0}, {@link Surface#ROTATION_90},
+     *                 {@link Surface#ROTATION_180}, {@link Surface#ROTATION_270}. 
+     */
+    public void setUserRotationMode(int mode, int rotation);
+
+    /**
+     * Print the WindowManagerPolicy's state into the given stream.
+     *
+     * @param prefix Text to print at the front of each line.
+     * @param fd The raw file descriptor that the dump is being sent to.
+     * @param writer The PrintWriter to which you should dump your state.  This will be
+     * closed for you after you return.
+     * @param args additional arguments to the dump request.
+     */
+    public void dump(String prefix, FileDescriptor fd, PrintWriter writer, String[] args);
 }

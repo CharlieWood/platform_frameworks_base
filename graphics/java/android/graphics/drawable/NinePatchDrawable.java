@@ -21,7 +21,6 @@ import android.content.res.Resources;
 import android.content.res.TypedArray;
 import android.util.AttributeSet;
 import android.util.DisplayMetrics;
-import android.util.Log;
 import android.util.TypedValue;
 import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
@@ -99,7 +98,8 @@ public class NinePatchDrawable extends Drawable {
         mPadding = state.mPadding;
         mTargetDensity = res != null ? res.getDisplayMetrics().densityDpi
                 : state.mTargetDensity;
-        if (DEFAULT_DITHER != state.mDither) {
+        //noinspection PointlessBooleanExpression
+        if (state.mDither != DEFAULT_DITHER) {
             // avoid calling the setter unless we need to, since it does a
             // lazy allocation of a paint
             setDither(state.mDither);
@@ -132,10 +132,7 @@ public class NinePatchDrawable extends Drawable {
      * @see android.graphics.Bitmap#getDensity()
      */
     public void setTargetDensity(DisplayMetrics metrics) {
-        mTargetDensity = metrics.densityDpi;
-        if (mNinePatch != null) {
-            computeBitmapSize();
-        }
+        setTargetDensity(metrics.densityDpi);
     }
 
     /**
@@ -147,9 +144,12 @@ public class NinePatchDrawable extends Drawable {
      * @see android.graphics.Bitmap#getDensity()
      */
     public void setTargetDensity(int density) {
-        mTargetDensity = density == 0 ? DisplayMetrics.DENSITY_DEFAULT : density;
-        if (mNinePatch != null) {
-            computeBitmapSize();
+        if (density != mTargetDensity) {
+            mTargetDensity = density == 0 ? DisplayMetrics.DENSITY_DEFAULT : density;
+            if (mNinePatch != null) {
+                computeBitmapSize();
+            }
+            invalidateSelf();
         }
     }
 
@@ -177,16 +177,9 @@ public class NinePatchDrawable extends Drawable {
             }
         }
     }
-    
-    // overrides
 
     @Override
     public void draw(Canvas canvas) {
-        if (false) {
-            float[] pts = new float[2];
-            canvas.getMatrix().mapPoints(pts);
-            Log.v("9patch", "Drawing 9-patch @ " + pts[0] + "," + pts[1] + ": " + getBounds());
-        }
         mNinePatch.draw(canvas, getBounds(), mPaint);
     }
 
@@ -204,16 +197,19 @@ public class NinePatchDrawable extends Drawable {
     @Override
     public void setAlpha(int alpha) {
         getPaint().setAlpha(alpha);
+        invalidateSelf();
     }
     
     @Override
     public void setColorFilter(ColorFilter cf) {
         getPaint().setColorFilter(cf);
+        invalidateSelf();
     }
 
     @Override
     public void setDither(boolean dither) {
         getPaint().setDither(dither);
+        invalidateSelf();
     }
 
     @Override
@@ -327,7 +323,7 @@ public class NinePatchDrawable extends Drawable {
     
     @Override
     public ConstantState getConstantState() {
-        mNinePatchState.mChangingConfigurations = super.getChangingConfigurations();
+        mNinePatchState.mChangingConfigurations = getChangingConfigurations();
         return mNinePatchState;
     }
 

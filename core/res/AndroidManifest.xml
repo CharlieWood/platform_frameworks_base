@@ -35,10 +35,12 @@
     <protected-broadcast android:name="android.intent.action.PACKAGE_INSTALL" />
     <protected-broadcast android:name="android.intent.action.PACKAGE_ADDED" />
     <protected-broadcast android:name="android.intent.action.PACKAGE_REPLACED" />
+    <protected-broadcast android:name="android.intent.action.MY_PACKAGE_REPLACED" />
     <protected-broadcast android:name="android.intent.action.PACKAGE_REMOVED" />
     <protected-broadcast android:name="android.intent.action.PACKAGE_CHANGED" />
     <protected-broadcast android:name="android.intent.action.PACKAGE_RESTARTED" />
     <protected-broadcast android:name="android.intent.action.PACKAGE_DATA_CLEARED" />
+    <protected-broadcast android:name="android.intent.action.PACKAGE_FIRST_LAUNCH" />
     <protected-broadcast android:name="android.intent.action.UID_REMOVED" />
     <protected-broadcast android:name="android.intent.action.CONFIGURATION_CHANGED" />
     <protected-broadcast android:name="android.intent.action.LOCALE_CHANGED" />
@@ -55,7 +57,6 @@
     <protected-broadcast android:name="android.intent.action.NEW_OUTGOING_CALL" />
     <protected-broadcast android:name="android.intent.action.REBOOT" />
     <protected-broadcast android:name="android.intent.action.DOCK_EVENT" />
-    <protected-broadcast android:name="android.intent.action.MASTER_CLEAR_NOTIFICATION" />
 
     <protected-broadcast android:name="android.app.action.ENTER_CAR_MODE" />
     <protected-broadcast android:name="android.app.action.EXIT_CAR_MODE" />
@@ -83,14 +84,16 @@
     <protected-broadcast android:name="android.bluetooth.device.action.PAIRING_REQUEST" />
     <protected-broadcast android:name="android.bluetooth.device.action.PAIRING_CANCEL" />
 
-    <protected-broadcast android:name="android.hardware.usb.action.USB_STATE" />
-    <protected-broadcast android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED" />
-    <protected-broadcast android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED" />
+    <protected-broadcast android:name="android.hardware.action.USB_STATE" />
+    <protected-broadcast android:name="android.hardware.action.USB_ACCESSORY_ATTACHED" />
+    <protected-broadcast android:name="android.hardware.action.USB_ACCESSORY_ATTACHED" />
+    <protected-broadcast android:name="android.hardware.action.USB_DEVICE_ATTACHED" />
+    <protected-broadcast android:name="android.hardware.action.USB_DEVICE_DETACHED" />
 
     <protected-broadcast android:name="android.nfc.action.LLCP_LINK_STATE_CHANGED" />
-    <protected-broadcast android:name="com.android.nfc_extras.action.RF_FIELD_ON_DETECTED" />
-    <protected-broadcast android:name="com.android.nfc_extras.action.RF_FIELD_OFF_DETECTED" />
-    <protected-broadcast android:name="com.android.nfc_extras.action.AID_SELECTED" />
+    <protected-broadcast android:name="android.nfc.action.TRANSACTION_DETECTED" />
+    <protected-broadcast android:name="android.intent.action.CLEAR_DNS_CACHE" />
+    <protected-broadcast android:name="android.intent.action.PROXY_CHANGE" />
 
     <!-- ====================================== -->
     <!-- Permissions for things that cost money -->
@@ -149,15 +152,6 @@
         android:protectionLevel="dangerous"
         android:label="@string/permlab_receiveMms"
         android:description="@string/permdesc_receiveMms" />
-
-    <!-- Allows an application to receive emergency cell broadcast messages,
-         to record or display them to the user. Reserved for system apps.
-         @hide Pending API council approval -->
-    <permission android:name="android.permission.RECEIVE_EMERGENCY_BROADCAST"
-        android:permissionGroup="android.permission-group.MESSAGES"
-        android:protectionLevel="signatureOrSystem"
-        android:label="@string/permlab_receiveEmergencyBroadcast"
-        android:description="@string/permdesc_receiveEmergencyBroadcast" />
 
     <!-- Allows an application to read SMS messages. -->
     <permission android:name="android.permission.READ_SMS"
@@ -344,14 +338,6 @@
         android:description="@string/permdesc_accessWifiState"
         android:label="@string/permlab_accessWifiState" />
 
-    <!-- Allows applications to access information about WiMAX networks
-         @hide -->
-    <permission android:name="android.permission.ACCESS_WIMAX_STATE"
-        android:permissionGroup="android.permission-group.NETWORK"
-        android:protectionLevel="normal"
-        android:description="@string/permdesc_accessWimaxState"
-        android:label="@string/permlab_accessWimaxState" />
-
     <!-- Allows applications to connect to paired bluetooth devices -->
     <permission android:name="android.permission.BLUETOOTH"
         android:permissionGroup="android.permission-group.NETWORK"
@@ -380,6 +366,13 @@
         android:protectionLevel="signature"
         android:description="@string/permdesc_accountManagerService"
         android:label="@string/permlab_accountManagerService" />
+
+    <!-- Allows an internal user to use privaledged ConnectivityManager
+    APIs.
+        @hide -->
+    <permission android:name="android.permission.CONNECTIVITY_INTERNAL"
+        android:permissionGroup="android.permission-group.NETWORK"
+        android:protectionLevel="signatureOrSystem" />
 
     <!-- ================================== -->
     <!-- Permissions for accessing accounts -->
@@ -473,13 +466,21 @@
         android:label="@string/permlab_flashlight"
         android:description="@string/permdesc_flashlight" />
 
-    <!-- Allows an application to manage preferences and permissions for USB devices
+    <!-- Allows an application to access USB devices -->
+    <permission android:name="android.permission.ACCESS_USB"
+        android:permissionGroup="android.permission-group.HARDWARE_CONTROLS"
+        android:protectionLevel="normal"
+        android:label="@string/permlab_accessUsb"
+        android:description="@string/permdesc_accessUsb" />
+
+    <!-- Allows an application to access the MTP USB kernel driver.
+         For use only by the device side MTP implementation.
          @hide -->
-    <permission android:name="android.permission.MANAGE_USB"
+    <permission android:name="android.permission.ACCESS_MTP"
         android:permissionGroup="android.permission-group.HARDWARE_CONTROLS"
         android:protectionLevel="signatureOrSystem"
-        android:label="@string/permlab_manageUsb"
-        android:description="@string/permdesc_manageUsb" />
+        android:label="@string/permlab_accessMtp"
+        android:description="@string/permdesc_accessMtp" />
 
     <!-- Allows access to hardware peripherals.  Intended only for hardware testing -->
     <permission android:name="android.permission.HARDWARE_TEST"
@@ -862,14 +863,6 @@
         android:description="@string/permdesc_changeWifiState"
         android:label="@string/permlab_changeWifiState" />
 
-    <!-- Allows applications to change WiMAX connectivity state
-         @hide -->
-    <permission android:name="android.permission.CHANGE_WIMAX_STATE"
-        android:permissionGroup="android.permission-group.SYSTEM_TOOLS"
-        android:protectionLevel="dangerous"
-        android:description="@string/permdesc_changeWimaxState"
-        android:label="@string/permlab_changeWimaxState" />
-
     <!-- Allows applications to enter Wi-Fi Multicast mode -->
     <permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"
         android:permissionGroup="android.permission-group.SYSTEM_TOOLS"
@@ -1022,7 +1015,7 @@
     <permission android:name="android.permission.SHUTDOWN"
         android:label="@string/permlab_shutdown"
         android:description="@string/permdesc_shutdown"
-        android:protectionLevel="signature" />
+        android:protectionLevel="signatureOrSystem" />
 
     <!-- Allows an application to tell the activity manager to temporarily
          stop application switches, putting it into a special mode that
@@ -1032,7 +1025,7 @@
     <permission android:name="android.permission.STOP_APP_SWITCHES"
         android:label="@string/permlab_stopAppSwitches"
         android:description="@string/permdesc_stopAppSwitches"
-        android:protectionLevel="signatureOrSystem" />
+        android:protectionLevel="signature" />
 
     <!-- Allows an application to retrieve the current state of keys and
          switches.  This is only for use by the system.-->
@@ -1205,7 +1198,7 @@
     <permission android:name="android.permission.PACKAGE_USAGE_STATS"
         android:label="@string/permlab_pkgUsageStats"
         android:description="@string/permdesc_pkgUsageStats"
-        android:protectionLevel="signature" />
+        android:protectionLevel="signatureOrSystem" />
 
     <!-- Allows an application to collect battery statistics -->
     <permission android:name="android.permission.BATTERY_STATS"
@@ -1218,6 +1211,13 @@
     <permission android:name="android.permission.BACKUP"
         android:label="@string/permlab_backup"
         android:description="@string/permdesc_backup"
+        android:protectionLevel="signatureOrSystem" />
+
+    <!-- Must be required by a {@link android.widget.RemoteViewsService},
+         to ensure that only the system can bind to it. -->
+    <permission android:name="android.permission.BIND_REMOTEVIEWS"
+        android:label="@string/permlab_bindRemoteViews"
+        android:description="@string/permdesc_bindRemoteViews"
         android:protectionLevel="signatureOrSystem" />
 
     <!-- Allows an application to tell the AppWidget service which application
@@ -1287,6 +1287,13 @@
         android:description="@string/permlab_copyProtectedData"
         android:protectionLevel="signature" />
 
+    <!-- Internal permission protecting access to the encryption methods
+        @hide
+    -->
+    <permission android:name="android.permission.CRYPT_KEEPER"
+        android:protectionLevel="signatureOrSystem" />
+
+
     <!-- C2DM permission. 
          @hide Used internally.
      -->
@@ -1303,7 +1310,7 @@
                  android:killAfterRestore="false"
                  android:icon="@drawable/ic_launcher_android">
         <activity android:name="com.android.internal.app.ChooserActivity"
-                android:theme="@style/Theme.Dialog.Alert"
+                android:theme="@style/Theme.Holo.Dialog.Alert"
                 android:finishOnCloseSystemDialogs="true"
                 android:excludeFromRecents="true"
                 android:multiprocess="true">
@@ -1313,20 +1320,20 @@
             </intent-filter>
         </activity>
         <activity android:name="com.android.internal.app.HeavyWeightSwitcherActivity"
-                android:theme="@style/Theme.Dialog"
+                android:theme="@style/Theme.Holo.Dialog"
                 android:label="@string/heavy_weight_switcher_title"
                 android:finishOnCloseSystemDialogs="true"
                 android:excludeFromRecents="true">
         </activity>
         <activity android:name="com.android.internal.app.PlatLogoActivity"
-                android:theme="@style/Theme.NoTitleBar.Fullscreen">
+                android:theme="@style/Theme.Wallpaper.NoTitleBar.Fullscreen">
         </activity>
         <activity android:name="com.android.internal.app.DisableCarModeActivity"
                 android:theme="@style/Theme.NoDisplay"
                 android:excludeFromRecents="true">
         </activity>
         <activity android:name="com.android.internal.app.RingtonePickerActivity"
-                android:theme="@style/Theme.Dialog.Alert"
+                android:theme="@style/Theme.Holo.Dialog.Alert"
                 android:excludeFromRecents="true"
                 android:multiprocess="true">
             <intent-filter>
@@ -1337,12 +1344,20 @@
 
         <activity android:name="android.accounts.ChooseAccountActivity"
                 android:excludeFromRecents="true"
-                android:exported="true">
+                android:exported="true"
+                android:theme="@android:style/Theme.Holo.Dialog"
+                android:label="@string/choose_account_label">
         </activity>
 
         <activity android:name="android.accounts.GrantCredentialsPermissionActivity"
                 android:excludeFromRecents="true"
-                android:exported="true">
+                android:exported="true"
+                android:theme="@android:style/Theme.Holo.DialogWhenLarge">
+        </activity>
+
+        <activity android:name="android.content.SyncActivityTooManyDeletes"
+               android:theme="@android:style/Theme.Holo.Dialog"
+               android:label="@string/sync_too_many_deletes">
         </activity>
 
         <activity android:name="com.android.server.ShutdownActivity"
@@ -1352,15 +1367,13 @@
                 <action android:name="android.intent.action.ACTION_REQUEST_SHUTDOWN" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.REBOOT" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
         <activity android:name="com.android.internal.app.NetInitiatedActivity"
-                android:theme="@style/Theme.Dialog.Alert"
-                android:excludeFromRecents="true">
-        </activity>
-
-        <activity android:name="com.android.server.usb.UsbResolverActivity"
-                android:theme="@style/Theme.Dialog.Alert"
-                android:finishOnCloseSystemDialogs="true"
+                android:theme="@style/Theme.Holo.Dialog.Alert"
                 android:excludeFromRecents="true">
         </activity>
 

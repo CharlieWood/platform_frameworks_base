@@ -191,13 +191,8 @@ public class AccountManager {
     /**
      * Authenticators using 'customTokens' option will also get the UID of the
      * caller
-     * @hide
      */
     public static final String KEY_CALLER_UID = "callerUid";
-
-    /**
-     * @hide 
-     */
     public static final String KEY_CALLER_PID = "callerPid";
 
     /**

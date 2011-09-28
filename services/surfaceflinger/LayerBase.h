@@ -27,13 +27,14 @@
 #include <utils/RefBase.h>
 
 #include <ui/Region.h>
-#include <ui/Overlay.h>
 
 #include <surfaceflinger/ISurfaceComposerClient.h>
 #include <private/surfaceflinger/SharedBufferStack.h>
 #include <private/surfaceflinger/LayerState.h>
 
 #include <pixelflinger/pixelflinger.h>
+
+#include <hardware/hwcomposer.h>
 
 #include "DisplayHardware/DisplayHardware.h"
 #include "Transform.h"
@@ -109,6 +110,10 @@ public:
 
     virtual const char* getTypeId() const { return "LayerBase"; }
 
+    virtual void setGeometry(hwc_layer_t* hwcl);
+
+    virtual void setPerFrameData(hwc_layer_t* hwcl);
+
     /**
      * draw - performs some global clipping optimizations
      * and calls onDraw().
@@ -118,11 +123,6 @@ public:
     virtual void draw(const Region& clip) const;
     virtual void drawForSreenShot() const;
     
-    /**
-     * bypass mode
-     */
-    virtual bool setBypass(bool enable) { return false; }
-
     /**
      * onDraw - draws the surface.
      */
@@ -196,12 +196,29 @@ public:
      */
     virtual bool isSecure() const       { return false; }
 
+    /**
+     * isProtectedByApp - true if application says this surface is protected, that
+     * is if it requires a hardware-protected data path to an external sink.
+     */
+    virtual bool isProtectedByApp() const   { return false; }
+
+    /**
+     * isProtectedByDRM - true if DRM agent says this surface is protected, that
+     * is if it requires a hardware-protected data path to an external sink.
+     */
+    virtual bool isProtectedByDRM() const   { return false; }
+
+    /** Called from the main thread, when the surface is removed from the
+     * draw list */
+    virtual status_t ditch() { return NO_ERROR; }
+
     /** called with the state lock when the surface is removed from the
      *  current list */
     virtual void onRemoved() { };
     
     /** always call base class first */
     virtual void dump(String8& result, char* scratch, size_t size) const;
+    virtual void shortDump(String8& result, char* scratch, size_t size) const;
 
 
     enum { // flags for doTransaction()
@@ -260,8 +277,7 @@ protected:
     volatile    int32_t         mInvalidate;
                 
 
-public:
-    // called from class SurfaceFlinger
+protected:
     virtual ~LayerBase();
 
 private:
@@ -281,6 +297,7 @@ public:
     virtual ~LayerBaseClient();
 
             sp<Surface> getSurface();
+            wp<IBinder> getSurfaceBinder() const;
     virtual sp<Surface> createSurface() const;
     virtual sp<LayerBaseClient> getLayerBaseClient() const {
         return const_cast<LayerBaseClient*>(this); }
@@ -305,12 +322,6 @@ public:
                 uint32_t w, uint32_t h, uint32_t format, uint32_t usage);
         virtual status_t setBufferCount(int bufferCount);
 
-        virtual status_t registerBuffers(const ISurface::BufferHeap& buffers); 
-        virtual void postBuffer(ssize_t offset);
-        virtual void unregisterBuffers();
-        virtual sp<OverlayRef> createOverlay(uint32_t w, uint32_t h,
-                int32_t format, int32_t orientation);
-
     protected:
         friend class LayerBaseClient;
         sp<SurfaceFlinger>  mFlinger;
@@ -322,10 +333,12 @@ public:
 
 protected:
     virtual void dump(String8& result, char* scratch, size_t size) const;
+    virtual void shortDump(String8& result, char* scratch, size_t size) const;
 
 private:
     mutable Mutex mLock;
-    mutable wp<Surface> mClientSurface;
+    mutable bool mHasSurface;
+    wp<IBinder> mClientSurfaceBinder;
     const wp<Client> mClientRef;
     // only read
     const uint32_t mIdentity;

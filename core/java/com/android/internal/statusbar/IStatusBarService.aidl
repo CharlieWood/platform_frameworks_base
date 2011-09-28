@@ -30,14 +30,20 @@ interface IStatusBarService
     void setIcon(String slot, String iconPackage, int iconId, int iconLevel);
     void setIconVisibility(String slot, boolean visible);
     void removeIcon(String slot);
+    void setMenuKeyVisible(boolean visible);
+    void setImeWindowStatus(in IBinder token, int vis, int backDisposition);
 
     // ---- Methods below are for use by the status bar policy services ----
     // You need the STATUS_BAR_SERVICE permission
     void registerStatusBar(IStatusBar callbacks, out StatusBarIconList iconList,
-            out List<IBinder> notificationKeys, out List<StatusBarNotification> notifications);
+            out List<IBinder> notificationKeys, out List<StatusBarNotification> notifications,
+            out int[] switches, out List<IBinder> binders);
     void onPanelRevealed();
     void onNotificationClick(String pkg, String tag, int id);
     void onNotificationError(String pkg, String tag, int id,
             int uid, int initialPid, String message);
     void onClearAllNotifications();
+    void onNotificationClear(String pkg, String tag, int id);
+    void setSystemUiVisibility(int vis);
+    void setHardKeyboardEnabled(boolean enabled);
 }

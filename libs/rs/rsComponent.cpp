@@ -16,22 +16,21 @@
 
 #include "rsComponent.h"
 
+#ifndef ANDROID_RS_SERIALIZE
 #include <GLES/gl.h>
+#endif
 
 using namespace android;
 using namespace android::renderscript;
 
-Component::Component()
-{
+Component::Component() {
     set(RS_TYPE_NONE, RS_KIND_USER, false, 1);
 }
 
-Component::~Component()
-{
+Component::~Component() {
 }
 
-void Component::set(RsDataType dt, RsDataKind dk, bool norm, uint32_t vecSize)
-{
+void Component::set(RsDataType dt, RsDataKind dk, bool norm, uint32_t vecSize) {
     mType = dt;
     mKind = dk;
     mNormalized = norm;
@@ -44,7 +43,7 @@ void Component::set(RsDataType dt, RsDataKind dk, bool norm, uint32_t vecSize)
     mIsSigned = false;
     mIsPixel = false;
 
-    switch(mKind) {
+    switch (mKind) {
     case RS_KIND_PIXEL_L:
     case RS_KIND_PIXEL_A:
         mIsPixel = true;
@@ -70,7 +69,7 @@ void Component::set(RsDataType dt, RsDataKind dk, bool norm, uint32_t vecSize)
         break;
     }
 
-    switch(mType) {
+    switch (mType) {
     case RS_TYPE_NONE:
         return;
     case RS_TYPE_UNSIGNED_5_6_5:
@@ -91,6 +90,26 @@ void Component::set(RsDataType dt, RsDataKind dk, bool norm, uint32_t vecSize)
         mNormalized = true;
         rsAssert(mKind == RS_KIND_PIXEL_RGBA);
         return;
+
+    case RS_TYPE_MATRIX_4X4:
+        mTypeBits = 16 * 32;
+        rsAssert(mVectorSize == 1);
+        rsAssert(mNormalized == false);
+        rsAssert(mKind == RS_KIND_USER);
+        break;
+    case RS_TYPE_MATRIX_3X3:
+        mTypeBits = 9 * 32;
+        rsAssert(mVectorSize == 1);
+        rsAssert(mNormalized == false);
+        rsAssert(mKind == RS_KIND_USER);
+        break;
+    case RS_TYPE_MATRIX_2X2:
+        mTypeBits = 4 * 32;
+        rsAssert(mVectorSize == 1);
+        rsAssert(mNormalized == false);
+        rsAssert(mKind == RS_KIND_USER);
+        break;
+
     case RS_TYPE_ELEMENT:
     case RS_TYPE_TYPE:
     case RS_TYPE_ALLOCATION:
@@ -148,16 +167,21 @@ void Component::set(RsDataType dt, RsDataKind dk, bool norm, uint32_t vecSize)
     case RS_TYPE_UNSIGNED_64:
         mTypeBits = 64;
         break;
+
+    case RS_TYPE_BOOLEAN:
+        mTypeBits = 8;
+        break;
     }
 
     mBits = mTypeBits * mVectorSize;
 }
 
+bool Component::isReference() const {
+    return (mType >= RS_TYPE_ELEMENT);
+}
 
-
-
-uint32_t Component::getGLType() const
-{
+uint32_t Component::getGLType() const {
+#ifndef ANDROID_RS_SERIALIZE
     switch (mType) {
     case RS_TYPE_UNSIGNED_5_6_5:    return GL_UNSIGNED_SHORT_5_6_5;
     case RS_TYPE_UNSIGNED_5_5_5_1:  return GL_UNSIGNED_SHORT_5_5_5_1;
@@ -171,12 +195,12 @@ uint32_t Component::getGLType() const
     case RS_TYPE_SIGNED_16:     return GL_SHORT;
     default:    break;
     }
-
+#endif //ANDROID_RS_SERIALIZE
     return 0;
 }
 
-uint32_t Component::getGLFormat() const
-{
+uint32_t Component::getGLFormat() const {
+#ifndef ANDROID_RS_SERIALIZE
     switch (mKind) {
     case RS_KIND_PIXEL_L: return GL_LUMINANCE;
     case RS_KIND_PIXEL_A: return GL_ALPHA;
@@ -185,89 +209,13 @@ uint32_t Component::getGLFormat() const
     case RS_KIND_PIXEL_RGBA: return GL_RGBA;
     default: break;
     }
+#endif //ANDROID_RS_SERIALIZE
     return 0;
 }
 
-static const char * gCTypeStrings[] = {
-    0,
-    0,//"F16",
-    "float",
-    "double",
-    "char",
-    "short",
-    "int",
-    0,//"S64",
-    "char",//U8",
-    "short",//U16",
-    "int",//U32",
-    0,//"U64",
-    0,//"UP_565",
-    0,//"UP_5551",
-    0,//"UP_4444",
-    0,//"ELEMENT",
-    0,//"TYPE",
-    0,//"ALLOCATION",
-    0,//"SAMPLER",
-    0,//"SCRIPT",
-    0,//"MESH",
-    0,//"PROGRAM_FRAGMENT",
-    0,//"PROGRAM_VERTEX",
-    0,//"PROGRAM_RASTER",
-    0,//"PROGRAM_STORE",
-};
-
-static const char * gCVecTypeStrings[] = {
-    0,
-    0,//"F16",
-    "vecF32",
-    "vecF64",
-    "vecI8",
-    "vecI16",
-    "vecI32",
-    0,//"S64",
-    "vecU8",//U8",
-    "vecU16",//U16",
-    "vecU32",//U32",
-    0,//"U64",
-    0,//"UP_565",
-    0,//"UP_5551",
-    0,//"UP_4444",
-    0,//"ELEMENT",
-    0,//"TYPE",
-    0,//"ALLOCATION",
-    0,//"SAMPLER",
-    0,//"SCRIPT",
-    0,//"MESH",
-    0,//"PROGRAM_FRAGMENT",
-    0,//"PROGRAM_VERTEX",
-    0,//"PROGRAM_RASTER",
-    0,//"PROGRAM_STORE",
-};
-
-String8 Component::getCType() const
-{
-    char buf[64];
-    if (mVectorSize == 1) {
-        return String8(gCTypeStrings[mType]);
-    }
-
-    // Yuck, acc WAR
-    // Appears to have problems packing chars
-    if (mVectorSize == 4 && mType == RS_TYPE_UNSIGNED_8) {
-        return String8("int");
-    }
-
-
-    String8 s(gCVecTypeStrings[mType]);
-    sprintf(buf, "_%i_t", mVectorSize);
-    s.append(buf);
-    return s;
-}
-
-String8 Component::getGLSLType() const
-{
+String8 Component::getGLSLType() const {
     if (mType == RS_TYPE_SIGNED_32) {
-        switch(mVectorSize) {
+        switch (mVectorSize) {
         case 1: return String8("int");
         case 2: return String8("ivec2");
         case 3: return String8("ivec3");
@@ -275,17 +223,26 @@ String8 Component::getGLSLType() const
         }
     }
     if (mType == RS_TYPE_FLOAT_32) {
-        switch(mVectorSize) {
+        switch (mVectorSize) {
         case 1: return String8("float");
         case 2: return String8("vec2");
         case 3: return String8("vec3");
         case 4: return String8("vec4");
         }
     }
+    if ((mType == RS_TYPE_MATRIX_4X4) && (mVectorSize == 1)) {
+        return String8("mat4");
+    }
+    if ((mType == RS_TYPE_MATRIX_3X3) && (mVectorSize == 1)) {
+        return String8("mat3");
+    }
+    if ((mType == RS_TYPE_MATRIX_2X2) && (mVectorSize == 1)) {
+        return String8("mat2");
+    }
     return String8();
 }
 
-static const char * gTypeStrings[] = {
+static const char * gTypeBasicStrings[] = {
     "NONE",
     "F16",
     "F32",
@@ -298,9 +255,16 @@ static const char * gTypeStrings[] = {
     "U16",
     "U32",
     "U64",
+    "BOOLEAN",
     "UP_565",
     "UP_5551",
     "UP_4444",
+    "MATRIX_4X4",
+    "MATRIX_3X3",
+    "MATRIX_2X2",
+};
+
+static const char * gTypeObjStrings[] = {
     "ELEMENT",
     "TYPE",
     "ALLOCATION",
@@ -328,10 +292,33 @@ static const char * gKindStrings[] = {
     "PIXEL_RGBA",
 };
 
-void Component::dumpLOGV(const char *prefix) const
-{
-    LOGV("%s   Component: %s, %s, vectorSize=%i, bits=%i",
-         prefix, gTypeStrings[mType], gKindStrings[mKind], mVectorSize, mBits);
+void Component::dumpLOGV(const char *prefix) const {
+    if (mType >= RS_TYPE_ELEMENT) {
+        LOGV("%s   Component: %s, %s, vectorSize=%i, bits=%i",
+             prefix, gTypeObjStrings[mType - RS_TYPE_ELEMENT], gKindStrings[mKind], mVectorSize, mBits);
+    } else {
+        LOGV("%s   Component: %s, %s, vectorSize=%i, bits=%i",
+             prefix, gTypeBasicStrings[mType], gKindStrings[mKind], mVectorSize, mBits);
+    }
 }
+
+void Component::serialize(OStream *stream) const {
+    stream->addU8((uint8_t)mType);
+    stream->addU8((uint8_t)mKind);
+    stream->addU8((uint8_t)(mNormalized ? 1 : 0));
+    stream->addU32(mVectorSize);
+}
+
+void Component::loadFromStream(IStream *stream) {
+    mType = (RsDataType)stream->loadU8();
+    mKind = (RsDataKind)stream->loadU8();
+    uint8_t temp = stream->loadU8();
+    mNormalized = temp != 0;
+    mVectorSize = stream->loadU32();
+
+    set(mType, mKind, mNormalized, mVectorSize);
+}
+
+
 
 

@@ -110,16 +110,23 @@ abstract public class ContentProviderNative extends Binder implements IContentPr
 
                     IBulkCursor bulkCursor = bulkQuery(url, projection, selection,
                             selectionArgs, sortOrder, observer, window);
-                    reply.writeNoException();
                     if (bulkCursor != null) {
-                        reply.writeStrongBinder(bulkCursor.asBinder());
-
+                        final IBinder binder = bulkCursor.asBinder();
                         if (wantsCursorMetadata) {
-                            reply.writeInt(bulkCursor.count());
-                            reply.writeInt(BulkCursorToCursorAdaptor.findRowIdColumnIndex(
-                                bulkCursor.getColumnNames()));
+                            final int count = bulkCursor.count();
+                            final int index = BulkCursorToCursorAdaptor.findRowIdColumnIndex(
+                                    bulkCursor.getColumnNames());
+
+                            reply.writeNoException();
+                            reply.writeStrongBinder(binder);
+                            reply.writeInt(count);
+                            reply.writeInt(index);
+                        } else {
+                            reply.writeNoException();
+                            reply.writeStrongBinder(binder);
                         }
                     } else {
+                        reply.writeNoException();
                         reply.writeStrongBinder(null);
                     }
 
@@ -255,6 +262,38 @@ abstract public class ContentProviderNative extends Binder implements IContentPr
 
                     reply.writeNoException();
                     reply.writeBundle(responseBundle);
+                    return true;
+                }
+
+                case GET_STREAM_TYPES_TRANSACTION:
+                {
+                    data.enforceInterface(IContentProvider.descriptor);
+                    Uri url = Uri.CREATOR.createFromParcel(data);
+                    String mimeTypeFilter = data.readString();
+                    String[] types = getStreamTypes(url, mimeTypeFilter);
+                    reply.writeNoException();
+                    reply.writeStringArray(types);
+
+                    return true;
+                }
+
+                case OPEN_TYPED_ASSET_FILE_TRANSACTION:
+                {
+                    data.enforceInterface(IContentProvider.descriptor);
+                    Uri url = Uri.CREATOR.createFromParcel(data);
+                    String mimeType = data.readString();
+                    Bundle opts = data.readBundle();
+
+                    AssetFileDescriptor fd;
+                    fd = openTypedAssetFile(url, mimeType, opts);
+                    reply.writeNoException();
+                    if (fd != null) {
+                        reply.writeInt(1);
+                        fd.writeToParcel(reply,
+                                Parcelable.PARCELABLE_WRITE_RETURN_VALUE);
+                    } else {
+                        reply.writeInt(0);
+                    }
                     return true;
                 }
             }
@@ -566,6 +605,51 @@ final class ContentProviderProxy implements IContentProvider
         reply.recycle();
 
         return bundle;
+    }
+
+    public String[] getStreamTypes(Uri url, String mimeTypeFilter) throws RemoteException
+    {
+        Parcel data = Parcel.obtain();
+        Parcel reply = Parcel.obtain();
+
+        data.writeInterfaceToken(IContentProvider.descriptor);
+
+        url.writeToParcel(data, 0);
+        data.writeString(mimeTypeFilter);
+
+        mRemote.transact(IContentProvider.GET_STREAM_TYPES_TRANSACTION, data, reply, 0);
+
+        DatabaseUtils.readExceptionFromParcel(reply);
+        String[] out = reply.createStringArray();
+
+        data.recycle();
+        reply.recycle();
+
+        return out;
+    }
+
+    public AssetFileDescriptor openTypedAssetFile(Uri url, String mimeType, Bundle opts)
+            throws RemoteException, FileNotFoundException {
+        Parcel data = Parcel.obtain();
+        Parcel reply = Parcel.obtain();
+
+        data.writeInterfaceToken(IContentProvider.descriptor);
+
+        url.writeToParcel(data, 0);
+        data.writeString(mimeType);
+        data.writeBundle(opts);
+
+        mRemote.transact(IContentProvider.OPEN_TYPED_ASSET_FILE_TRANSACTION, data, reply, 0);
+
+        DatabaseUtils.readExceptionWithFileNotFoundExceptionFromParcel(reply);
+        int has = reply.readInt();
+        AssetFileDescriptor fd = has != 0
+                ? AssetFileDescriptor.CREATOR.createFromParcel(reply) : null;
+
+        data.recycle();
+        reply.recycle();
+
+        return fd;
     }
 
     private IBinder mRemote;

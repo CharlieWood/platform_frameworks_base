@@ -31,20 +31,13 @@ LOCAL_SHARED_LIBRARIES :=     		\
 	libandroid_runtime    			\
 	libstagefright        			\
 	libstagefright_omx    			\
-	libstagefright_color_conversion         \
 	libstagefright_foundation               \
-	libsurfaceflinger_client
+	libsurfaceflinger_client                \
+	libgui
 
 LOCAL_STATIC_LIBRARIES := \
-        libstagefright_rtsp
-
-ifneq ($(BUILD_WITHOUT_PV),true)
-LOCAL_SHARED_LIBRARIES += \
-	libopencore_player    \
-	libopencore_author
-else
-LOCAL_CFLAGS += -DNO_OPENCORE
-endif
+        libstagefright_rtsp                     \
+        libstagefright_nuplayer                 \
 
 ifneq ($(TARGET_SIMULATOR),true)
 LOCAL_SHARED_LIBRARIES += libdl
@@ -56,9 +49,11 @@ LOCAL_C_INCLUDES :=                                                 \
 	$(TOP)/frameworks/base/include/media/stagefright/openmax \
 	$(TOP)/frameworks/base/media/libstagefright/include             \
 	$(TOP)/frameworks/base/media/libstagefright/rtsp                \
-        $(TOP)/external/tremolo/Tremolo
+        $(TOP)/external/tremolo/Tremolo \
 
 LOCAL_MODULE:= libmediaplayerservice
 
 include $(BUILD_SHARED_LIBRARY)
+
+include $(call all-makefiles-under,$(LOCAL_PATH))
 

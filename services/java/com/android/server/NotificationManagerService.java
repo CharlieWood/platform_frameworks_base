@@ -17,7 +17,6 @@
 package com.android.server;
 
 import com.android.internal.statusbar.StatusBarNotification;
-import com.android.server.StatusBarManagerService;
 
 import android.app.ActivityManagerNative;
 import android.app.IActivityManager;
@@ -38,16 +37,14 @@ import android.content.pm.PackageManager;
 import android.content.pm.PackageManager.NameNotFoundException;
 import android.content.res.Resources;
 import android.database.ContentObserver;
-import android.hardware.usb.UsbManager;
+import android.hardware.UsbManager;
 import android.media.AudioManager;
 import android.net.Uri;
-import android.os.BatteryManager;
-import android.os.Bundle;
 import android.os.Binder;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Message;
-import android.os.Power;
 import android.os.Process;
 import android.os.RemoteException;
 import android.os.SystemProperties;
@@ -56,8 +53,8 @@ import android.provider.Settings;
 import android.telephony.TelephonyManager;
 import android.text.TextUtils;
 import android.util.EventLog;
-import android.util.Slog;
 import android.util.Log;
+import android.util.Slog;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityManager;
 import android.widget.Toast;
@@ -91,8 +88,6 @@ public class NotificationManagerService extends INotificationManager.Stub
 
     private WorkerHandler mHandler;
     private StatusBarManagerService mStatusBar;
-    private LightsService mLightsService;
-    private LightsService.Light mBatteryLight;
     private LightsService.Light mNotificationLight;
     private LightsService.Light mAttentionLight;
 
@@ -127,17 +122,7 @@ public class NotificationManagerService extends INotificationManager.Stub
     private ArrayList<ToastRecord> mToastQueue;
 
     private ArrayList<NotificationRecord> mLights = new ArrayList<NotificationRecord>();
-
-    private boolean mBatteryCharging;
-    private boolean mBatteryLow;
-    private boolean mBatteryFull;
     private NotificationRecord mLedNotification;
-
-    private static final int BATTERY_LOW_ARGB = 0xFFFF0000; // Charging Low - red solid on
-    private static final int BATTERY_MEDIUM_ARGB = 0xFFFFFF00;    // Charging - orange solid on
-    private static final int BATTERY_FULL_ARGB = 0xFF00FF00; // Charging Full - green solid on
-    private static final int BATTERY_BLINK_ON = 125;
-    private static final int BATTERY_BLINK_OFF = 2875;
 
     private static String idDebugString(Context baseContext, String packageName, int id) {
         Context c = null;
@@ -171,12 +156,11 @@ public class NotificationManagerService extends INotificationManager.Stub
         final int id;
         final int uid;
         final int initialPid;
-        ITransientNotification callback;
-        int duration;
+        final int priority;
         final Notification notification;
         IBinder statusBarKey;
 
-        NotificationRecord(String pkg, String tag, int id, int uid, int initialPid,
+        NotificationRecord(String pkg, String tag, int id, int uid, int initialPid, int priority,
                 Notification notification)
         {
             this.pkg = pkg;
@@ -184,6 +168,7 @@ public class NotificationManagerService extends INotificationManager.Stub
             this.id = id;
             this.uid = uid;
             this.initialPid = initialPid;
+            this.priority = priority;
             this.notification = notification;
         }
 
@@ -211,7 +196,9 @@ public class NotificationManagerService extends INotificationManager.Stub
                 + Integer.toHexString(System.identityHashCode(this))
                 + " pkg=" + pkg
                 + " id=" + Integer.toHexString(id)
-                + " tag=" + tag + "}";
+                + " tag=" + tag 
+                + " pri=" + priority 
+                + "}";
         }
     }
 
@@ -282,7 +269,13 @@ public class NotificationManagerService extends INotificationManager.Stub
 
         public void onNotificationClick(String pkg, String tag, int id) {
             cancelNotification(pkg, tag, id, Notification.FLAG_AUTO_CANCEL,
-                    Notification.FLAG_FOREGROUND_SERVICE);
+                    Notification.FLAG_FOREGROUND_SERVICE, true);
+        }
+
+        public void onNotificationClear(String pkg, String tag, int id) {
+            cancelNotification(pkg, tag, id, 0,
+                Notification.FLAG_ONGOING_EVENT | Notification.FLAG_FOREGROUND_SERVICE,
+                true);
         }
 
         public void onPanelRevealed() {
@@ -318,7 +311,7 @@ public class NotificationManagerService extends INotificationManager.Stub
                 int uid, int initialPid, String message) {
             Slog.d(TAG, "onNotification error pkg=" + pkg + " tag=" + tag + " id=" + id
                     + "; will crashApplication(uid=" + uid + ", pid=" + initialPid + ")");
-            cancelNotification(pkg, tag, id, 0, 0);
+            cancelNotification(pkg, tag, id, 0, 0, false);
             long ident = Binder.clearCallingIdentity();
             try {
                 ActivityManagerNative.getDefault().crashApplication(uid, initialPid, pkg,
@@ -337,22 +330,7 @@ public class NotificationManagerService extends INotificationManager.Stub
 
             boolean queryRestart = false;
             
-            if (action.equals(Intent.ACTION_BATTERY_CHANGED)) {
-                boolean batteryCharging = (intent.getIntExtra("plugged", 0) != 0);
-                int level = intent.getIntExtra("level", -1);
-                boolean batteryLow = (level >= 0 && level <= Power.LOW_BATTERY_THRESHOLD);
-                int status = intent.getIntExtra("status", BatteryManager.BATTERY_STATUS_UNKNOWN);
-                boolean batteryFull = (status == BatteryManager.BATTERY_STATUS_FULL || level >= 90);
-
-                if (batteryCharging != mBatteryCharging ||
-                        batteryLow != mBatteryLow ||
-                        batteryFull != mBatteryFull) {
-                    mBatteryCharging = batteryCharging;
-                    mBatteryLow = batteryLow;
-                    mBatteryFull = batteryFull;
-                    updateLights();
-                }
-            } else if (action.equals(UsbManager.ACTION_USB_STATE)) {
+            if (action.equals(UsbManager.ACTION_USB_STATE)) {
                 Bundle extras = intent.getExtras();
                 boolean usbConnected = extras.getBoolean(UsbManager.USB_CONNECTED);
                 boolean adbEnabled = (UsbManager.USB_FUNCTION_ENABLED.equals(
@@ -428,7 +406,6 @@ public class NotificationManagerService extends INotificationManager.Stub
     {
         super();
         mContext = context;
-        mLightsService = lights;
         mAm = ActivityManagerNative.getDefault();
         mSound = new NotificationPlayer(TAG);
         mSound.setUsesWakeLock(context);
@@ -438,7 +415,6 @@ public class NotificationManagerService extends INotificationManager.Stub
         mStatusBar = statusBar;
         statusBar.setNotificationCallbacks(mNotificationCallbacks);
 
-        mBatteryLight = lights.getLight(LightsService.LIGHT_ID_BATTERY);
         mNotificationLight = lights.getLight(LightsService.LIGHT_ID_NOTIFICATIONS);
         mAttentionLight = lights.getLight(LightsService.LIGHT_ID_ATTENTION);
 
@@ -459,9 +435,8 @@ public class NotificationManagerService extends INotificationManager.Stub
             mDisabledNotifications = StatusBarManager.DISABLE_NOTIFICATION_ALERTS;
         }
 
-        // register for battery changed notifications
+        // register for various Intents
         IntentFilter filter = new IntentFilter();
-        filter.addAction(Intent.ACTION_BATTERY_CHANGED);
         filter.addAction(UsbManager.ACTION_USB_STATE);
         filter.addAction(Intent.ACTION_SCREEN_ON);
         filter.addAction(Intent.ACTION_SCREEN_OFF);
@@ -665,6 +640,7 @@ public class NotificationManagerService extends INotificationManager.Stub
 
     // Notifications
     // ============================================================================
+    @Deprecated
     public void enqueueNotification(String pkg, int id, Notification notification, int[] idOut)
     {
         enqueueNotificationWithTag(pkg, null /* tag */, id, notification, idOut);
@@ -677,10 +653,26 @@ public class NotificationManagerService extends INotificationManager.Stub
                 tag, id, notification, idOut);
     }
 
+    public void enqueueNotificationWithTagPriority(String pkg, String tag, int id, int priority,
+            Notification notification, int[] idOut)
+    {
+        enqueueNotificationInternal(pkg, Binder.getCallingUid(), Binder.getCallingPid(),
+                tag, id, priority, notification, idOut);
+    }
+
     // Not exposed via Binder; for system use only (otherwise malicious apps could spoof the
     // uid/pid of another application)
     public void enqueueNotificationInternal(String pkg, int callingUid, int callingPid,
             String tag, int id, Notification notification, int[] idOut)
+    {
+        enqueueNotificationInternal(pkg, callingUid, callingPid, tag, id, 
+                ((notification.flags & Notification.FLAG_ONGOING_EVENT) != 0)
+                    ? StatusBarNotification.PRIORITY_ONGOING
+                    : StatusBarNotification.PRIORITY_NORMAL,
+                notification, idOut);
+    }
+    public void enqueueNotificationInternal(String pkg, int callingUid, int callingPid,
+            String tag, int id, int priority, Notification notification, int[] idOut)
     {
         checkIncomingCall(pkg);
 
@@ -720,15 +712,13 @@ public class NotificationManagerService extends INotificationManager.Stub
                 throw new IllegalArgumentException("contentView required: pkg=" + pkg
                         + " id=" + id + " notification=" + notification);
             }
-            if (notification.contentIntent == null) {
-                throw new IllegalArgumentException("contentIntent required: pkg=" + pkg
-                        + " id=" + id + " notification=" + notification);
-            }
         }
 
         synchronized (mNotificationList) {
-            NotificationRecord r = new NotificationRecord(pkg, tag, id,
-                    callingUid, callingPid, notification);
+            NotificationRecord r = new NotificationRecord(pkg, tag, id, 
+                    callingUid, callingPid, 
+                    priority,
+                    notification);
             NotificationRecord old = null;
 
             int index = indexOfNotificationLocked(pkg, tag, id);
@@ -754,6 +744,8 @@ public class NotificationManagerService extends INotificationManager.Stub
             if (notification.icon != 0) {
                 StatusBarNotification n = new StatusBarNotification(pkg, id, tag,
                         r.uid, r.initialPid, notification);
+                n.priority = r.priority;
+
                 if (old != null && old.statusBarKey != null) {
                     r.statusBarKey = old.statusBarKey;
                     long identity = Binder.clearCallingIdentity();
@@ -775,6 +767,7 @@ public class NotificationManagerService extends INotificationManager.Stub
                 }
                 sendAccessibilityEvent(notification, pkg);
             } else {
+                Slog.e(TAG, "Ignoring notification with icon==0: " + notification);
                 if (old != null && old.statusBarKey != null) {
                     long identity = Binder.clearCallingIdentity();
                     try {
@@ -881,7 +874,20 @@ public class NotificationManagerService extends INotificationManager.Stub
         manager.sendAccessibilityEvent(event);
     }
 
-    private void cancelNotificationLocked(NotificationRecord r) {
+    private void cancelNotificationLocked(NotificationRecord r, boolean sendDelete) {
+        // tell the app
+        if (sendDelete) {
+            if (r.notification.deleteIntent != null) {
+                try {
+                    r.notification.deleteIntent.send();
+                } catch (PendingIntent.CanceledException ex) {
+                    // do nothing - there's no relevant way to recover, and
+                    //     no reason to let this propagate
+                    Slog.w(TAG, "canceled PendingIntent for " + r.pkg, ex);
+                }
+            }
+        }
+
         // status bar
         if (r.notification.icon != 0) {
             long identity = Binder.clearCallingIdentity();
@@ -930,7 +936,7 @@ public class NotificationManagerService extends INotificationManager.Stub
      * and none of the {@code mustNotHaveFlags}.
      */
     private void cancelNotification(String pkg, String tag, int id, int mustHaveFlags,
-            int mustNotHaveFlags) {
+            int mustNotHaveFlags, boolean sendDelete) {
         EventLog.writeEvent(EventLogTags.NOTIFICATION_CANCEL, pkg, id, mustHaveFlags);
 
         synchronized (mNotificationList) {
@@ -947,7 +953,7 @@ public class NotificationManagerService extends INotificationManager.Stub
 
                 mNotificationList.remove(index);
 
-                cancelNotificationLocked(r);
+                cancelNotificationLocked(r, sendDelete);
                 updateLightsLocked();
             }
         }
@@ -980,7 +986,7 @@ public class NotificationManagerService extends INotificationManager.Stub
                     return true;
                 }
                 mNotificationList.remove(i);
-                cancelNotificationLocked(r);
+                cancelNotificationLocked(r, false);
             }
             if (canceledSomething) {
                 updateLightsLocked();
@@ -989,7 +995,7 @@ public class NotificationManagerService extends INotificationManager.Stub
         }
     }
 
-
+    @Deprecated
     public void cancelNotification(String pkg, int id) {
         cancelNotificationWithTag(pkg, null /* tag */, id);
     }
@@ -999,7 +1005,7 @@ public class NotificationManagerService extends INotificationManager.Stub
         // Don't allow client applications to cancel foreground service notis.
         cancelNotification(pkg, tag, id, 0,
                 Binder.getCallingUid() == Process.SYSTEM_UID
-                ? 0 : Notification.FLAG_FOREGROUND_SERVICE);
+                ? 0 : Notification.FLAG_FOREGROUND_SERVICE, false);
     }
 
     public void cancelAllNotifications(String pkg) {
@@ -1035,17 +1041,8 @@ public class NotificationManagerService extends INotificationManager.Stub
 
                 if ((r.notification.flags & (Notification.FLAG_ONGOING_EVENT
                                 | Notification.FLAG_NO_CLEAR)) == 0) {
-                    if (r.notification.deleteIntent != null) {
-                        try {
-                            r.notification.deleteIntent.send();
-                        } catch (PendingIntent.CanceledException ex) {
-                            // do nothing - there's no relevant way to recover, and
-                            //     no reason to let this propagate
-                            Slog.w(TAG, "canceled PendingIntent for " + r.pkg, ex);
-                        }
-                    }
                     mNotificationList.remove(i);
-                    cancelNotificationLocked(r);
+                    cancelNotificationLocked(r, true);
                 }
             }
 
@@ -1053,34 +1050,9 @@ public class NotificationManagerService extends INotificationManager.Stub
         }
     }
 
-    private void updateLights() {
-        synchronized (mNotificationList) {
-            updateLightsLocked();
-        }
-    }
-
     // lock on mNotificationList
     private void updateLightsLocked()
     {
-        // Battery low always shows, other states only show if charging.
-        if (mBatteryLow) {
-            if (mBatteryCharging) {
-                mBatteryLight.setColor(BATTERY_LOW_ARGB);
-            } else {
-                // Flash when battery is low and not charging
-                mBatteryLight.setFlashing(BATTERY_LOW_ARGB, LightsService.LIGHT_FLASH_TIMED,
-                        BATTERY_BLINK_ON, BATTERY_BLINK_OFF);
-            }
-        } else if (mBatteryCharging) {
-            if (mBatteryFull) {
-                mBatteryLight.setColor(BATTERY_FULL_ARGB);
-            } else {
-                mBatteryLight.setColor(BATTERY_MEDIUM_ARGB);
-            }
-        } else {
-            mBatteryLight.turnOff();
-        }
-
         // clear pending pulse notification if screen is on
         if (mScreenOn || mLedNotification == null) {
             mPendingPulseNotification = false;

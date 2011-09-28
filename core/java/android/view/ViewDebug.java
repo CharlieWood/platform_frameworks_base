@@ -118,24 +118,27 @@ public class ViewDebug {
      *
      * @hide
      */
-    @Debug.DebugProperty
-    public static boolean profileDrawing = false;
+    public static final boolean DEBUG_PROFILE_DRAWING = false;
 
     /**
      * Profiles layout times in the events log.
      *
      * @hide
      */
-    @Debug.DebugProperty
-    public static boolean profileLayout = false;
+    public static final boolean DEBUG_PROFILE_LAYOUT = false;
 
     /**
      * Profiles real fps (times between draws) and displays the result.
      *
      * @hide
      */
-    @Debug.DebugProperty
-    public static boolean showFps = false;
+    public static final boolean DEBUG_SHOW_FPS = false;
+
+    /**
+     * Enables detailed logging of drag/drop operations.
+     * @hide
+     */
+    public static final boolean DEBUG_DRAG = false;
 
     /**
      * <p>Enables or disables views consistency check. Even when this property is enabled,
@@ -427,7 +430,7 @@ public class ViewDebug {
      * @hide
      */
     public static long getViewInstanceCount() {
-        return View.sInstanceCount;
+        return Debug.countInstancesOfClass(View.class);
     }
 
     /**
@@ -438,7 +441,7 @@ public class ViewDebug {
      * @hide
      */
     public static long getViewRootInstanceCount() {
-        return ViewRoot.getInstanceCount();
+        return Debug.countInstancesOfClass(ViewRoot.class);
     }
 
     /**
@@ -995,22 +998,27 @@ public class ViewDebug {
                         new ViewOperation<Object>() {
                             public Object[] pre() {
                                 final DisplayMetrics metrics =
-                                        view.getResources().getDisplayMetrics();
-                                final Bitmap bitmap =
+                                        (view != null && view.getResources() != null) ?
+                                                view.getResources().getDisplayMetrics() : null;
+                                final Bitmap bitmap = metrics != null ?
                                         Bitmap.createBitmap(metrics.widthPixels,
-                                                metrics.heightPixels, Bitmap.Config.RGB_565);
-                                final Canvas canvas = new Canvas(bitmap);
+                                                metrics.heightPixels, Bitmap.Config.RGB_565) : null;
+                                final Canvas canvas = bitmap != null ? new Canvas(bitmap) : null;
                                 return new Object[] {
                                         bitmap, canvas
                                 };
                             }
 
                             public void run(Object... data) {
-                                view.draw((Canvas) data[1]);
+                                if (data[1] != null) {
+                                    view.draw((Canvas) data[1]);
+                                }
                             }
 
                             public void post(Object... data) {
-                                ((Bitmap) data[0]).recycle();
+                                if (data[0] != null) {
+                                    ((Bitmap) data[0]).recycle();
+                                }
                             }
                         }) : 0;
         out.write(String.valueOf(durationMeasure));

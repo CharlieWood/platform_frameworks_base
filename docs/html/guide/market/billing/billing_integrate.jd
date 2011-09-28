@@ -1,4 +1,6 @@
 page.title=Implementing In-app Billing
+parent.title=In-app Billing
+parent.link=index.html
 @jd:body
 
 <style type="text/css">
@@ -223,7 +225,7 @@ Billing package contains the sample application and the AIDL file. </div>
 <pre>
 try {
   boolean bindResult = mContext.bindService(
-    new Intent("com.android.vending.billing.MarketBillingService.BIND"), this, Context.BIND_AUTO_CREATE);
+    new Intent(IMarketBillingService.class.getName()), this, Context.BIND_AUTO_CREATE);
   if (bindResult) {
     Log.i(TAG, "Service bind successful.");
   } else {

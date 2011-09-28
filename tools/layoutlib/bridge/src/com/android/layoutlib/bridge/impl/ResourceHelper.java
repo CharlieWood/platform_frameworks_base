@@ -44,6 +44,7 @@ import android.util.TypedValue;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.MalformedURLException;
@@ -114,7 +115,7 @@ public final class ResourceHelper {
 
     public static ColorStateList getColorStateList(ResourceValue resValue, BridgeContext context) {
         String value = resValue.getValue();
-        if (value != null && RenderResources.REFERENCE_NULL.equals(value) == false) {
+        if (value != null) {
             // first check if the value is a file (xml most likely)
             File f = new File(value);
             if (f.isFile()) {
@@ -123,7 +124,7 @@ public final class ResourceHelper {
                     // providing an XmlPullParser
                     KXmlParser parser = new KXmlParser();
                     parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, true);
-                    parser.setInput(new FileInputStream(f), "UTF-8"); //$NON-NLS-1$);
+                    parser.setInput(new FileReader(f));
 
                     BridgeXmlBlockParser blockParser = new BridgeXmlBlockParser(
                             parser, context, resValue.isFramework());
@@ -205,7 +206,7 @@ public final class ResourceHelper {
                     // let the framework inflate the Drawable from the XML file.
                     KXmlParser parser = new KXmlParser();
                     parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, true);
-                    parser.setInput(new FileInputStream(f), "UTF-8"); //$NON-NLS-1$);
+                    parser.setInput(new FileReader(f));
 
                     BridgeXmlBlockParser blockParser = new BridgeXmlBlockParser(
                             parser, context, value.isFramework());
@@ -376,7 +377,7 @@ public final class ResourceHelper {
         }
 
         // check the first character
-        if (buf[0] < '0' && buf[0] > '9' && buf[0] != '.' && buf[0] != '-') {
+        if (buf[0] < '0' && buf[0] > '9' && buf[0] != '.') {
             return false;
         }
 

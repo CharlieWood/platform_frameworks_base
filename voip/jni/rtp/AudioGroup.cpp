@@ -30,7 +30,6 @@
 
 #define LOG_TAG "AudioGroup"
 #include <cutils/atomic.h>
-#include <cutils/properties.h>
 #include <utils/Log.h>
 #include <utils/Errors.h>
 #include <utils/RefBase.h>
@@ -99,6 +98,7 @@ public:
     void encode(int tick, AudioStream *chain);
     void decode(int tick);
 
+private:
     enum {
         NORMAL = 0,
         SEND_ONLY = 1,
@@ -106,7 +106,6 @@ public:
         LAST_MODE = 2,
     };
 
-private:
     int mMode;
     int mSocket;
     sockaddr_storage mRemote;
@@ -480,6 +479,7 @@ public:
     bool add(AudioStream *stream);
     bool remove(int socket);
 
+private:
     enum {
         ON_HOLD = 0,
         MUTED = 1,
@@ -488,7 +488,6 @@ public:
         LAST_MODE = 3,
     };
 
-private:
     AudioStream *mChain;
     int mEventQueue;
     volatile int mDtmfEvent;
@@ -619,14 +618,6 @@ bool AudioGroup::setMode(int mode)
 {
     if (mode < 0 || mode > LAST_MODE) {
         return false;
-    }
-    //FIXME: temporary code to overcome echo and mic gain issues on herring board.
-    // Must be modified/removed when proper support for voice processing query and control
-    // is included in audio framework
-    char value[PROPERTY_VALUE_MAX];
-    property_get("ro.product.board", value, "");
-    if (mode == NORMAL && !strcmp(value, "herring")) {
-        mode = ECHO_SUPPRESSION;
     }
     if (mode == ECHO_SUPPRESSION && AudioSystem::getParameters(
         0, String8("ec_supported")) == "ec_supported=yes") {
@@ -977,16 +968,10 @@ void remove(JNIEnv *env, jobject thiz, jint socket)
 
 void setMode(JNIEnv *env, jobject thiz, jint mode)
 {
-    if (mode < 0 || mode > AudioGroup::LAST_MODE) {
-        jniThrowException(env, "java/lang/IllegalArgumentException", NULL);
-        return;
-    }
     AudioGroup *group = (AudioGroup *)env->GetIntField(thiz, gNative);
     if (group && !group->setMode(mode)) {
         jniThrowException(env, "java/lang/IllegalArgumentException", NULL);
-        return;
     }
-    env->SetIntField(thiz, gMode, mode);
 }
 
 void sendDtmf(JNIEnv *env, jobject thiz, jint event)
@@ -998,10 +983,10 @@ void sendDtmf(JNIEnv *env, jobject thiz, jint event)
 }
 
 JNINativeMethod gMethods[] = {
-    {"add", "(IILjava/lang/String;ILjava/lang/String;I)V", (void *)add},
-    {"remove", "(I)V", (void *)remove},
-    {"setMode", "(I)V", (void *)setMode},
-    {"sendDtmf", "(I)V", (void *)sendDtmf},
+    {"nativeAdd", "(IILjava/lang/String;ILjava/lang/String;I)V", (void *)add},
+    {"nativeRemove", "(I)V", (void *)remove},
+    {"nativeSetMode", "(I)V", (void *)setMode},
+    {"nativeSendDtmf", "(I)V", (void *)sendDtmf},
 };
 
 } // namespace

@@ -80,6 +80,8 @@ public final class PreferenceScreen extends PreferenceGroup implements AdapterVi
     private ListAdapter mRootAdapter;
     
     private Dialog mDialog;
+
+    private ListView mListView;
     
     /**
      * Do NOT use this constructor, use {@link PreferenceManager#createPreferenceScreen(Context)}.
@@ -91,7 +93,8 @@ public final class PreferenceScreen extends PreferenceGroup implements AdapterVi
 
     /**
      * Returns an adapter that can be attached to a {@link PreferenceActivity}
-     * to show the preferences contained in this {@link PreferenceScreen}.
+     * or {@link PreferenceFragment} to show the preferences contained in this
+     * {@link PreferenceScreen}.
      * <p>
      * This {@link PreferenceScreen} will NOT appear in the returned adapter, instead
      * it appears in the hierarchy above this {@link PreferenceScreen}.
@@ -136,7 +139,7 @@ public final class PreferenceScreen extends PreferenceGroup implements AdapterVi
     
     @Override
     protected void onClick() {
-        if (getIntent() != null || getPreferenceCount() == 0) {
+        if (getIntent() != null || getFragment() != null || getPreferenceCount() == 0) {
             return;
         }
         
@@ -145,15 +148,18 @@ public final class PreferenceScreen extends PreferenceGroup implements AdapterVi
     
     private void showDialog(Bundle state) {
         Context context = getContext();
-        ListView listView = new ListView(context);
-        bind(listView);
+        if (mListView != null) {
+            mListView.setAdapter(null);
+        }
+        mListView = new ListView(context);
+        bind(mListView);
 
         // Set the title bar if title is available, else no title bar
         final CharSequence title = getTitle();
         Dialog dialog = mDialog = new Dialog(context, TextUtils.isEmpty(title)
                 ? com.android.internal.R.style.Theme_NoTitleBar
                 : com.android.internal.R.style.Theme);
-        dialog.setContentView(listView);
+        dialog.setContentView(mListView);
         if (!TextUtils.isEmpty(title)) {
             dialog.setTitle(title);
         }

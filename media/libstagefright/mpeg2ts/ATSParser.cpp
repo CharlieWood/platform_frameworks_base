@@ -43,19 +43,25 @@ namespace android {
 static const size_t kTSPacketSize = 188;
 
 struct ATSParser::Program : public RefBase {
-    Program(unsigned programMapPID);
+    Program(ATSParser *parser, unsigned programMapPID);
 
     bool parsePID(
             unsigned pid, unsigned payload_unit_start_indicator,
             ABitReader *br);
 
-    void signalDiscontinuity(bool isASeek);
+    void signalDiscontinuity(DiscontinuityType type);
+    void signalEOS(status_t finalResult);
 
     sp<MediaSource> getSource(SourceType type);
 
     int64_t convertPTSToTimestamp(uint64_t PTS);
 
+    bool PTSTimeDeltaEstablished() const {
+        return mFirstPTSValid;
+    }
+
 private:
+    ATSParser *mParser;
     unsigned mProgramMapPID;
     KeyedVector<unsigned, sp<Stream> > mStreams;
     bool mFirstPTSValid;
@@ -69,11 +75,16 @@ private:
 struct ATSParser::Stream : public RefBase {
     Stream(Program *program, unsigned elementaryPID, unsigned streamType);
 
+    unsigned type() const { return mStreamType; }
+    unsigned pid() const { return mElementaryPID; }
+    void setPID(unsigned pid) { mElementaryPID = pid; }
+
     void parse(
             unsigned payload_unit_start_indicator,
             ABitReader *br);
 
-    void signalDiscontinuity(bool isASeek);
+    void signalDiscontinuity(DiscontinuityType type);
+    void signalEOS(status_t finalResult);
 
     sp<MediaSource> getSource(SourceType type);
 
@@ -88,6 +99,7 @@ private:
     sp<ABuffer> mBuffer;
     sp<AnotherPacketSource> mSource;
     bool mPayloadStarted;
+    DiscontinuityType mPendingDiscontinuity;
 
     ElementaryStreamQueue mQueue;
 
@@ -100,13 +112,16 @@ private:
 
     void extractAACFrames(const sp<ABuffer> &buffer);
 
+    void deferDiscontinuity(DiscontinuityType type);
+
     DISALLOW_EVIL_CONSTRUCTORS(Stream);
 };
 
 ////////////////////////////////////////////////////////////////////////////////
 
-ATSParser::Program::Program(unsigned programMapPID)
-    : mProgramMapPID(programMapPID),
+ATSParser::Program::Program(ATSParser *parser, unsigned programMapPID)
+    : mParser(parser),
+      mProgramMapPID(programMapPID),
       mFirstPTSValid(false),
       mFirstPTS(0) {
 }
@@ -135,11 +150,22 @@ bool ATSParser::Program::parsePID(
     return true;
 }
 
-void ATSParser::Program::signalDiscontinuity(bool isASeek) {
+void ATSParser::Program::signalDiscontinuity(DiscontinuityType type) {
     for (size_t i = 0; i < mStreams.size(); ++i) {
-        mStreams.editValueAt(i)->signalDiscontinuity(isASeek);
+        mStreams.editValueAt(i)->signalDiscontinuity(type);
     }
 }
+
+void ATSParser::Program::signalEOS(status_t finalResult) {
+    for (size_t i = 0; i < mStreams.size(); ++i) {
+        mStreams.editValueAt(i)->signalEOS(finalResult);
+    }
+}
+
+struct StreamInfo {
+    unsigned mType;
+    unsigned mPID;
+};
 
 void ATSParser::Program::parseProgramMap(ABitReader *br) {
     unsigned table_id = br->getBits(8);
@@ -155,7 +181,7 @@ void ATSParser::Program::parseProgramMap(ABitReader *br) {
 
     unsigned section_length = br->getBits(12);
     LOGV("  section_length = %u", section_length);
-    CHECK((section_length & 0xc00) == 0);
+    CHECK_EQ(section_length & 0xc00, 0u);
     CHECK_LE(section_length, 1021u);
 
     MY_LOGV("  program_number = %u", br->getBits(16));
@@ -170,9 +196,11 @@ void ATSParser::Program::parseProgramMap(ABitReader *br) {
 
     unsigned program_info_length = br->getBits(12);
     LOGV("  program_info_length = %u", program_info_length);
-    CHECK((program_info_length & 0xc00) == 0);
+    CHECK_EQ(program_info_length & 0xc00, 0u);
 
     br->skipBits(program_info_length * 8);  // skip descriptors
+
+    Vector<StreamInfo> infos;
 
     // infoBytesRemaining is the number of bytes that make up the
     // variable length section of ES_infos. It does not include the
@@ -194,7 +222,7 @@ void ATSParser::Program::parseProgramMap(ABitReader *br) {
 
         unsigned ES_info_length = br->getBits(12);
         LOGV("    ES_info_length = %u", ES_info_length);
-        CHECK((ES_info_length & 0xc00) == 0);
+        CHECK_EQ(ES_info_length & 0xc00, 0u);
 
         CHECK_GE(infoBytesRemaining - 5, ES_info_length);
 
@@ -217,31 +245,60 @@ void ATSParser::Program::parseProgramMap(ABitReader *br) {
         CHECK_EQ(info_bytes_remaining, 0u);
 #endif
 
-        ssize_t index = mStreams.indexOfKey(elementaryPID);
-#if 0  // XXX revisit
-        CHECK_LT(index, 0);
-        mStreams.add(elementaryPID,
-                     new Stream(this, elementaryPID, streamType));
-#else
-        if (index < 0) {
-            mStreams.add(elementaryPID,
-                         new Stream(this, elementaryPID, streamType));
-        }
-#endif
+        StreamInfo info;
+        info.mType = streamType;
+        info.mPID = elementaryPID;
+        infos.push(info);
 
         infoBytesRemaining -= 5 + ES_info_length;
     }
 
     CHECK_EQ(infoBytesRemaining, 0u);
-
     MY_LOGV("  CRC = 0x%08x", br->getBits(32));
+
+    bool PIDsChanged = false;
+    for (size_t i = 0; i < infos.size(); ++i) {
+        StreamInfo &info = infos.editItemAt(i);
+
+        ssize_t index = mStreams.indexOfKey(info.mPID);
+
+        if (index >= 0 && mStreams.editValueAt(index)->type() != info.mType) {
+            LOGI("uh oh. stream PIDs have changed.");
+            PIDsChanged = true;
+            break;
+        }
+    }
+
+    if (PIDsChanged) {
+        mStreams.clear();
+    }
+
+    for (size_t i = 0; i < infos.size(); ++i) {
+        StreamInfo &info = infos.editItemAt(i);
+
+        ssize_t index = mStreams.indexOfKey(info.mPID);
+
+        if (index < 0) {
+            sp<Stream> stream = new Stream(this, info.mPID, info.mType);
+            mStreams.add(info.mPID, stream);
+
+            if (PIDsChanged) {
+                stream->signalDiscontinuity(DISCONTINUITY_FORMATCHANGE);
+            }
+        }
+    }
 }
 
 sp<MediaSource> ATSParser::Program::getSource(SourceType type) {
+    size_t index = (type == MPEG2ADTS_AUDIO) ? 0 : 0;
+
     for (size_t i = 0; i < mStreams.size(); ++i) {
         sp<MediaSource> source = mStreams.editValueAt(i)->getSource(type);
         if (source != NULL) {
-            return source;
+            if (index == 0) {
+                return source;
+            }
+            --index;
         }
     }
 
@@ -269,11 +326,14 @@ ATSParser::Stream::Stream(
     : mProgram(program),
       mElementaryPID(elementaryPID),
       mStreamType(streamType),
-      mBuffer(new ABuffer(128 * 1024)),
+      mBuffer(new ABuffer(192 * 1024)),
       mPayloadStarted(false),
+      mPendingDiscontinuity(DISCONTINUITY_NONE),
       mQueue(streamType == 0x1b
               ? ElementaryStreamQueue::H264 : ElementaryStreamQueue::AAC) {
     mBuffer->setRange(0, 0);
+
+    LOGV("new stream PID 0x%02x, type 0x%02x", elementaryPID, streamType);
 }
 
 ATSParser::Stream::~Stream() {
@@ -298,7 +358,7 @@ void ATSParser::Stream::parse(
     }
 
     size_t payloadSizeBits = br->numBitsLeft();
-    CHECK((payloadSizeBits % 8) == 0);
+    CHECK_EQ(payloadSizeBits % 8, 0u);
 
     CHECK_LE(mBuffer->size() + payloadSizeBits / 8, mBuffer->capacity());
 
@@ -306,24 +366,42 @@ void ATSParser::Stream::parse(
     mBuffer->setRange(0, mBuffer->size() + payloadSizeBits / 8);
 }
 
-void ATSParser::Stream::signalDiscontinuity(bool isASeek) {
-    LOGV("Stream discontinuity");
+void ATSParser::Stream::signalDiscontinuity(DiscontinuityType type) {
     mPayloadStarted = false;
     mBuffer->setRange(0, 0);
 
-    mQueue.clear();
+    switch (type) {
+        case DISCONTINUITY_SEEK:
+        case DISCONTINUITY_FORMATCHANGE:
+        {
+            bool isASeek = (type == DISCONTINUITY_SEEK);
 
-    if (isASeek) {
-        // This is only a "minor" discontinuity, we stay within the same
-        // bitstream.
+            mQueue.clear(!isASeek);
 
-        mSource->clear();
-        return;
+            if (mSource != NULL) {
+                mSource->queueDiscontinuity(type);
+            } else {
+                deferDiscontinuity(type);
+            }
+            break;
+        }
+
+        default:
+            TRESPASS();
+            break;
     }
+}
 
-    if (mStreamType == 0x1b && mSource != NULL) {
-        // Don't signal discontinuities on audio streams.
-        mSource->queueDiscontinuity();
+void ATSParser::Stream::deferDiscontinuity(DiscontinuityType type) {
+    if (type > mPendingDiscontinuity) {
+        // Only upgrade discontinuities.
+        mPendingDiscontinuity = type;
+    }
+}
+
+void ATSParser::Stream::signalEOS(status_t finalResult) {
+    if (mSource != NULL) {
+        mSource->signalEOS(finalResult);
     }
 }
 
@@ -468,7 +546,7 @@ void ATSParser::Stream::parsePES(ABitReader *br) {
                     br->data(), br->numBitsLeft() / 8);
 
             size_t payloadSizeBits = br->numBitsLeft();
-            CHECK((payloadSizeBits % 8) == 0);
+            CHECK_EQ(payloadSizeBits % 8, 0u);
 
             LOGV("There's %d bytes of payload.", payloadSizeBits / 8);
         }
@@ -503,7 +581,10 @@ void ATSParser::Stream::onPayloadData(
     int64_t timeUs = mProgram->convertPTSToTimestamp(PTS);
 
     status_t err = mQueue.appendData(data, size, timeUs);
-    CHECK_EQ(err, (status_t)OK);
+
+    if (err != OK) {
+        return;
+    }
 
     sp<ABuffer> accessUnit;
     while ((accessUnit = mQueue.dequeueAccessUnit()) != NULL) {
@@ -513,12 +594,22 @@ void ATSParser::Stream::onPayloadData(
             if (meta != NULL) {
                 LOGV("created source!");
                 mSource = new AnotherPacketSource(meta);
+
+                if (mPendingDiscontinuity != DISCONTINUITY_NONE) {
+                    mSource->queueDiscontinuity(mPendingDiscontinuity);
+                    mPendingDiscontinuity = DISCONTINUITY_NONE;
+                }
+
                 mSource->queueAccessUnit(accessUnit);
             }
         } else if (mQueue.getFormat() != NULL) {
             // After a discontinuity we invalidate the queue's format
             // and won't enqueue any access units to the source until
             // the queue has reestablished the new format.
+
+            if (mSource->getFormat() == NULL) {
+                mSource->setFormat(mQueue.getFormat());
+            }
             mSource->queueAccessUnit(accessUnit);
         }
     }
@@ -548,9 +639,17 @@ void ATSParser::feedTSPacket(const void *data, size_t size) {
     parseTS(&br);
 }
 
-void ATSParser::signalDiscontinuity(bool isASeek) {
+void ATSParser::signalDiscontinuity(DiscontinuityType type) {
     for (size_t i = 0; i < mPrograms.size(); ++i) {
-        mPrograms.editItemAt(i)->signalDiscontinuity(isASeek);
+        mPrograms.editItemAt(i)->signalDiscontinuity(type);
+    }
+}
+
+void ATSParser::signalEOS(status_t finalResult) {
+    CHECK_NE(finalResult, (status_t)OK);
+
+    for (size_t i = 0; i < mPrograms.size(); ++i) {
+        mPrograms.editItemAt(i)->signalEOS(finalResult);
     }
 }
 
@@ -568,7 +667,7 @@ void ATSParser::parseProgramAssociationTable(ABitReader *br) {
 
     unsigned section_length = br->getBits(12);
     LOGV("  section_length = %u", section_length);
-    CHECK((section_length & 0xc00) == 0);
+    CHECK_EQ(section_length & 0xc00, 0u);
 
     MY_LOGV("  transport_stream_id = %u", br->getBits(16));
     MY_LOGV("  reserved = %u", br->getBits(2));
@@ -593,7 +692,7 @@ void ATSParser::parseProgramAssociationTable(ABitReader *br) {
 
             LOGV("    program_map_PID = 0x%04x", programMapPID);
 
-            mPrograms.push(new Program(programMapPID));
+            mPrograms.push(new Program(this, programMapPID));
         }
     }
 
@@ -678,6 +777,14 @@ sp<MediaSource> ATSParser::getSource(SourceType type) {
     }
 
     return NULL;
+}
+
+bool ATSParser::PTSTimeDeltaEstablished() {
+    if (mPrograms.isEmpty()) {
+        return false;
+    }
+
+    return mPrograms.editItemAt(0)->PTSTimeDeltaEstablished();
 }
 
 }  // namespace android

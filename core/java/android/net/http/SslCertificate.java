@@ -25,8 +25,8 @@ import java.util.Vector;
 
 import java.security.cert.X509Certificate;
 
-import org.bouncycastle.asn1.DERObjectIdentifier;
-import org.bouncycastle.asn1.x509.X509Name;
+import com.android.org.bouncycastle.asn1.DERObjectIdentifier;
+import com.android.org.bouncycastle.asn1.x509.X509Name;
 
 /**
  * SSL certificate info (certificate details) class
@@ -110,7 +110,7 @@ public class SslCertificate {
      * @param issuedBy The entity that issued this certificate
      * @param validNotBefore The not-before date from the certificate validity period in ISO 8601 format
      * @param validNotAfter The not-after date from the certificate validity period in ISO 8601 format
-     * @deprecated Use {@link #SslCertificate(String, String, Date, Date)}
+     * @deprecated Use {@link #SslCertificate(X509Certificate)}
      */
     @Deprecated
     public SslCertificate(
@@ -124,7 +124,9 @@ public class SslCertificate {
      * @param issuedBy The entity that issued this certificate
      * @param validNotBefore The not-before date from the certificate validity period
      * @param validNotAfter The not-after date from the certificate validity period
+     * @deprecated Use {@link #SslCertificate(X509Certificate)}
      */
+    @Deprecated
     public SslCertificate(
             String issuedTo, String issuedBy, Date validNotBefore, Date validNotAfter) {
         mIssuedTo = new DName(issuedTo);

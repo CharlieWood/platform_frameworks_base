@@ -150,6 +150,28 @@ public class ActivityInfo extends ComponentInfo
      */
     public static final int FLAG_FINISH_ON_CLOSE_SYSTEM_DIALOGS = 0x0100;
     /**
+     * Value for {@link #flags}: true when the application's rendering should
+     * be hardware accelerated.
+     */
+    public static final int FLAG_HARDWARE_ACCELERATED = 0x0200;
+    /**
+     * @hide
+     * Bit in {@link #flags} corresponding to an immersive activity
+     * that wishes not to be interrupted by notifications.
+     * Applications that hide the system notification bar with
+     * {@link android.view.WindowManager.LayoutParams#FLAG_FULLSCREEN}
+     * may still be interrupted by high-priority notifications; for example, an
+     * incoming phone call may use
+     * {@link android.app.Notification#fullScreenIntent fullScreenIntent}
+     * to present a full-screen in-call activity to the user, pausing the
+     * current activity as a side-effect. An activity with
+     * {@link #FLAG_IMMERSIVE} set, however, will not be interrupted; the
+     * notification may be shown in some other way (such as a small floating
+     * "toast" window).
+     * {@see android.app.Notification#FLAG_HIGH_PRIORITY}
+     */
+    public static final int FLAG_IMMERSIVE = 0x0400;
+    /**
      * Options that have been set in the activity declaration in the
      * manifest.
      * These include:
@@ -159,6 +181,7 @@ public class ActivityInfo extends ComponentInfo
      * {@link #FLAG_STATE_NOT_NEEDED}, {@link #FLAG_EXCLUDE_FROM_RECENTS},
      * {@link #FLAG_ALLOW_TASK_REPARENTING}, {@link #FLAG_NO_HISTORY},
      * {@link #FLAG_FINISH_ON_CLOSE_SYSTEM_DIALOGS},
+     * {@link #FLAG_HARDWARE_ACCELERATED}
      */
     public int flags;
 

@@ -26,11 +26,12 @@
 #include <binder/MemoryBase.h>
 #include <binder/MemoryHeapBase.h>
 #include <cutils/atomic.h>
+#include <cutils/properties.h>
+#include <gui/SurfaceTextureClient.h>
 #include <hardware/hardware.h>
 #include <media/AudioSystem.h>
 #include <media/mediaplayer.h>
 #include <surfaceflinger/ISurface.h>
-#include <ui/Overlay.h>
 #include <utils/Errors.h>
 #include <utils/Log.h>
 #include <utils/String16.h>
@@ -305,9 +306,9 @@ CameraService::Client::Client(const sp<CameraService>& cameraService,
     mCameraId = cameraId;
     mCameraFacing = cameraFacing;
     mClientPid = clientPid;
-    mUseOverlay = mHardware->useOverlay();
     mMsgEnabled = 0;
-
+    mSurface = 0;
+    mPreviewWindow = 0;
     mHardware->setCallbacks(notifyCallback,
                             dataCallback,
                             dataCallbackTimestamp,
@@ -317,41 +318,20 @@ CameraService::Client::Client(const sp<CameraService>& cameraService,
     enableMsgType(CAMERA_MSG_ERROR |
                   CAMERA_MSG_ZOOM |
                   CAMERA_MSG_FOCUS);
-    mOverlayW = 0;
-    mOverlayH = 0;
 
     // Callback is disabled by default
     mPreviewCallbackFlag = FRAME_CALLBACK_FLAG_NOOP;
     mOrientation = getOrientation(0, mCameraFacing == CAMERA_FACING_FRONT);
-    mOrientationChanged = false;
+    mPlayShutterSound = true;
     cameraService->setCameraBusy(cameraId);
     cameraService->loadSound();
     LOG1("Client::Client X (pid %d)", callingPid);
-}
-
-static void *unregister_surface(void *arg) {
-    ISurface *surface = (ISurface *)arg;
-    surface->unregisterBuffers();
-    IPCThreadState::self()->flushCommands();
-    return NULL;
 }
 
 // tear down the client
 CameraService::Client::~Client() {
     int callingPid = getCallingPid();
     LOG1("Client::~Client E (pid %d, this %p)", callingPid, this);
-
-    if (mSurface != 0 && !mUseOverlay) {
-        pthread_t thr;
-        // We unregister the buffers in a different thread because binder does
-        // not let us make sychronous transactions in a binder destructor (that
-        // is, upon our reaching a refcount of zero.)
-        pthread_create(&thr,
-                       NULL,  // attr
-                       unregister_surface,
-                       mSurface.get());
-        pthread_join(thr, NULL);
-    }
 
     // set mClientPid to let disconnet() tear down the hardware
     mClientPid = callingPid;
@@ -466,9 +446,11 @@ void CameraService::Client::disconnect() {
     mHardware->cancelPicture();
     // Release the hardware resources.
     mHardware->release();
-    // Release the held overlay resources.
-    if (mUseOverlay) {
-        mOverlayRef = 0;
+
+    // Release the held ANativeWindow resources.
+    if (mPreviewWindow != 0) {
+        mPreviewWindow = 0;
+        mHardware->setPreviewWindow(mPreviewWindow);
     }
     mHardware.clear();
 
@@ -480,8 +462,8 @@ void CameraService::Client::disconnect() {
 
 // ----------------------------------------------------------------------------
 
-// set the ISurface that the preview will use
-status_t CameraService::Client::setPreviewDisplay(const sp<ISurface>& surface) {
+// set the Surface that the preview will use
+status_t CameraService::Client::setPreviewDisplay(const sp<Surface>& surface) {
     LOG1("setPreviewDisplay(%p) (pid %d)", surface.get(), getCallingPid());
     Mutex::Autolock lock(mLock);
     status_t result = checkPidAndHardware();
@@ -491,100 +473,64 @@ status_t CameraService::Client::setPreviewDisplay(const sp<ISurface>& surface) {
 
     // return if no change in surface.
     // asBinder() is safe on NULL (returns NULL)
-    if (surface->asBinder() == mSurface->asBinder()) {
+    if (getISurface(surface)->asBinder() == mSurface) {
         return result;
     }
 
     if (mSurface != 0) {
         LOG1("clearing old preview surface %p", mSurface.get());
-        if (mUseOverlay) {
-            // Force the destruction of any previous overlay
-            sp<Overlay> dummy;
-            mHardware->setOverlay(dummy);
-            mOverlayRef = 0;
-        } else {
-            mSurface->unregisterBuffers();
-        }
     }
-    mSurface = surface;
-    mOverlayRef = 0;
-    // If preview has been already started, set overlay or register preview
+    mSurface = getISurface(surface)->asBinder();
+    mPreviewWindow = surface;
+
+    // If preview has been already started, register preview
     // buffers now.
     if (mHardware->previewEnabled()) {
-        if (mUseOverlay) {
-            result = setOverlay();
-        } else if (mSurface != 0) {
-            result = registerPreviewBuffers();
+        if (mPreviewWindow != 0) {
+            native_window_set_buffers_transform(mPreviewWindow.get(),
+                                                mOrientation);
+            result = mHardware->setPreviewWindow(mPreviewWindow);
         }
     }
 
     return result;
 }
 
-status_t CameraService::Client::registerPreviewBuffers() {
-    int w, h;
-    CameraParameters params(mHardware->getParameters());
-    params.getPreviewSize(&w, &h);
+// set the SurfaceTexture that the preview will use
+status_t CameraService::Client::setPreviewTexture(
+        const sp<ISurfaceTexture>& surfaceTexture) {
+    LOG1("setPreviewTexture(%p) (pid %d)", surfaceTexture.get(),
+            getCallingPid());
+    Mutex::Autolock lock(mLock);
+    status_t result = checkPidAndHardware();
+    if (result != NO_ERROR) return result;
 
-    // FIXME: don't use a hardcoded format here.
-    ISurface::BufferHeap buffers(w, h, w, h,
-                                 HAL_PIXEL_FORMAT_YCrCb_420_SP,
-                                 mOrientation,
-                                 0,
-                                 mHardware->getPreviewHeap());
-
-    status_t result = mSurface->registerBuffers(buffers);
-    if (result != NO_ERROR) {
-        LOGE("registerBuffers failed with status %d", result);
-    }
-    return result;
-}
-
-status_t CameraService::Client::setOverlay() {
-    int w, h;
-    CameraParameters params(mHardware->getParameters());
-    params.getPreviewSize(&w, &h);
-
-    if (w != mOverlayW || h != mOverlayH || mOrientationChanged) {
-        // Force the destruction of any previous overlay
-        sp<Overlay> dummy;
-        mHardware->setOverlay(dummy);
-        mOverlayRef = 0;
-        mOrientationChanged = false;
-    }
-
-    status_t result = NO_ERROR;
-    if (mSurface == 0) {
-        result = mHardware->setOverlay(NULL);
-    } else {
-        if (mOverlayRef == 0) {
-            // FIXME:
-            // Surfaceflinger may hold onto the previous overlay reference for some
-            // time after we try to destroy it. retry a few times. In the future, we
-            // should make the destroy call block, or possibly specify that we can
-            // wait in the createOverlay call if the previous overlay is in the
-            // process of being destroyed.
-            for (int retry = 0; retry < 50; ++retry) {
-                mOverlayRef = mSurface->createOverlay(w, h, OVERLAY_FORMAT_DEFAULT,
-                                                      mOrientation);
-                if (mOverlayRef != 0) break;
-                LOGW("Overlay create failed - retrying");
-                usleep(20000);
-            }
-            if (mOverlayRef == 0) {
-                LOGE("Overlay Creation Failed!");
-                return -EINVAL;
-            }
-            result = mHardware->setOverlay(new Overlay(mOverlayRef));
-        }
-    }
-    if (result != NO_ERROR) {
-        LOGE("mHardware->setOverlay() failed with status %d\n", result);
+    // return if no change in surface.
+    // asBinder() is safe on NULL (returns NULL)
+    if (surfaceTexture->asBinder() == mSurface) {
         return result;
     }
 
-    mOverlayW = w;
-    mOverlayH = h;
+    if (mSurface != 0) {
+        LOG1("clearing old preview surface %p", mSurface.get());
+    }
+    mSurface = surfaceTexture->asBinder();
+    if (surfaceTexture != 0) {
+        mPreviewWindow = new SurfaceTextureClient(surfaceTexture);
+    } else {
+        mPreviewWindow = 0;
+    }
+
+    // If preview has been already started, set overlay or register preview
+    // buffers now.
+    if (mHardware->previewEnabled()) {
+        // XXX: What if the new preview window is 0?
+        if (mPreviewWindow != 0) {
+            native_window_set_buffers_transform(mPreviewWindow.get(),
+                                                mOrientation);
+            result = mHardware->setPreviewWindow(mPreviewWindow);
+        }
+    }
 
     return result;
 }
@@ -597,16 +543,10 @@ void CameraService::Client::setPreviewCallbackFlag(int callback_flag) {
     if (checkPidAndHardware() != NO_ERROR) return;
 
     mPreviewCallbackFlag = callback_flag;
-
-    // If we don't use overlay, we always need the preview frame for display.
-    // If we do use overlay, we only need the preview frame if the user
-    // wants the data.
-    if (mUseOverlay) {
-        if(mPreviewCallbackFlag & FRAME_CALLBACK_FLAG_ENABLE_MASK) {
-            enableMsgType(CAMERA_MSG_PREVIEW_FRAME);
-        } else {
-            disableMsgType(CAMERA_MSG_PREVIEW_FRAME);
-        }
+    if (mPreviewCallbackFlag & FRAME_CALLBACK_FLAG_ENABLE_MASK) {
+        enableMsgType(CAMERA_MSG_PREVIEW_FRAME);
+    } else {
+        disableMsgType(CAMERA_MSG_PREVIEW_FRAME);
     }
 }
 
@@ -631,14 +571,14 @@ status_t CameraService::Client::startCameraMode(camera_mode mode) {
 
     switch(mode) {
         case CAMERA_PREVIEW_MODE:
-            if (mSurface == 0) {
+            if (mSurface == 0 && mPreviewWindow == 0) {
                 LOG1("mSurface is not set yet.");
                 // still able to start preview in this case.
             }
             return startPreviewMode();
         case CAMERA_RECORDING_MODE:
-            if (mSurface == 0) {
-                LOGE("mSurface must be set before startRecordingMode.");
+            if (mSurface == 0 && mPreviewWindow == 0) {
+                LOGE("mSurface or mPreviewWindow must be set before startRecordingMode.");
                 return INVALID_OPERATION;
             }
             return startRecordingMode();
@@ -656,25 +596,13 @@ status_t CameraService::Client::startPreviewMode() {
         return NO_ERROR;
     }
 
-    if (mUseOverlay) {
-        // If preview display has been set, set overlay now.
-        if (mSurface != 0) {
-            result = setOverlay();
-        }
-        if (result != NO_ERROR) return result;
-        result = mHardware->startPreview();
-    } else {
-        enableMsgType(CAMERA_MSG_PREVIEW_FRAME);
-        result = mHardware->startPreview();
-        if (result != NO_ERROR) return result;
-        // If preview display has been set, register preview buffers now.
-        if (mSurface != 0) {
-           // Unregister here because the surface may be previously registered
-           // with the raw (snapshot) heap.
-           mSurface->unregisterBuffers();
-           result = registerPreviewBuffers();
-        }
+    if (mPreviewWindow != 0) {
+        native_window_set_buffers_transform(mPreviewWindow.get(),
+                mOrientation);
     }
+    mHardware->setPreviewWindow(mPreviewWindow);
+    result = mHardware->startPreview();
+
     return result;
 }
 
@@ -711,12 +639,9 @@ void CameraService::Client::stopPreview() {
     Mutex::Autolock lock(mLock);
     if (checkPidAndHardware() != NO_ERROR) return;
 
+
     disableMsgType(CAMERA_MSG_PREVIEW_FRAME);
     mHardware->stopPreview();
-
-    if (mSurface != 0 && !mUseOverlay) {
-        mSurface->unregisterBuffers();
-    }
 
     mPreviewBuffer.clear();
 }
@@ -739,6 +664,30 @@ void CameraService::Client::releaseRecordingFrame(const sp<IMemory>& mem) {
     Mutex::Autolock lock(mLock);
     if (checkPidAndHardware() != NO_ERROR) return;
     mHardware->releaseRecordingFrame(mem);
+}
+
+int32_t CameraService::Client::getNumberOfVideoBuffers() const {
+    LOG1("getNumberOfVideoBuffers");
+    Mutex::Autolock lock(mLock);
+    if (checkPidAndHardware() != NO_ERROR) return 0;
+    return mHardware->getNumberOfVideoBuffers();
+}
+
+sp<IMemory> CameraService::Client::getVideoBuffer(int32_t index) const {
+    LOG1("getVideoBuffer: %d", index);
+    Mutex::Autolock lock(mLock);
+    if (checkPidAndHardware() != NO_ERROR) return 0;
+    return mHardware->getVideoBuffer(index);
+}
+
+status_t CameraService::Client::storeMetaDataInBuffers(bool enabled)
+{
+    LOG1("storeMetaDataInBuffers: %s", enabled? "true": "false");
+    Mutex::Autolock lock(mLock);
+    if (checkPidAndHardware() != NO_ERROR) {
+        return UNKNOWN_ERROR;
+    }
+    return mHardware->storeMetaDataInBuffers(enabled);
 }
 
 bool CameraService::Client::previewEnabled() {
@@ -778,17 +727,30 @@ status_t CameraService::Client::cancelAutoFocus() {
 }
 
 // take a picture - image is returned in callback
-status_t CameraService::Client::takePicture() {
-    LOG1("takePicture (pid %d)", getCallingPid());
+status_t CameraService::Client::takePicture(int msgType) {
+    LOG1("takePicture (pid %d): 0x%x", getCallingPid(), msgType);
 
     Mutex::Autolock lock(mLock);
     status_t result = checkPidAndHardware();
     if (result != NO_ERROR) return result;
 
-    enableMsgType(CAMERA_MSG_SHUTTER |
-                  CAMERA_MSG_POSTVIEW_FRAME |
-                  CAMERA_MSG_RAW_IMAGE |
-                  CAMERA_MSG_COMPRESSED_IMAGE);
+    if ((msgType & CAMERA_MSG_RAW_IMAGE) &&
+        (msgType & CAMERA_MSG_RAW_IMAGE_NOTIFY)) {
+        LOGE("CAMERA_MSG_RAW_IMAGE and CAMERA_MSG_RAW_IMAGE_NOTIFY"
+                " cannot be both enabled");
+        return BAD_VALUE;
+    }
+
+    // We only accept picture related message types
+    // and ignore other types of messages for takePicture().
+    int picMsgType = msgType
+                        & (CAMERA_MSG_SHUTTER |
+                           CAMERA_MSG_POSTVIEW_FRAME |
+                           CAMERA_MSG_RAW_IMAGE |
+                           CAMERA_MSG_RAW_IMAGE_NOTIFY |
+                           CAMERA_MSG_COMPRESSED_IMAGE);
+
+    enableMsgType(picMsgType);
 
     return mHardware->takePicture();
 }
@@ -815,6 +777,35 @@ String8 CameraService::Client::getParameters() const {
     return params;
 }
 
+// enable shutter sound
+status_t CameraService::Client::enableShutterSound(bool enable) {
+    LOG1("enableShutterSound (pid %d)", getCallingPid());
+
+    status_t result = checkPidAndHardware();
+    if (result != NO_ERROR) return result;
+
+    if (enable) {
+        mPlayShutterSound = true;
+        return OK;
+    }
+
+    // Disabling shutter sound may not be allowed. In that case only
+    // allow the mediaserver process to disable the sound.
+    char value[PROPERTY_VALUE_MAX];
+    property_get("ro.camera.sound.forced", value, "0");
+    if (strcmp(value, "0") != 0) {
+        // Disabling shutter sound is not allowed. Deny if the current
+        // process is not mediaserver.
+        if (getCallingPid() != getpid()) {
+            LOGE("Failed to disable shutter sound. Permission denied (pid %d)", getCallingPid());
+            return PERMISSION_DENIED;
+        }
+    }
+
+    mPlayShutterSound = false;
+    return OK;
+}
+
 status_t CameraService::Client::sendCommand(int32_t cmd, int32_t arg1, int32_t arg2) {
     LOG1("sendCommand (pid %d)", getCallingPid());
     int orientation;
@@ -833,9 +824,22 @@ status_t CameraService::Client::sendCommand(int32_t cmd, int32_t arg1, int32_t a
 
         if (mOrientation != orientation) {
             mOrientation = orientation;
-            if (mOverlayRef != 0) mOrientationChanged = true;
         }
         return OK;
+    } else if (cmd == CAMERA_CMD_ENABLE_SHUTTER_SOUND) {
+        switch (arg1) {
+            case 0:
+                enableShutterSound(false);
+                break;
+            case 1:
+                enableShutterSound(true);
+                break;
+            default:
+                return BAD_VALUE;
+        }
+        return OK;
+    } else if (cmd == CAMERA_CMD_PLAY_RECORDING_SOUND) {
+        mCameraService->playSound(SOUND_RECORDING);
     }
 
     return mHardware->sendCommand(cmd, arg1, arg2);
@@ -996,11 +1000,8 @@ void CameraService::Client::dataCallbackTimestamp(nsecs_t timestamp,
 // "size" is the width and height of yuv picture for registerBuffer.
 // If it is NULL, use the picture size from parameters.
 void CameraService::Client::handleShutter(image_rect_type *size) {
-    mCameraService->playSound(SOUND_SHUTTER);
-
-    // Screen goes black after the buffer is unregistered.
-    if (mSurface != 0 && !mUseOverlay) {
-        mSurface->unregisterBuffers();
+    if (mPlayShutterSound) {
+        mCameraService->playSound(SOUND_SHUTTER);
     }
 
     sp<ICameraClient> c = mCameraClient;
@@ -1011,29 +1012,6 @@ void CameraService::Client::handleShutter(image_rect_type *size) {
     }
     disableMsgType(CAMERA_MSG_SHUTTER);
 
-    // It takes some time before yuvPicture callback to be called.
-    // Register the buffer for raw image here to reduce latency.
-    if (mSurface != 0 && !mUseOverlay) {
-        int w, h;
-        CameraParameters params(mHardware->getParameters());
-        if (size == NULL) {
-            params.getPictureSize(&w, &h);
-        } else {
-            w = size->width;
-            h = size->height;
-            w &= ~1;
-            h &= ~1;
-            LOG1("Snapshot image width=%d, height=%d", w, h);
-        }
-        // FIXME: don't use hardcoded format constants here
-        ISurface::BufferHeap buffers(w, h, w, h,
-            HAL_PIXEL_FORMAT_YCrCb_420_SP, mOrientation, 0,
-            mHardware->getRawHeap());
-
-        mSurface->registerBuffers(buffers);
-        IPCThreadState::self()->flushCommands();
-    }
-
     mLock.unlock();
 }
 
@@ -1042,12 +1020,6 @@ void CameraService::Client::handlePreviewData(const sp<IMemory>& mem) {
     ssize_t offset;
     size_t size;
     sp<IMemoryHeap> heap = mem->getMemory(&offset, &size);
-
-    if (!mUseOverlay) {
-        if (mSurface != 0) {
-            mSurface->postBuffer(offset);
-        }
-    }
 
     // local copy of the callback flags
     int flags = mPreviewCallbackFlag;
@@ -1069,9 +1041,7 @@ void CameraService::Client::handlePreviewData(const sp<IMemory>& mem) {
         mPreviewCallbackFlag &= ~(FRAME_CALLBACK_FLAG_ONE_SHOT_MASK |
                                   FRAME_CALLBACK_FLAG_COPY_OUT_MASK |
                                   FRAME_CALLBACK_FLAG_ENABLE_MASK);
-        if (mUseOverlay) {
-            disableMsgType(CAMERA_MSG_PREVIEW_FRAME);
-        }
+        disableMsgType(CAMERA_MSG_PREVIEW_FRAME);
     }
 
     if (c != 0) {
@@ -1107,11 +1077,6 @@ void CameraService::Client::handleRawPicture(const sp<IMemory>& mem) {
     ssize_t offset;
     size_t size;
     sp<IMemoryHeap> heap = mem->getMemory(&offset, &size);
-
-    // Put the YUV version of the snapshot in the preview display.
-    if (mSurface != 0 && !mUseOverlay) {
-        mSurface->postBuffer(offset);
-    }
 
     sp<ICameraClient> c = mCameraClient;
     mLock.unlock();
@@ -1290,6 +1255,14 @@ status_t CameraService::dump(int fd, const Vector<String16>& args) {
         }
     }
     return NO_ERROR;
+}
+
+sp<ISurface> CameraService::getISurface(const sp<Surface>& surface) {
+    if (surface != 0) {
+        return surface->getISurface();
+    } else {
+        return sp<ISurface>(0);
+    }
 }
 
 }; // namespace android

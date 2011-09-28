@@ -27,60 +27,54 @@ namespace renderscript {
 class ShaderCache;
 
 // An element is a group of Components that occupies one cell in a structure.
-class VertexArray
-{
+class VertexArray {
 public:
-    VertexArray();
-    virtual ~VertexArray();
-
-
     class Attrib {
     public:
         uint32_t buffer;
+        const uint8_t * ptr;
         uint32_t offset;
         uint32_t type;
         uint32_t size;
         uint32_t stride;
         bool normalized;
         String8 name;
-        RsDataKind kind;
 
         Attrib();
-        void set(const Attrib &);
         void clear();
+        void set(uint32_t type, uint32_t size, uint32_t stride, bool normalized, uint32_t offset, const char *name);
     };
 
+    VertexArray(const Attrib *attribs, uint32_t numAttribs);
+    virtual ~VertexArray();
 
-    void clearAll();
-    void setActiveBuffer(uint32_t id) {mActiveBuffer = id;}
-    void addUser(const Attrib &, uint32_t stride);
-    void addLegacy(uint32_t type, uint32_t size, uint32_t stride, RsDataKind kind, bool normalized, uint32_t offset);
-
-    void setupGL(const Context *rsc, class VertexArrayState *) const;
     void setupGL2(const Context *rsc, class VertexArrayState *, ShaderCache *) const;
     void logAttrib(uint32_t idx, uint32_t slot) const;
 
 protected:
     void clear(uint32_t index);
     uint32_t mActiveBuffer;
+    const uint8_t * mActivePointer;
     uint32_t mCount;
 
-    Attrib mAttribs[RS_MAX_ATTRIBS];
+    const Attrib *mAttribs;
 };
 
 
 class VertexArrayState {
 public:
+    VertexArrayState();
+    ~VertexArrayState();
     void init(Context *);
 
-    uint32_t mLastEnableCount;
-    //VertexArray::Attrib mAttribs[VertexArray::_LAST];
+    bool *mAttrsEnabled;
+    uint32_t mAttrsEnabledSize;
 };
 
 
 }
 }
-#endif //ANDROID_LIGHT_H
+#endif //ANDROID_VERTEX_ARRAY_H
 
 
 

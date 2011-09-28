@@ -22,7 +22,7 @@
 
 #include <sys/ioctl.h>
 
-#if HAVE_ANDROID_OS
+#ifdef HAVE_ANDROID_OS
 #include <linux/android_pmem.h>
 #endif
 
@@ -61,6 +61,10 @@ static char const * const gExtensionString  =
         "EGL_KHR_image "
         "EGL_KHR_image_base "
         "EGL_KHR_image_pixmap "
+        "EGL_KHR_gl_texture_2D_image "
+        "EGL_KHR_gl_texture_cubemap_image "
+        "EGL_KHR_gl_renderbuffer_image "
+        "EGL_KHR_fence_sync "
         "EGL_ANDROID_image_native_buffer "
         "EGL_ANDROID_swap_rectangle "
         ;
@@ -246,9 +250,23 @@ struct egl_image_t : public egl_object_t
     EGLImageKHR images[IMPL_NUM_IMPLEMENTATIONS];
 };
 
+struct egl_sync_t : public egl_object_t
+{
+    typedef egl_object_t::LocalRef<egl_sync_t, EGLSyncKHR> Ref;
+
+    egl_sync_t(EGLDisplay dpy, EGLContext context, EGLSyncKHR sync)
+        : dpy(dpy), context(context), sync(sync)
+    {
+    }
+    EGLDisplay dpy;
+    EGLContext context;
+    EGLSyncKHR sync;
+};
+
 typedef egl_surface_t::Ref  SurfaceRef;
 typedef egl_context_t::Ref  ContextRef;
 typedef egl_image_t::Ref    ImageRef;
+typedef egl_sync_t::Ref     SyncRef;
 
 struct tls_t
 {
@@ -271,6 +289,58 @@ static pthread_key_t gEGLThreadLocalStorageKey = -1;
 EGLAPI gl_hooks_t gHooks[2][IMPL_NUM_IMPLEMENTATIONS];
 EGLAPI gl_hooks_t gHooksNoContext;
 EGLAPI pthread_key_t gGLWrapperKey = -1;
+
+#if EGL_TRACE
+
+EGLAPI pthread_key_t gGLTraceKey = -1;
+
+// ----------------------------------------------------------------------------
+
+static int gEGLTraceLevel;
+static int gEGLApplicationTraceLevel;
+extern EGLAPI gl_hooks_t gHooksTrace;
+
+static inline void setGlTraceThreadSpecific(gl_hooks_t const *value) {
+    pthread_setspecific(gGLTraceKey, value);
+}
+
+gl_hooks_t const* getGLTraceThreadSpecific() {
+    return static_cast<gl_hooks_t*>(pthread_getspecific(gGLTraceKey));
+}
+
+static void initEglTraceLevel() {
+    char value[PROPERTY_VALUE_MAX];
+    property_get("debug.egl.trace", value, "0");
+    int propertyLevel = atoi(value);
+    int applicationLevel = gEGLApplicationTraceLevel;
+    gEGLTraceLevel = propertyLevel > applicationLevel ? propertyLevel : applicationLevel;
+}
+
+static void setGLHooksThreadSpecific(gl_hooks_t const *value) {
+    if (gEGLTraceLevel > 0) {
+        setGlTraceThreadSpecific(value);
+        setGlThreadSpecific(&gHooksTrace);
+    } else {
+        setGlThreadSpecific(value);
+    }
+}
+
+/*
+ * Global entry point to allow applications to modify their own trace level.
+ * The effective trace level is the max of this level and the value of debug.egl.trace.
+ */
+extern "C"
+void setGLTraceLevel(int level) {
+    gEGLApplicationTraceLevel = level;
+}
+
+#else
+
+static inline void setGLHooksThreadSpecific(gl_hooks_t const *value) {
+    setGlThreadSpecific(value);
+}
+
+#endif
 
 // ----------------------------------------------------------------------------
 
@@ -316,6 +386,12 @@ static tls_t* getTLS()
         pthread_setspecific(gEGLThreadLocalStorageKey, tls);
     }
     return tls;
+}
+
+static inline void clearError() {
+    // This must clear the error from all the underlying EGL implementations as
+    // well as the EGL wrapper layer.
+    eglGetError();
 }
 
 template<typename T>
@@ -410,10 +486,6 @@ static const extention_map_t gExtentionMap[] = {
             (__eglMustCastToProperFunctionPointerType)&eglDestroyImageKHR }, 
     { "eglSetSwapRectangleANDROID", 
             (__eglMustCastToProperFunctionPointerType)&eglSetSwapRectangleANDROID }, 
-    { "glEGLImageTargetTexture2DOES",
-            (__eglMustCastToProperFunctionPointerType)NULL },
-    { "glEGLImageTargetRenderbufferStorageOES",
-            (__eglMustCastToProperFunctionPointerType)NULL },
 };
 
 extern const __eglMustCastToProperFunctionPointerType gExtensionForwarders[MAX_NUMBER_OF_GL_EXTENSIONS];
@@ -450,13 +522,17 @@ static void early_egl_init(void)
 #if !USE_FAST_TLS_KEY
     pthread_key_create(&gGLWrapperKey, NULL);
 #endif
+#if EGL_TRACE
+    pthread_key_create(&gGLTraceKey, NULL);
+    initEglTraceLevel();
+#endif
     uint32_t addr = (uint32_t)((void*)gl_no_context);
     android_memset32(
             (uint32_t*)(void*)&gHooksNoContext, 
             addr, 
             sizeof(gHooksNoContext));
 
-    setGlThreadSpecific(&gHooksNoContext);
+    setGLHooksThreadSpecific(&gHooksNoContext);
 }
 
 static pthread_once_t once_control = PTHREAD_ONCE_INIT;
@@ -488,6 +564,11 @@ egl_context_t* get_context(EGLContext context) {
 static inline
 egl_image_t* get_image(EGLImageKHR image) {
     return egl_to_native_cast<egl_image_t>(image);
+}
+
+static inline
+egl_sync_t* get_sync(EGLSyncKHR sync) {
+    return egl_to_native_cast<egl_sync_t>(sync);
 }
 
 static egl_connection_t* validate_display_config(
@@ -633,6 +714,8 @@ using namespace android;
 
 EGLDisplay eglGetDisplay(NativeDisplayType display)
 {
+    clearError();
+
     uint32_t index = uint32_t(display);
     if (index >= NUM_DISPLAYS) {
         return setError(EGL_BAD_PARAMETER, EGL_NO_DISPLAY);
@@ -652,6 +735,8 @@ EGLDisplay eglGetDisplay(NativeDisplayType display)
 
 EGLBoolean eglInitialize(EGLDisplay dpy, EGLint *major, EGLint *minor)
 {
+    clearError();
+
     egl_display_t * const dp = get_display(dpy);
     if (!dp) return setError(EGL_BAD_DISPLAY, EGL_FALSE);
 
@@ -663,9 +748,17 @@ EGLBoolean eglInitialize(EGLDisplay dpy, EGLint *major, EGLint *minor)
         dp->refs++;
         return EGL_TRUE;
     }
-    
-    setGlThreadSpecific(&gHooksNoContext);
-    
+
+#if EGL_TRACE
+
+    // Called both at early_init time and at this time. (Early_init is pre-zygote, so
+    // the information from that call may be stale.)
+    initEglTraceLevel();
+
+#endif
+
+    setGLHooksThreadSpecific(&gHooksNoContext);
+
     // initialize each EGL and
     // build our own extension string first, based on the extension we know
     // and the extension supported by our client implementation
@@ -775,6 +868,8 @@ EGLBoolean eglTerminate(EGLDisplay dpy)
     // after eglTerminate() has been called. eglTerminate() only
     // terminates an EGLDisplay, not a EGL itself.
 
+    clearError();
+
     egl_display_t* const dp = get_display(dpy);
     if (!dp) return setError(EGL_BAD_DISPLAY, EGL_FALSE);
 
@@ -826,6 +921,8 @@ EGLBoolean eglGetConfigs(   EGLDisplay dpy,
                             EGLConfig *configs,
                             EGLint config_size, EGLint *num_config)
 {
+    clearError();
+
     egl_display_t const * const dp = get_display(dpy);
     if (!dp) return setError(EGL_BAD_DISPLAY, EGL_FALSE);
 
@@ -850,6 +947,8 @@ EGLBoolean eglChooseConfig( EGLDisplay dpy, const EGLint *attrib_list,
                             EGLConfig *configs, EGLint config_size,
                             EGLint *num_config)
 {
+    clearError();
+
     egl_display_t const * const dp = get_display(dpy);
     if (!dp) return setError(EGL_BAD_DISPLAY, EGL_FALSE);
 
@@ -963,6 +1062,8 @@ EGLBoolean eglChooseConfig( EGLDisplay dpy, const EGLint *attrib_list,
 EGLBoolean eglGetConfigAttrib(EGLDisplay dpy, EGLConfig config,
         EGLint attribute, EGLint *value)
 {
+    clearError();
+
     egl_display_t const* dp = 0;
     egl_connection_t* cnx = validate_display_config(dpy, config, dp);
     if (!cnx) return EGL_FALSE;
@@ -984,6 +1085,8 @@ EGLSurface eglCreateWindowSurface(  EGLDisplay dpy, EGLConfig config,
                                     NativeWindowType window,
                                     const EGLint *attrib_list)
 {
+    clearError();
+
     egl_display_t const* dp = 0;
     egl_connection_t* cnx = validate_display_config(dpy, config, dp);
     if (cnx) {
@@ -1014,6 +1117,8 @@ EGLSurface eglCreatePixmapSurface(  EGLDisplay dpy, EGLConfig config,
                                     NativePixmapType pixmap,
                                     const EGLint *attrib_list)
 {
+    clearError();
+
     egl_display_t const* dp = 0;
     egl_connection_t* cnx = validate_display_config(dpy, config, dp);
     if (cnx) {
@@ -1032,6 +1137,8 @@ EGLSurface eglCreatePixmapSurface(  EGLDisplay dpy, EGLConfig config,
 EGLSurface eglCreatePbufferSurface( EGLDisplay dpy, EGLConfig config,
                                     const EGLint *attrib_list)
 {
+    clearError();
+
     egl_display_t const* dp = 0;
     egl_connection_t* cnx = validate_display_config(dpy, config, dp);
     if (cnx) {
@@ -1049,6 +1156,8 @@ EGLSurface eglCreatePbufferSurface( EGLDisplay dpy, EGLConfig config,
                                     
 EGLBoolean eglDestroySurface(EGLDisplay dpy, EGLSurface surface)
 {
+    clearError();
+
     SurfaceRef _s(surface);
     if (!_s.get()) return setError(EGL_BAD_SURFACE, EGL_FALSE);
 
@@ -1071,6 +1180,8 @@ EGLBoolean eglDestroySurface(EGLDisplay dpy, EGLSurface surface)
 EGLBoolean eglQuerySurface( EGLDisplay dpy, EGLSurface surface,
                             EGLint attribute, EGLint *value)
 {
+    clearError();
+
     SurfaceRef _s(surface);
     if (!_s.get()) return setError(EGL_BAD_SURFACE, EGL_FALSE);
 
@@ -1098,6 +1209,8 @@ EGLBoolean eglQuerySurface( EGLDisplay dpy, EGLSurface surface,
 EGLContext eglCreateContext(EGLDisplay dpy, EGLConfig config,
                             EGLContext share_list, const EGLint *attrib_list)
 {
+    clearError();
+
     egl_display_t const* dp = 0;
     egl_connection_t* cnx = validate_display_config(dpy, config, dp);
     if (cnx) {
@@ -1135,6 +1248,8 @@ EGLContext eglCreateContext(EGLDisplay dpy, EGLConfig config,
 
 EGLBoolean eglDestroyContext(EGLDisplay dpy, EGLContext ctx)
 {
+    clearError();
+
     ContextRef _c(ctx);
     if (!_c.get()) return setError(EGL_BAD_CONTEXT, EGL_FALSE);
     
@@ -1174,6 +1289,8 @@ static void loseCurrent(egl_context_t * cur_c)
 EGLBoolean eglMakeCurrent(  EGLDisplay dpy, EGLSurface draw,
                             EGLSurface read, EGLContext ctx)
 {
+    clearError();
+
     // get a reference to the object passed in
     ContextRef _c(ctx);
     SurfaceRef _d(draw);
@@ -1251,7 +1368,7 @@ EGLBoolean eglMakeCurrent(  EGLDisplay dpy, EGLSurface draw,
         loseCurrent(cur_c);
 
         if (ctx != EGL_NO_CONTEXT) {
-            setGlThreadSpecific(c->cnx->hooks[c->version]);
+            setGLHooksThreadSpecific(c->cnx->hooks[c->version]);
             setContext(ctx);
             _c.acquire();
             _r.acquire();
@@ -1259,7 +1376,7 @@ EGLBoolean eglMakeCurrent(  EGLDisplay dpy, EGLSurface draw,
             c->read = read;
             c->draw = draw;
         } else {
-            setGlThreadSpecific(&gHooksNoContext);
+            setGLHooksThreadSpecific(&gHooksNoContext);
             setContext(EGL_NO_CONTEXT);
         }
     }
@@ -1270,6 +1387,8 @@ EGLBoolean eglMakeCurrent(  EGLDisplay dpy, EGLSurface draw,
 EGLBoolean eglQueryContext( EGLDisplay dpy, EGLContext ctx,
                             EGLint attribute, EGLint *value)
 {
+    clearError();
+
     ContextRef _c(ctx);
     if (!_c.get()) return setError(EGL_BAD_CONTEXT, EGL_FALSE);
 
@@ -1296,6 +1415,8 @@ EGLContext eglGetCurrentContext(void)
     // could be called before eglInitialize(), but we wouldn't have a context
     // then, and this function would correctly return EGL_NO_CONTEXT.
 
+    clearError();
+
     EGLContext ctx = getContext();
     return ctx;
 }
@@ -1304,6 +1425,8 @@ EGLSurface eglGetCurrentSurface(EGLint readdraw)
 {
     // could be called before eglInitialize(), but we wouldn't have a context
     // then, and this function would correctly return EGL_NO_SURFACE.
+
+    clearError();
 
     EGLContext ctx = getContext();
     if (ctx) {
@@ -1323,6 +1446,8 @@ EGLDisplay eglGetCurrentDisplay(void)
     // could be called before eglInitialize(), but we wouldn't have a context
     // then, and this function would correctly return EGL_NO_DISPLAY.
 
+    clearError();
+
     EGLContext ctx = getContext();
     if (ctx) {
         egl_context_t const * const c = get_context(ctx);
@@ -1336,6 +1461,8 @@ EGLBoolean eglWaitGL(void)
 {
     // could be called before eglInitialize(), but we wouldn't have a context
     // then, and this function would return GL_TRUE, which isn't wrong.
+
+    clearError();
 
     EGLBoolean res = EGL_TRUE;
     EGLContext ctx = getContext();
@@ -1356,7 +1483,9 @@ EGLBoolean eglWaitNative(EGLint engine)
 {
     // could be called before eglInitialize(), but we wouldn't have a context
     // then, and this function would return GL_TRUE, which isn't wrong.
-    
+
+    clearError();
+
     EGLBoolean res = EGL_TRUE;
     EGLContext ctx = getContext();
     if (ctx) {
@@ -1390,11 +1519,36 @@ EGLint eglGetError(void)
     return result;
 }
 
+// Note: Similar implementations of these functions also exist in
+// gl2.cpp and gl.cpp, and are used by applications that call the
+// exported entry points directly.
+typedef void (GL_APIENTRYP PFNGLEGLIMAGETARGETTEXTURE2DOESPROC) (GLenum target, GLeglImageOES image);
+typedef void (GL_APIENTRYP PFNGLEGLIMAGETARGETRENDERBUFFERSTORAGEOESPROC) (GLenum target, GLeglImageOES image);
+
+static PFNGLEGLIMAGETARGETTEXTURE2DOESPROC glEGLImageTargetTexture2DOES_impl = NULL;
+static PFNGLEGLIMAGETARGETRENDERBUFFERSTORAGEOESPROC glEGLImageTargetRenderbufferStorageOES_impl = NULL;
+
+static void glEGLImageTargetTexture2DOES_wrapper(GLenum target, GLeglImageOES image)
+{
+    GLeglImageOES implImage =
+        (GLeglImageOES)egl_get_image_for_current_context((EGLImageKHR)image);
+    glEGLImageTargetTexture2DOES_impl(target, implImage);
+}
+
+static void glEGLImageTargetRenderbufferStorageOES_wrapper(GLenum target, GLeglImageOES image)
+{
+    GLeglImageOES implImage =
+        (GLeglImageOES)egl_get_image_for_current_context((EGLImageKHR)image);
+    glEGLImageTargetRenderbufferStorageOES_impl(target, implImage);
+}
+
 __eglMustCastToProperFunctionPointerType eglGetProcAddress(const char *procname)
 {
     // eglGetProcAddress() could be the very first function called
     // in which case we must make sure we've initialized ourselves, this
     // happens the first time egl_get_display() is called.
+
+    clearError();
 
     if (egl_init_drivers() == EGL_FALSE) {
         setError(EGL_BAD_PARAMETER, NULL);
@@ -1442,11 +1596,24 @@ __eglMustCastToProperFunctionPointerType eglGetProcAddress(const char *procname)
                     // Extensions are independent of the bound context
                     cnx->hooks[GLESv1_INDEX]->ext.extensions[slot] =
                     cnx->hooks[GLESv2_INDEX]->ext.extensions[slot] =
+#if EGL_TRACE
+                    gHooksTrace.ext.extensions[slot] =
+#endif
                             cnx->egl.eglGetProcAddress(procname);
                 }
             }
             if (found) {
                 addr = gExtensionForwarders[slot];
+
+                if (!strcmp(procname, "glEGLImageTargetTexture2DOES")) {
+                    glEGLImageTargetTexture2DOES_impl = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)addr;
+                    addr = (__eglMustCastToProperFunctionPointerType)glEGLImageTargetTexture2DOES_wrapper;
+                }
+                if (!strcmp(procname, "glEGLImageTargetRenderbufferStorageOES")) {
+                    glEGLImageTargetRenderbufferStorageOES_impl = (PFNGLEGLIMAGETARGETRENDERBUFFERSTORAGEOESPROC)addr;
+                    addr = (__eglMustCastToProperFunctionPointerType)glEGLImageTargetRenderbufferStorageOES_wrapper;
+                }
+
                 gGLExtentionMap.add(name, addr);
                 gGLExtentionSlot++;
             }
@@ -1458,6 +1625,8 @@ __eglMustCastToProperFunctionPointerType eglGetProcAddress(const char *procname)
 
 EGLBoolean eglSwapBuffers(EGLDisplay dpy, EGLSurface draw)
 {
+    clearError();
+
     SurfaceRef _s(draw);
     if (!_s.get()) return setError(EGL_BAD_SURFACE, EGL_FALSE);
 
@@ -1471,6 +1640,8 @@ EGLBoolean eglSwapBuffers(EGLDisplay dpy, EGLSurface draw)
 EGLBoolean eglCopyBuffers(  EGLDisplay dpy, EGLSurface surface,
                             NativePixmapType target)
 {
+    clearError();
+
     SurfaceRef _s(surface);
     if (!_s.get()) return setError(EGL_BAD_SURFACE, EGL_FALSE);
 
@@ -1484,6 +1655,8 @@ EGLBoolean eglCopyBuffers(  EGLDisplay dpy, EGLSurface surface,
 
 const char* eglQueryString(EGLDisplay dpy, EGLint name)
 {
+    clearError();
+
     egl_display_t const * const dp = get_display(dpy);
     switch (name) {
         case EGL_VENDOR:
@@ -1506,6 +1679,8 @@ const char* eglQueryString(EGLDisplay dpy, EGLint name)
 EGLBoolean eglSurfaceAttrib(
         EGLDisplay dpy, EGLSurface surface, EGLint attribute, EGLint value)
 {
+    clearError();
+
     SurfaceRef _s(surface);
     if (!_s.get()) return setError(EGL_BAD_SURFACE, EGL_FALSE);
 
@@ -1523,6 +1698,8 @@ EGLBoolean eglSurfaceAttrib(
 EGLBoolean eglBindTexImage(
         EGLDisplay dpy, EGLSurface surface, EGLint buffer)
 {
+    clearError();
+
     SurfaceRef _s(surface);
     if (!_s.get()) return setError(EGL_BAD_SURFACE, EGL_FALSE);
 
@@ -1540,6 +1717,8 @@ EGLBoolean eglBindTexImage(
 EGLBoolean eglReleaseTexImage(
         EGLDisplay dpy, EGLSurface surface, EGLint buffer)
 {
+    clearError();
+
     SurfaceRef _s(surface);
     if (!_s.get()) return setError(EGL_BAD_SURFACE, EGL_FALSE);
 
@@ -1556,6 +1735,8 @@ EGLBoolean eglReleaseTexImage(
 
 EGLBoolean eglSwapInterval(EGLDisplay dpy, EGLint interval)
 {
+    clearError();
+
     egl_display_t * const dp = get_display(dpy);
     if (!dp) return setError(EGL_BAD_DISPLAY, EGL_FALSE);
 
@@ -1581,6 +1762,8 @@ EGLBoolean eglSwapInterval(EGLDisplay dpy, EGLint interval)
 
 EGLBoolean eglWaitClient(void)
 {
+    clearError();
+
     // could be called before eglInitialize(), but we wouldn't have a context
     // then, and this function would return GL_TRUE, which isn't wrong.
     EGLBoolean res = EGL_TRUE;
@@ -1604,6 +1787,8 @@ EGLBoolean eglWaitClient(void)
 
 EGLBoolean eglBindAPI(EGLenum api)
 {
+    clearError();
+
     if (egl_init_drivers() == EGL_FALSE) {
         return setError(EGL_BAD_PARAMETER, EGL_FALSE);
     }
@@ -1625,6 +1810,8 @@ EGLBoolean eglBindAPI(EGLenum api)
 
 EGLenum eglQueryAPI(void)
 {
+    clearError();
+
     if (egl_init_drivers() == EGL_FALSE) {
         return setError(EGL_BAD_PARAMETER, EGL_FALSE);
     }
@@ -1645,6 +1832,8 @@ EGLenum eglQueryAPI(void)
 
 EGLBoolean eglReleaseThread(void)
 {
+    clearError();
+
     // If there is context bound to the thread, release it
     loseCurrent(get_context(getContext()));
 
@@ -1664,6 +1853,8 @@ EGLSurface eglCreatePbufferFromClientBuffer(
           EGLDisplay dpy, EGLenum buftype, EGLClientBuffer buffer,
           EGLConfig config, const EGLint *attrib_list)
 {
+    clearError();
+
     egl_display_t const* dp = 0;
     egl_connection_t* cnx = validate_display_config(dpy, config, dp);
     if (!cnx) return EGL_FALSE;
@@ -1683,6 +1874,8 @@ EGLSurface eglCreatePbufferFromClientBuffer(
 EGLBoolean eglLockSurfaceKHR(EGLDisplay dpy, EGLSurface surface,
         const EGLint *attrib_list)
 {
+    clearError();
+
     SurfaceRef _s(surface);
     if (!_s.get()) return setError(EGL_BAD_SURFACE, EGL_FALSE);
 
@@ -1701,6 +1894,8 @@ EGLBoolean eglLockSurfaceKHR(EGLDisplay dpy, EGLSurface surface,
 
 EGLBoolean eglUnlockSurfaceKHR(EGLDisplay dpy, EGLSurface surface)
 {
+    clearError();
+
     SurfaceRef _s(surface);
     if (!_s.get()) return setError(EGL_BAD_SURFACE, EGL_FALSE);
 
@@ -1720,6 +1915,8 @@ EGLBoolean eglUnlockSurfaceKHR(EGLDisplay dpy, EGLSurface surface)
 EGLImageKHR eglCreateImageKHR(EGLDisplay dpy, EGLContext ctx, EGLenum target,
         EGLClientBuffer buffer, const EGLint *attrib_list)
 {
+    clearError();
+
     if (ctx != EGL_NO_CONTEXT) {
         ContextRef _c(ctx);
         if (!_c.get()) return setError(EGL_BAD_CONTEXT, EGL_NO_IMAGE_KHR);
@@ -1791,6 +1988,8 @@ EGLImageKHR eglCreateImageKHR(EGLDisplay dpy, EGLContext ctx, EGLenum target,
 
 EGLBoolean eglDestroyImageKHR(EGLDisplay dpy, EGLImageKHR img)
 {
+    clearError();
+
     egl_display_t const * const dp = get_display(dpy);
      if (dp == 0) {
          return setError(EGL_BAD_DISPLAY, EGL_FALSE);
@@ -1822,6 +2021,119 @@ EGLBoolean eglDestroyImageKHR(EGLDisplay dpy, EGLImageKHR img)
      return EGL_TRUE;
 }
 
+// ----------------------------------------------------------------------------
+// EGL_EGLEXT_VERSION 5
+// ----------------------------------------------------------------------------
+
+
+EGLSyncKHR eglCreateSyncKHR(EGLDisplay dpy, EGLenum type, const EGLint *attrib_list)
+{
+    clearError();
+
+    EGLContext ctx = eglGetCurrentContext();
+    ContextRef _c(ctx);
+    if (!_c.get()) return setError(EGL_BAD_CONTEXT, EGL_NO_SYNC_KHR);
+    if (!validate_display_context(dpy, ctx))
+        return EGL_NO_SYNC_KHR;
+    egl_display_t const * const dp = get_display(dpy);
+    egl_context_t * const c = get_context(ctx);
+    EGLSyncKHR result = EGL_NO_SYNC_KHR;
+    if (c->cnx->egl.eglCreateSyncKHR) {
+        EGLSyncKHR sync = c->cnx->egl.eglCreateSyncKHR(
+                dp->disp[c->impl].dpy, type, attrib_list);
+        if (sync == EGL_NO_SYNC_KHR)
+            return sync;
+        result = (egl_sync_t*)new egl_sync_t(dpy, ctx, sync);
+    }
+    return (EGLSyncKHR)result;
+}
+
+EGLBoolean eglDestroySyncKHR(EGLDisplay dpy, EGLSyncKHR sync)
+{
+    clearError();
+
+    egl_display_t const * const dp = get_display(dpy);
+    if (dp == 0) {
+        return setError(EGL_BAD_DISPLAY, EGL_FALSE);
+    }
+
+    SyncRef _s(sync);
+    if (!_s.get()) return setError(EGL_BAD_PARAMETER, EGL_FALSE);
+    egl_sync_t* syncObject = get_sync(sync);
+
+    EGLContext ctx = syncObject->context;
+    ContextRef _c(ctx);
+    if (!_c.get()) return setError(EGL_BAD_CONTEXT, EGL_FALSE);
+    if (!validate_display_context(dpy, ctx))
+        return EGL_FALSE;
+
+    egl_context_t * const c = get_context(ctx);
+
+    if (c->cnx->egl.eglDestroySyncKHR) {
+        return c->cnx->egl.eglDestroySyncKHR(
+                dp->disp[c->impl].dpy, syncObject->sync);
+    }
+
+    return EGL_FALSE;
+}
+
+EGLint eglClientWaitSyncKHR(EGLDisplay dpy, EGLSyncKHR sync, EGLint flags, EGLTimeKHR timeout)
+{
+    clearError();
+
+    egl_display_t const * const dp = get_display(dpy);
+    if (dp == 0) {
+        return setError(EGL_BAD_DISPLAY, EGL_FALSE);
+    }
+
+    SyncRef _s(sync);
+    if (!_s.get()) return setError(EGL_BAD_PARAMETER, EGL_FALSE);
+    egl_sync_t* syncObject = get_sync(sync);
+
+    EGLContext ctx = syncObject->context;
+    ContextRef _c(ctx);
+    if (!_c.get()) return setError(EGL_BAD_CONTEXT, EGL_FALSE);
+    if (!validate_display_context(dpy, ctx))
+        return EGL_FALSE;
+
+    egl_context_t * const c = get_context(ctx);
+
+    if (c->cnx->egl.eglClientWaitSyncKHR) {
+        return c->cnx->egl.eglClientWaitSyncKHR(
+                dp->disp[c->impl].dpy, syncObject->sync, flags, timeout);
+    }
+
+    return EGL_FALSE;
+}
+
+EGLBoolean eglGetSyncAttribKHR(EGLDisplay dpy, EGLSyncKHR sync, EGLint attribute, EGLint *value)
+{
+    clearError();
+
+    egl_display_t const * const dp = get_display(dpy);
+    if (dp == 0) {
+        return setError(EGL_BAD_DISPLAY, EGL_FALSE);
+    }
+
+    SyncRef _s(sync);
+    if (!_s.get()) return setError(EGL_BAD_PARAMETER, EGL_FALSE);
+    egl_sync_t* syncObject = get_sync(sync);
+
+    EGLContext ctx = syncObject->context;
+    ContextRef _c(ctx);
+    if (!_c.get()) return setError(EGL_BAD_CONTEXT, EGL_FALSE);
+    if (!validate_display_context(dpy, ctx))
+        return EGL_FALSE;
+
+    egl_context_t * const c = get_context(ctx);
+
+    if (c->cnx->egl.eglGetSyncAttribKHR) {
+        return c->cnx->egl.eglGetSyncAttribKHR(
+                dp->disp[c->impl].dpy, syncObject->sync, attribute, value);
+    }
+
+    return EGL_FALSE;
+}
 
 // ----------------------------------------------------------------------------
 // ANDROID extensions
@@ -1830,6 +2142,8 @@ EGLBoolean eglDestroyImageKHR(EGLDisplay dpy, EGLImageKHR img)
 EGLBoolean eglSetSwapRectangleANDROID(EGLDisplay dpy, EGLSurface draw,
         EGLint left, EGLint top, EGLint width, EGLint height)
 {
+    clearError();
+
     SurfaceRef _s(draw);
     if (!_s.get()) return setError(EGL_BAD_SURFACE, EGL_FALSE);
 

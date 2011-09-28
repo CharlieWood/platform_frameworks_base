@@ -1,5 +1,4 @@
-/* //device/java/android/android/view/IWindowManager.aidl
-**
+/*
 ** Copyright 2006, The Android Open Source Project
 **
 ** Licensed under the Apache License, Version 2.0 (the "License"); 
@@ -21,6 +20,7 @@ import com.android.internal.view.IInputContext;
 import com.android.internal.view.IInputMethodClient;
 
 import android.content.res.Configuration;
+import android.graphics.Bitmap;
 import android.view.IApplicationToken;
 import android.view.IOnKeyguardExitResult;
 import android.view.IRotationWatcher;
@@ -73,13 +73,13 @@ interface IWindowManager
     void setAppOrientation(IApplicationToken token, int requestedOrientation);
     int getAppOrientation(IApplicationToken token);
     void setFocusedApp(IBinder token, boolean moveFocusNow);
-    void prepareAppTransition(int transit);
+    void prepareAppTransition(int transit, boolean alwaysKeepCurrent);
     int getPendingAppTransition();
     void overridePendingAppTransition(String packageName, int enterAnim, int exitAnim);
     void executeAppTransition();
     void setAppStartingWindow(IBinder token, String pkg, int theme,
             CharSequence nonLocalizedLabel, int labelRes,
-            int icon, IBinder transferFrom, boolean createIfNeeded);
+            int icon, int windowFlags, IBinder transferFrom, boolean createIfNeeded);
     void setAppWillBeHidden(IBinder token);
     void setAppVisibility(IBinder token, boolean visible);
     void startAppFreezingScreen(IBinder token, int configChanges);
@@ -100,6 +100,8 @@ interface IWindowManager
     void disableKeyguard(IBinder token, String tag);
     void reenableKeyguard(IBinder token);
     void exitKeyguardSecurely(IOnKeyguardExitResult callback);
+    boolean isKeyguardLocked();
+    boolean isKeyguardSecure();
     boolean inKeyguardRestrictedInputMode();
 
     void closeSystemDialogs(String reason);
@@ -122,7 +124,7 @@ interface IWindowManager
     int getTrackballKeycodeState(int sw);
     int getDPadKeycodeState(int sw);
     InputChannel monitorInput(String inputChannelName);
-    
+
     // Report whether the hardware supports the given keys; returns true if successful
     boolean hasKeys(in int[] keycodes, inout boolean[] keyExists);
     
@@ -132,7 +134,20 @@ interface IWindowManager
     
     // For testing
     void setInTouchMode(boolean showFocus);
-    
+
+    // For StrictMode flashing a red border on violations from the UI
+    // thread.  The uid/pid is implicit from the Binder call, and the Window
+    // Manager uses that to determine whether or not the red border should
+    // actually be shown.  (it will be ignored that pid doesn't have windows
+    // on screen)
+    void showStrictModeViolation(boolean on);
+
+    // Proxy to set the system property for whether the flashing
+    // should be enabled.  The 'enabled' value is null or blank for
+    // the system default (differs per build variant) or any valid
+    // boolean string as parsed by SystemProperties.getBoolean().
+    void setStrictModeVisualIndicatorPreference(String enabled);
+
     // These can only be called with the SET_ORIENTATION permission.
     /**
      * Change the current screen rotation, constants as per
@@ -156,4 +171,27 @@ interface IWindowManager
      * calls back when it changes.
      */
     int watchRotation(IRotationWatcher watcher);
+
+	/**
+	 * Lock the device orientation to the current rotation. Sensor input will
+	 * be ignored until thawRotation() is called.
+	 * @hide
+	 */
+	void freezeRotation();
+
+	/**
+	 * Release the orientation lock imposed by freezeRotation().
+	 * @hide
+	 */
+	void thawRotation();
+
+	/**
+	 * Create a screenshot of the applications currently displayed.
+	 */
+	Bitmap screenshotApplications(IBinder appToken, int maxWidth, int maxHeight);
+
+    /**
+     * Called by the status bar to notify Views of changes to System UI visiblity.
+     */
+    void statusBarVisibilityChanged(int visibility);
 }

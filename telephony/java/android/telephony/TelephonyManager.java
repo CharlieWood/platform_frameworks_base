@@ -23,6 +23,7 @@ import android.os.Bundle;
 import android.os.RemoteException;
 import android.os.ServiceManager;
 import android.os.SystemProperties;
+import android.util.Log;
 
 import com.android.internal.telephony.IPhoneSubInfo;
 import com.android.internal.telephony.ITelephony;
@@ -55,14 +56,21 @@ import java.util.List;
 public class TelephonyManager {
     private static final String TAG = "TelephonyManager";
 
-    private Context mContext;
-    private ITelephonyRegistry mRegistry;
+    private static Context sContext;
+    private static ITelephonyRegistry sRegistry;
 
     /** @hide */
     public TelephonyManager(Context context) {
-        mContext = context;
-        mRegistry = ITelephonyRegistry.Stub.asInterface(ServiceManager.getService(
+        if (sContext == null) {
+            sContext = context;
+
+            sRegistry = ITelephonyRegistry.Stub.asInterface(ServiceManager.getService(
                     "telephony.registry"));
+        } else {
+            Log.e(TAG, "Hidden constructor called more than once per process!");
+            Log.e(TAG, "Original: " + sContext.getPackageName() + ", new: " +
+                    context.getPackageName());
+        }
     }
 
     /** @hide */
@@ -71,7 +79,8 @@ public class TelephonyManager {
 
     private static TelephonyManager sInstance = new TelephonyManager();
 
-    /** @hide */
+    /** @hide
+    /* @deprecated - use getSystemService as described above */
     public static TelephonyManager getDefault() {
         return sInstance;
     }
@@ -272,15 +281,21 @@ public class TelephonyManager {
     public static final int PHONE_TYPE_GSM = Phone.PHONE_TYPE_GSM;
     /** Phone radio is CDMA. */
     public static final int PHONE_TYPE_CDMA = Phone.PHONE_TYPE_CDMA;
+    /** Phone is via SIP. */
+    public static final int PHONE_TYPE_SIP = Phone.PHONE_TYPE_SIP;
 
     /**
-     * Returns a constant indicating the device phone type.
+     * Returns the current phone type.
+     * TODO: This is a last minute change and hence hidden.
      *
      * @see #PHONE_TYPE_NONE
      * @see #PHONE_TYPE_GSM
      * @see #PHONE_TYPE_CDMA
+     * @see #PHONE_TYPE_SIP
+     *
+     * {@hide}
      */
-    public int getPhoneType() {
+    public int getCurrentPhoneType() {
         try{
             ITelephony telephony = getITelephony();
             if (telephony != null) {
@@ -300,6 +315,21 @@ public class TelephonyManager {
         }
     }
 
+    /**
+     * Returns a constant indicating the device phone type.  This
+     * indicates the type of radio used to transmit voice calls.
+     *
+     * @see #PHONE_TYPE_NONE
+     * @see #PHONE_TYPE_GSM
+     * @see #PHONE_TYPE_CDMA
+     * @see #PHONE_TYPE_SIP
+     */
+    public int getPhoneType() {
+        if (!isVoiceCapable()) {
+            return PHONE_TYPE_NONE;
+        }
+        return getCurrentPhoneType();
+    }
 
     private int getPhoneTypeFromProperty() {
         int type =
@@ -393,14 +423,17 @@ public class TelephonyManager {
     public static final int NETWORK_TYPE_IDEN = 11;
     /** Current network is EVDO revision B*/
     public static final int NETWORK_TYPE_EVDO_B = 12;
-    /** @hide */
-    public static final int NETWORK_TYPE_LTE = 13;
-    /** @hide */
-    public static final int NETWORK_TYPE_EHRPD = 14;
+    /** Current network is eHRPD */
+    public static final int NETWORK_TYPE_EHRPD = 13;
+    /** Current network is LTE */
+    public static final int NETWORK_TYPE_LTE = 14;
+    /** Current network is HSPA+
+     * @hide */
+    public static final int NETWORK_TYPE_HSPAP = 15;
 
     /**
      * Returns a constant indicating the radio technology (network type)
-     * currently in use on the device.
+     * currently in use on the device for data transmission.
      * @return the network type
      *
      * @see #NETWORK_TYPE_UNKNOWN
@@ -415,6 +448,9 @@ public class TelephonyManager {
      * @see #NETWORK_TYPE_EVDO_A
      * @see #NETWORK_TYPE_EVDO_B
      * @see #NETWORK_TYPE_1xRTT
+     * @see #NETWORK_TYPE_IDEN
+     * @see #NETWORK_TYPE_LTE
+     * @see #NETWORK_TYPE_EHRPD
      */
     public int getNetworkType() {
         try{
@@ -465,6 +501,12 @@ public class TelephonyManager {
                 return "CDMA - EvDo rev. B";
             case NETWORK_TYPE_1xRTT:
                 return "CDMA - 1xRTT";
+            case NETWORK_TYPE_LTE:
+                return "LTE";
+            case NETWORK_TYPE_EHRPD:
+                return "CDMA - eHRPD";
+            case NETWORK_TYPE_IDEN:
+                return "iDEN";
             default:
                 return "UNKNOWN";
         }
@@ -790,6 +832,10 @@ public class TelephonyManager {
       }
     }
 
+    /** Data connection state: Unknown.  Used before we know the state.
+     * @hide
+     */
+    public static final int DATA_UNKNOWN        = -1;
     /** Data connection state: Disconnected. IP traffic not available. */
     public static final int DATA_DISCONNECTED   = 0;
     /** Data connection state: Currently setting up a data connection. */
@@ -855,10 +901,10 @@ public class TelephonyManager {
      *               LISTEN_ flags.
      */
     public void listen(PhoneStateListener listener, int events) {
-        String pkgForDebug = mContext != null ? mContext.getPackageName() : "<unknown>";
+        String pkgForDebug = sContext != null ? sContext.getPackageName() : "<unknown>";
         try {
             Boolean notifyNow = (getITelephony() != null);
-            mRegistry.listen(pkgForDebug, listener.callback, events, notifyNow);
+            sRegistry.listen(pkgForDebug, listener.callback, events, notifyNow);
         } catch (RemoteException ex) {
             // system process dead
         } catch (NullPointerException ex) {
@@ -913,6 +959,65 @@ public class TelephonyManager {
             return null;
         } catch (NullPointerException ex) {
             return null;
+        }
+    }
+
+    /**
+     * @return true if the current device is "voice capable".
+     * <p>
+     * "Voice capable" means that this device supports circuit-switched
+     * (i.e. voice) phone calls over the telephony network, and is allowed
+     * to display the in-call UI while a cellular voice call is active.
+     * This will be false on "data only" devices which can't make voice
+     * calls and don't support any in-call UI.
+     * <p>
+     * Note: the meaning of this flag is subtly different from the
+     * PackageManager.FEATURE_TELEPHONY system feature, which is available
+     * on any device with a telephony radio, even if the device is
+     * data-only.
+     *
+     * @hide pending API review
+     */
+    public boolean isVoiceCapable() {
+        if (sContext == null) return true;
+        return sContext.getResources().getBoolean(
+                com.android.internal.R.bool.config_voice_capable);
+    }
+
+    /**
+     * @return true if the current device supports sms service.
+     * <p>
+     * If true, this means that the device supports both sending and
+     * receiving sms via the telephony network.
+     * <p>
+     * Note: Voicemail waiting sms, cell broadcasting sms, and MMS are
+     *       disabled when device doesn't support sms.
+     *
+     * @hide pending API review
+     */
+    public boolean isSmsCapable() {
+        if (sContext == null) return true;
+        return sContext.getResources().getBoolean(
+                com.android.internal.R.bool.config_sms_capable);
+    }
+
+    /**
+     * Set an APN type (for ex: "default") is enabled or disabled
+     * @param apnType specifies APN type the request pertains to
+     * @param enabled if true, enable the APN type
+     *                otherwise, disable the APN type
+     * @hide
+     */
+    public void apnDependenciesMet(String apnType, boolean enabled) {
+        try{
+            ITelephony telephony = getITelephony();
+            if (telephony != null) {
+                telephony.apnDependenciesMet(apnType, enabled);
+            }
+        } catch(RemoteException ex) {
+            // This shouldn't happen in the normal case
+        } catch (NullPointerException ex) {
+            // This could happen before phone restarts due to crashing
         }
     }
 }

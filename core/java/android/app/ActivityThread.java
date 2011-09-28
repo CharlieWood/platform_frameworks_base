@@ -30,6 +30,7 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.IPackageManager;
 import android.content.pm.InstrumentationInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.PackageManager.NameNotFoundException;
 import android.content.pm.ProviderInfo;
 import android.content.pm.ServiceInfo;
 import android.content.res.AssetManager;
@@ -41,7 +42,9 @@ import android.database.sqlite.SQLiteDebug;
 import android.database.sqlite.SQLiteDebug.DbStats;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
-import android.os.Build;
+import android.net.IConnectivityManager;
+import android.net.Proxy;
+import android.net.ProxyProperties;
 import android.os.Bundle;
 import android.os.Debug;
 import android.os.Handler;
@@ -63,6 +66,7 @@ import android.util.Log;
 import android.util.LogPrinter;
 import android.util.Slog;
 import android.view.Display;
+import android.view.HardwareRenderer;
 import android.view.View;
 import android.view.ViewDebug;
 import android.view.ViewManager;
@@ -83,6 +87,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.lang.ref.WeakReference;
+import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -92,6 +97,7 @@ import java.util.Map;
 import java.util.TimeZone;
 import java.util.regex.Pattern;
 
+import dalvik.system.CloseGuard;
 import dalvik.system.SamplingProfiler;
 
 final class SuperNotCalledException extends AndroidRuntimeException {
@@ -115,12 +121,14 @@ final class RemoteServiceException extends AndroidRuntimeException {
  * {@hide}
  */
 public final class ActivityThread {
-    static final String TAG = "ActivityThread";
+    /** @hide */
+    public static final String TAG = "ActivityThread";
     private static final android.graphics.Bitmap.Config THUMBNAIL_FORMAT = Bitmap.Config.RGB_565;
     private static final boolean DEBUG = false;
     static final boolean localLOGV = DEBUG ? Config.LOGD : Config.LOGV;
     static final boolean DEBUG_MESSAGES = false;
-    static final boolean DEBUG_BROADCAST = false;
+    /** @hide */
+    public static final boolean DEBUG_BROADCAST = false;
     private static final boolean DEBUG_RESULTS = false;
     private static final boolean DEBUG_BACKUP = false;
     private static final boolean DEBUG_CONFIGURATION = false;
@@ -202,8 +210,7 @@ public final class ActivityThread {
         Window window;
         Activity parent;
         String embeddedID;
-        Object lastNonConfigurationInstance;
-        HashMap<String,Object> lastNonConfigurationChildInstances;
+        Activity.NonConfigurationInstances lastNonConfigurationInstances;
         boolean paused;
         boolean stopped;
         boolean hideForNow;
@@ -219,6 +226,11 @@ public final class ActivityThread {
 
         boolean startsNotResumed;
         boolean isForward;
+        int pendingConfigChanges;
+        boolean onlyLocalRequest;
+
+        View mPendingRemoveWindow;
+        WindowManager mPendingRemoveWindowManager;
 
         ActivityClientRecord() {
             parent = null;
@@ -227,6 +239,14 @@ public final class ActivityThread {
             stopped = false;
             hideForNow = false;
             nextIdle = null;
+        }
+
+        public boolean isPreHoneycomb() {
+            if (activity != null) {
+                return activity.getApplicationInfo().targetSdkVersion
+                        < android.os.Build.VERSION_CODES.HONEYCOMB;
+            }
+            return false;
         }
 
         public String toString() {
@@ -264,18 +284,20 @@ public final class ActivityThread {
         }
     }
 
-    private static final class ReceiverData {
+    private static final class ReceiverData extends BroadcastReceiver.PendingResult {
+        public ReceiverData(Intent intent, int resultCode, String resultData, Bundle resultExtras,
+                boolean ordered, boolean sticky, IBinder token) {
+            super(resultCode, resultData, resultExtras, TYPE_COMPONENT, ordered, sticky, token);
+            this.intent = intent;
+        }
+
         Intent intent;
         ActivityInfo info;
-        int resultCode;
-        String resultData;
-        Bundle resultExtras;
-        boolean sync;
-        boolean resultAbort;
         public String toString() {
             return "ReceiverData{intent=" + intent + " packageName=" +
-            info.packageName + " resultCode=" + resultCode
-            + " resultData=" + resultData + " resultExtras=" + resultExtras + "}";
+                    info.packageName + " resultCode=" + getResultCode()
+                    + " resultData=" + getResultData() + " resultExtras="
+                    + getResultExtras(false) + "}";
         }
     }
 
@@ -338,9 +360,10 @@ public final class ActivityThread {
         }
     }
 
-    private static final class DumpServiceInfo {
+    private static final class DumpComponentInfo {
         FileDescriptor fd;
-        IBinder service;
+        IBinder token;
+        String prefix;
         String[] args;
         boolean dumped;
     }
@@ -364,12 +387,17 @@ public final class ActivityThread {
         ParcelFileDescriptor fd;
     }
 
+    private static final class DumpHeapData {
+        String path;
+        ParcelFileDescriptor fd;
+    }
+
     private final class ApplicationThread extends ApplicationThreadNative {
         private static final String HEAP_COLUMN = "%17s %8s %8s %8s %8s";
         private static final String ONE_COUNT_COLUMN = "%17s %8d";
         private static final String TWO_COUNT_COLUMNS = "%17s %8d %17s %8d";
         private static final String TWO_COUNT_COLUMNS_DB = "%20s %8d %20s %8d";
-        private static final String DB_INFO_FORMAT = "  %8d %8d %14d  %s";
+        private static final String DB_INFO_FORMAT = "  %8s %8s %14s %14s  %s";
 
         // Formatting for checkin service - update version if row format changes
         private static final int ACTIVITY_THREAD_CHECKIN_VERSION = 1;
@@ -394,6 +422,10 @@ public final class ActivityThread {
             queueOrSendMessage(
                 showWindow ? H.SHOW_WINDOW : H.HIDE_WINDOW,
                 token);
+        }
+
+        public final void scheduleSleeping(IBinder token, boolean sleeping) {
+            queueOrSendMessage(H.SLEEPING, token, sleeping ? 1 : 0);
         }
 
         public final void scheduleResumeActivity(IBinder token, boolean isForward) {
@@ -432,19 +464,8 @@ public final class ActivityThread {
         public final void scheduleRelaunchActivity(IBinder token,
                 List<ResultInfo> pendingResults, List<Intent> pendingNewIntents,
                 int configChanges, boolean notResumed, Configuration config) {
-            ActivityClientRecord r = new ActivityClientRecord();
-
-            r.token = token;
-            r.pendingResults = pendingResults;
-            r.pendingIntents = pendingNewIntents;
-            r.startsNotResumed = notResumed;
-            r.createdConfig = config;
-
-            synchronized (mPackages) {
-                mRelaunchingActivities.add(r);
-            }
-
-            queueOrSendMessage(H.RELAUNCH_ACTIVITY, r, configChanges);
+            requestRelaunchActivity(token, pendingResults, pendingNewIntents,
+                    configChanges, notResumed, config, true);
         }
 
         public final void scheduleNewIntent(List<Intent> intents, IBinder token) {
@@ -463,15 +484,9 @@ public final class ActivityThread {
 
         public final void scheduleReceiver(Intent intent, ActivityInfo info,
                 int resultCode, String data, Bundle extras, boolean sync) {
-            ReceiverData r = new ReceiverData();
-
-            r.intent = intent;
+            ReceiverData r = new ReceiverData(intent, resultCode, data, extras,
+                    sync, false, mAppThread.asBinder());
             r.info = info;
-            r.resultCode = resultCode;
-            r.resultData = data;
-            r.resultExtras = extras;
-            r.sync = sync;
-
             queueOrSendMessage(H.RECEIVER, r);
         }
 
@@ -584,15 +599,24 @@ public final class ActivityThread {
             TimeZone.setDefault(null);
         }
 
+        public void clearDnsCache() {
+            // a non-standard API to get this to libcore
+            InetAddress.clearDnsCache();
+        }
+
+        public void setHttpProxy(String host, String port, String exclList) {
+            Proxy.setHttpProxySystemProperty(host, port, exclList);
+        }
+
         public void processInBackground() {
             mH.removeMessages(H.GC_WHEN_IDLE);
             mH.sendMessage(mH.obtainMessage(H.GC_WHEN_IDLE));
         }
 
         public void dumpService(FileDescriptor fd, IBinder servicetoken, String[] args) {
-            DumpServiceInfo data = new DumpServiceInfo();
+            DumpComponentInfo data = new DumpComponentInfo();
             data.fd = fd;
-            data.service = servicetoken;
+            data.token = servicetoken;
             data.args = args;
             data.dumped = false;
             queueOrSendMessage(H.DUMP_SERVICE, data);
@@ -632,6 +656,13 @@ public final class ActivityThread {
             queueOrSendMessage(H.PROFILER_CONTROL, pcd, start ? 1 : 0);
         }
 
+        public void dumpHeap(boolean managed, String path, ParcelFileDescriptor fd) {
+            DumpHeapData dhd = new DumpHeapData();
+            dhd.path = path;
+            dhd.fd = fd;
+            queueOrSendMessage(H.DUMP_HEAP, dhd, managed ? 1 : 0);
+        }
+
         public void setSchedulingGroup(int group) {
             // Note: do this immediately, since going into the foreground
             // should happen regardless of what pending work we have to do
@@ -654,6 +685,27 @@ public final class ActivityThread {
 
         public void scheduleCrash(String msg) {
             queueOrSendMessage(H.SCHEDULE_CRASH, msg);
+        }
+
+        public void dumpActivity(FileDescriptor fd, IBinder activitytoken,
+                String prefix, String[] args) {
+            DumpComponentInfo data = new DumpComponentInfo();
+            data.fd = fd;
+            data.token = activitytoken;
+            data.prefix = prefix;
+            data.args = args;
+            data.dumped = false;
+            queueOrSendMessage(H.DUMP_ACTIVITY, data);
+            synchronized (data) {
+                while (!data.dumped) {
+                    try {
+                        data.wait();
+                    } catch (InterruptedException e) {
+                        // no need to do anything here, we will keep waiting until
+                        // dumped is set
+                    }
+                }
+            }
         }
         
         @Override
@@ -680,14 +732,14 @@ public final class ActivityThread {
             long dalvikAllocated = dalvikMax - dalvikFree;
             long viewInstanceCount = ViewDebug.getViewInstanceCount();
             long viewRootInstanceCount = ViewDebug.getViewRootInstanceCount();
-            long appContextInstanceCount = ContextImpl.getInstanceCount();
-            long activityInstanceCount = Activity.getInstanceCount();
+            long appContextInstanceCount = Debug.countInstancesOfClass(ContextImpl.class);
+            long activityInstanceCount = Debug.countInstancesOfClass(Activity.class);
             int globalAssetCount = AssetManager.getGlobalAssetCount();
             int globalAssetManagerCount = AssetManager.getGlobalAssetManagerCount();
             int binderLocalObjectCount = Debug.getBinderLocalObjectCount();
             int binderProxyObjectCount = Debug.getBinderProxyObjectCount();
             int binderDeathObjectCount = Debug.getBinderDeathObjectCount();
-            int openSslSocketCount = OpenSSLSocketImpl.getInstanceCount();
+            long openSslSocketCount = Debug.countInstancesOfClass(OpenSSLSocketImpl.class);
             long sqliteAllocated = SQLiteDebug.getHeapAllocatedSize() / 1024;
             SQLiteDebug.PagerStats stats = SQLiteDebug.getDatabaseInfo();
 
@@ -769,7 +821,7 @@ public final class ActivityThread {
                 for (int i = 0; i < stats.dbStats.size(); i++) {
                     DbStats dbStats = stats.dbStats.get(i);
                     printRow(pw, DB_INFO_FORMAT, dbStats.pageSize, dbStats.dbSize,
-                            dbStats.lookaside, dbStats.dbName);
+                            dbStats.lookaside, dbStats.cache, dbStats.dbName);
                     pw.print(',');
                 }
 
@@ -820,11 +872,15 @@ public final class ActivityThread {
             int N = stats.dbStats.size();
             if (N > 0) {
                 pw.println(" DATABASES");
-                printRow(pw, "  %8s %8s %14s  %s", "pgsz", "dbsz", "Lookaside(b)", "Dbname");
+                printRow(pw, "  %8s %8s %14s %14s  %s", "pgsz", "dbsz", "Lookaside(b)", "cache",
+                        "Dbname");
                 for (int i = 0; i < N; i++) {
                     DbStats dbStats = stats.dbStats.get(i);
-                    printRow(pw, DB_INFO_FORMAT, dbStats.pageSize, dbStats.dbSize,
-                            dbStats.lookaside, dbStats.dbName);
+                    printRow(pw, DB_INFO_FORMAT,
+                            (dbStats.pageSize > 0) ? String.valueOf(dbStats.pageSize) : " ",
+                            (dbStats.dbSize > 0) ? String.valueOf(dbStats.dbSize) : " ",
+                            (dbStats.lookaside > 0) ? String.valueOf(dbStats.lookaside) : " ",
+                            dbStats.cache, dbStats.dbName);
                 }
             }
 
@@ -878,6 +934,9 @@ public final class ActivityThread {
         public static final int ENABLE_JIT              = 132;
         public static final int DISPATCH_PACKAGE_BROADCAST = 133;
         public static final int SCHEDULE_CRASH          = 134;
+        public static final int DUMP_HEAP               = 135;
+        public static final int DUMP_ACTIVITY           = 136;
+        public static final int SLEEPING                = 137;
         String codeToString(int code) {
             if (DEBUG_MESSAGES) {
                 switch (code) {
@@ -916,6 +975,9 @@ public final class ActivityThread {
                     case ENABLE_JIT: return "ENABLE_JIT";
                     case DISPATCH_PACKAGE_BROADCAST: return "DISPATCH_PACKAGE_BROADCAST";
                     case SCHEDULE_CRASH: return "SCHEDULE_CRASH";
+                    case DUMP_HEAP: return "DUMP_HEAP";
+                    case DUMP_ACTIVITY: return "DUMP_ACTIVITY";
+                    case SLEEPING: return "SLEEPING";
                 }
             }
             return "(unknown)";
@@ -932,7 +994,7 @@ public final class ActivityThread {
                 } break;
                 case RELAUNCH_ACTIVITY: {
                     ActivityClientRecord r = (ActivityClientRecord)msg.obj;
-                    handleRelaunchActivity(r, msg.arg1);
+                    handleRelaunchActivity(r);
                 } break;
                 case PAUSE_ACTIVITY:
                     handlePauseActivity((IBinder)msg.obj, false, msg.arg1 != 0, msg.arg2);
@@ -1011,7 +1073,7 @@ public final class ActivityThread {
                     scheduleGcIdler();
                     break;
                 case DUMP_SERVICE:
-                    handleDumpService((DumpServiceInfo)msg.obj);
+                    handleDumpService((DumpComponentInfo)msg.obj);
                     break;
                 case LOW_MEMORY:
                     handleLowMemory();
@@ -1042,14 +1104,42 @@ public final class ActivityThread {
                     break;
                 case SCHEDULE_CRASH:
                     throw new RemoteServiceException((String)msg.obj);
+                case DUMP_HEAP:
+                    handleDumpHeap(msg.arg1 != 0, (DumpHeapData)msg.obj);
+                    break;
+                case DUMP_ACTIVITY:
+                    handleDumpActivity((DumpComponentInfo)msg.obj);
+                    break;
+                case SLEEPING:
+                    handleSleeping((IBinder)msg.obj, msg.arg1 != 0);
+                    break;
             }
             if (DEBUG_MESSAGES) Slog.v(TAG, "<<< done: " + msg.what);
         }
 
         void maybeSnapshot() {
             if (mBoundApplication != null) {
-                SamplingProfilerIntegration.writeSnapshot(
-                        mBoundApplication.processName);
+                // convert the *private* ActivityThread.PackageInfo to *public* known
+                // android.content.pm.PackageInfo
+                String packageName = mBoundApplication.info.mPackageName;
+                android.content.pm.PackageInfo packageInfo = null;
+                try {
+                    Context context = getSystemContext();
+                    if(context == null) {
+                        Log.e(TAG, "cannot get a valid context");
+                        return;
+                    }
+                    PackageManager pm = context.getPackageManager();
+                    if(pm == null) {
+                        Log.e(TAG, "cannot get a valid PackageManager");
+                        return;
+                    }
+                    packageInfo = pm.getPackageInfo(
+                            packageName, PackageManager.GET_ACTIVITIES);
+                } catch (NameNotFoundException e) {
+                    Log.e(TAG, "cannot get package info for " + packageName, e);
+                }
+                SamplingProfilerIntegration.writeSnapshot(mBoundApplication.processName, packageInfo);
             }
         }
     }
@@ -1462,7 +1552,7 @@ public final class ActivityThread {
 
     public final Activity startActivityNow(Activity parent, String id,
         Intent intent, ActivityInfo activityInfo, IBinder token, Bundle state,
-        Object lastNonConfigurationInstance) {
+        Activity.NonConfigurationInstances lastNonConfigurationInstances) {
         ActivityClientRecord r = new ActivityClientRecord();
             r.token = token;
             r.ident = 0;
@@ -1471,7 +1561,7 @@ public final class ActivityThread {
             r.parent = parent;
             r.embeddedID = id;
             r.activityInfo = activityInfo;
-            r.lastNonConfigurationInstance = lastNonConfigurationInstance;
+            r.lastNonConfigurationInstances = lastNonConfigurationInstances;
         if (localLOGV) {
             ComponentName compname = intent.getComponent();
             String name;
@@ -1560,6 +1650,7 @@ public final class ActivityThread {
             java.lang.ClassLoader cl = r.packageInfo.getClassLoader();
             activity = mInstrumentation.newActivity(
                     cl, component.getClassName(), r.intent);
+            StrictMode.incrementExpectedActivityCount(activity.getClass());
             r.intent.setExtrasClassLoader(cl);
             if (r.state != null) {
                 r.state.setClassLoader(cl);
@@ -1593,14 +1684,12 @@ public final class ActivityThread {
                         + r.activityInfo.name + " with config " + config);
                 activity.attach(appContext, this, getInstrumentation(), r.token,
                         r.ident, app, r.intent, r.activityInfo, title, r.parent,
-                        r.embeddedID, r.lastNonConfigurationInstance,
-                        r.lastNonConfigurationChildInstances, config);
+                        r.embeddedID, r.lastNonConfigurationInstances, config);
 
                 if (customIntent != null) {
                     activity.mIntent = customIntent;
                 }
-                r.lastNonConfigurationInstance = null;
-                r.lastNonConfigurationChildInstances = null;
+                r.lastNonConfigurationInstances = null;
                 activity.mStartedActivity = false;
                 int theme = r.activityInfo.getThemeResource();
                 if (theme != 0) {
@@ -1719,6 +1808,7 @@ public final class ActivityThread {
         for (int i=0; i<N; i++) {
             Intent intent = intents.get(i);
             intent.setExtrasClassLoader(r.activity.getClassLoader());
+            r.activity.mFragments.noteStateNotSaved();
             mInstrumentation.callActivityOnNewIntent(r.activity, intent);
         }
     }
@@ -1729,17 +1819,30 @@ public final class ActivityThread {
         if (r != null) {
             final boolean resumed = !r.paused;
             if (resumed) {
+                r.activity.mTemporaryPause = true;
                 mInstrumentation.callActivityOnPause(r.activity);
             }
             deliverNewIntents(r, intents);
             if (resumed) {
                 mInstrumentation.callActivityOnResume(r.activity);
+                r.activity.mTemporaryPause = false;
             }
         }
     }
 
     private final void handleNewIntent(NewIntentData data) {
         performNewIntents(data.token, data.intents);
+    }
+
+    private static final ThreadLocal<Intent> sCurrentBroadcastIntent = new ThreadLocal<Intent>();
+
+    /**
+     * Return the Intent that's currently being handled by a
+     * BroadcastReceiver on this thread, or null if none.
+     * @hide
+     */
+    public static Intent getIntentBeingBroadcast() {
+        return sCurrentBroadcastIntent.get();
     }
 
     private final void handleReceiver(ReceiverData data) {
@@ -1758,18 +1861,12 @@ public final class ActivityThread {
         try {
             java.lang.ClassLoader cl = packageInfo.getClassLoader();
             data.intent.setExtrasClassLoader(cl);
-            if (data.resultExtras != null) {
-                data.resultExtras.setClassLoader(cl);
-            }
+            data.setExtrasClassLoader(cl);
             receiver = (BroadcastReceiver)cl.loadClass(component).newInstance();
         } catch (Exception e) {
-            try {
-                if (DEBUG_BROADCAST) Slog.i(TAG,
-                        "Finishing failed broadcast to " + data.intent.getComponent());
-                mgr.finishReceiver(mAppThread.asBinder(), data.resultCode,
-                                   data.resultData, data.resultExtras, data.resultAbort);
-            } catch (RemoteException ex) {
-            }
+            if (DEBUG_BROADCAST) Slog.i(TAG,
+                    "Finishing failed broadcast to " + data.intent.getComponent());
+            data.sendFinished(mgr);
             throw new RuntimeException(
                 "Unable to instantiate receiver " + component
                 + ": " + e.toString(), e);
@@ -1787,43 +1884,25 @@ public final class ActivityThread {
                 + ", dir=" + packageInfo.getAppDir());
 
             ContextImpl context = (ContextImpl)app.getBaseContext();
-            receiver.setOrderedHint(true);
-            receiver.setResult(data.resultCode, data.resultData,
-                data.resultExtras);
-            receiver.setOrderedHint(data.sync);
+            sCurrentBroadcastIntent.set(data.intent);
+            receiver.setPendingResult(data);
             receiver.onReceive(context.getReceiverRestrictedContext(),
                     data.intent);
         } catch (Exception e) {
-            try {
-                if (DEBUG_BROADCAST) Slog.i(TAG,
-                        "Finishing failed broadcast to " + data.intent.getComponent());
-                mgr.finishReceiver(mAppThread.asBinder(), data.resultCode,
-                    data.resultData, data.resultExtras, data.resultAbort);
-            } catch (RemoteException ex) {
-            }
+            if (DEBUG_BROADCAST) Slog.i(TAG,
+                    "Finishing failed broadcast to " + data.intent.getComponent());
+            data.sendFinished(mgr);
             if (!mInstrumentation.onException(receiver, e)) {
                 throw new RuntimeException(
                     "Unable to start receiver " + component
                     + ": " + e.toString(), e);
             }
+        } finally {
+            sCurrentBroadcastIntent.set(null);
         }
 
-        QueuedWork.waitToFinish();
-
-        try {
-            if (data.sync) {
-                if (DEBUG_BROADCAST) Slog.i(TAG,
-                        "Finishing ordered broadcast to " + data.intent.getComponent());
-                mgr.finishReceiver(
-                    mAppThread.asBinder(), receiver.getResultCode(),
-                    receiver.getResultData(), receiver.getResultExtras(false),
-                        receiver.getAbortBroadcast());
-            } else {
-                if (DEBUG_BROADCAST) Slog.i(TAG,
-                        "Finishing broadcast to " + data.intent.getComponent());
-                mgr.finishReceiver(mAppThread.asBinder(), 0, null, null, false);
-            }
-        } catch (RemoteException ex) {
+        if (receiver.getPendingResult() != null) {
+            data.finish();
         }
     }
 
@@ -2013,12 +2092,28 @@ public final class ActivityThread {
         }
     }
 
-    private void handleDumpService(DumpServiceInfo info) {
+    private void handleDumpService(DumpComponentInfo info) {
         try {
-            Service s = mServices.get(info.service);
+            Service s = mServices.get(info.token);
             if (s != null) {
                 PrintWriter pw = new PrintWriter(new FileOutputStream(info.fd));
                 s.dump(info.fd, pw, info.args);
+                pw.close();
+            }
+        } finally {
+            synchronized (info) {
+                info.dumped = true;
+                info.notifyAll();
+            }
+        }
+    }
+
+    private void handleDumpActivity(DumpComponentInfo info) {
+        try {
+            ActivityClientRecord r = mActivities.get(info.token);
+            if (r != null && r.activity != null) {
+                PrintWriter pw = new PrintWriter(new FileOutputStream(info.fd));
+                r.activity.dump(info.prefix, info.fd, pw, info.args);
                 pw.close();
             }
         } finally {
@@ -2127,6 +2222,19 @@ public final class ActivityThread {
         return r;
     }
 
+    final void cleanUpPendingRemoveWindows(ActivityClientRecord r) {
+        if (r.mPendingRemoveWindow != null) {
+            r.mPendingRemoveWindowManager.removeViewImmediate(r.mPendingRemoveWindow);
+            IBinder wtoken = r.mPendingRemoveWindow.getWindowToken();
+            if (wtoken != null) {
+                WindowManagerImpl.getDefault().closeAll(wtoken,
+                        r.activity.getClass().getName(), "Activity");
+            }
+        }
+        r.mPendingRemoveWindow = null;
+        r.mPendingRemoveWindowManager = null;
+    }
+
     final void handleResumeActivity(IBinder token, boolean clearHide, boolean isForward) {
         // If we are getting ready to gc after going to the background, well
         // we are back active so skip it.
@@ -2179,6 +2287,9 @@ public final class ActivityThread {
                 r.hideForNow = true;
             }
 
+            // Get rid of anything left hanging around.
+            cleanUpPendingRemoveWindows(r);
+
             // The window is now visible if it has been added, we are not
             // simply finishing, and we are not starting another activity.
             if (!r.activity.mFinished && willBeVisible
@@ -2211,11 +2322,14 @@ public final class ActivityThread {
                 }
             }
 
-            r.nextIdle = mNewActivities;
-            mNewActivities = r;
-            if (localLOGV) Slog.v(
-                TAG, "Scheduling idle handler for " + r);
-            Looper.myQueue().addIdleHandler(new Idler());
+            if (!r.onlyLocalRequest) {
+                r.nextIdle = mNewActivities;
+                mNewActivities = r;
+                if (localLOGV) Slog.v(
+                    TAG, "Scheduling idle handler for " + r);
+                Looper.myQueue().addIdleHandler(new Idler());
+            }
+            r.onlyLocalRequest = false;
 
         } else {
             // If an exception was thrown when trying to resume, then
@@ -2230,37 +2344,42 @@ public final class ActivityThread {
 
     private int mThumbnailWidth = -1;
     private int mThumbnailHeight = -1;
+    private Bitmap mAvailThumbnailBitmap = null;
+    private Canvas mThumbnailCanvas = null;
 
     private final Bitmap createThumbnailBitmap(ActivityClientRecord r) {
-        Bitmap thumbnail = null;
+        Bitmap thumbnail = mAvailThumbnailBitmap;
         try {
-            int w = mThumbnailWidth;
-            int h;
-            if (w < 0) {
-                Resources res = r.activity.getResources();
-                mThumbnailHeight = h =
-                    res.getDimensionPixelSize(com.android.internal.R.dimen.thumbnail_height);
+            if (thumbnail == null) {
+                int w = mThumbnailWidth;
+                int h;
+                if (w < 0) {
+                    Resources res = r.activity.getResources();
+                    mThumbnailHeight = h =
+                        res.getDimensionPixelSize(com.android.internal.R.dimen.thumbnail_height);
 
-                mThumbnailWidth = w =
-                    res.getDimensionPixelSize(com.android.internal.R.dimen.thumbnail_width);
-            } else {
-                h = mThumbnailHeight;
-            }
-
-            // On platforms where we don't want thumbnails, set dims to (0,0)
-            if ((w > 0) && (h > 0)) {
-                View topView = r.activity.getWindow().getDecorView();
-
-                // Maximize bitmap by capturing in native aspect.
-                if (topView.getWidth() >= topView.getHeight()) {
-                    thumbnail = Bitmap.createBitmap(w, h, THUMBNAIL_FORMAT);
+                    mThumbnailWidth = w =
+                        res.getDimensionPixelSize(com.android.internal.R.dimen.thumbnail_width);
                 } else {
-                    thumbnail = Bitmap.createBitmap(h, w, THUMBNAIL_FORMAT);
+                    h = mThumbnailHeight;
                 }
 
-                thumbnail.eraseColor(0);
-                Canvas cv = new Canvas(thumbnail);
+                // On platforms where we don't want thumbnails, set dims to (0,0)
+                if ((w > 0) && (h > 0)) {
+                    thumbnail = Bitmap.createBitmap(w, h, THUMBNAIL_FORMAT);
+                    thumbnail.eraseColor(0);
+                }
+            }
+
+            if (thumbnail != null) {
+                Canvas cv = mThumbnailCanvas;
+                if (cv == null) {
+                    mThumbnailCanvas = cv = new Canvas();
+                }
+    
+                cv.setBitmap(thumbnail);
                 if (!r.activity.onCreateThumbnail(thumbnail, cv)) {
+                    mAvailThumbnailBitmap = thumbnail;
                     thumbnail = null;
                 }
             }
@@ -2288,14 +2407,16 @@ public final class ActivityThread {
             }
 
             r.activity.mConfigChangeFlags |= configChanges;
-            Bundle state = performPauseActivity(token, finished, true);
+            performPauseActivity(token, finished, r.isPreHoneycomb());
 
             // Make sure any pending writes are now committed.
-            QueuedWork.waitToFinish();
+            if (r.isPreHoneycomb()) {
+                QueuedWork.waitToFinish();
+            }
             
             // Tell the activity manager we have paused.
             try {
-                ActivityManagerNative.getDefault().activityPaused(token, state);
+                ActivityManagerNative.getDefault().activityPaused(token);
             } catch (RemoteException ex) {
             }
         }
@@ -2372,9 +2493,9 @@ public final class ActivityThread {
         return state;
     }
 
-    final void performStopActivity(IBinder token) {
+    final void performStopActivity(IBinder token, boolean saveState) {
         ActivityClientRecord r = mActivities.get(token);
-        performStopActivityInner(r, null, false);
+        performStopActivityInner(r, null, false, saveState);
     }
 
     private static class StopInfo {
@@ -2389,9 +2510,18 @@ public final class ActivityThread {
         }
     }
 
+    /**
+     * Core implementation of stopping an activity.  Note this is a little
+     * tricky because the server's meaning of stop is slightly different
+     * than our client -- for the server, stop means to save state and give
+     * it the result when it is done, but the window may still be visible.
+     * For the client, we want to call onStop()/onStart() to indicate when
+     * the activity's UI visibillity changes.
+     */
     private final void performStopActivityInner(ActivityClientRecord r,
-            StopInfo info, boolean keepShown) {
+            StopInfo info, boolean keepShown, boolean saveState) {
         if (localLOGV) Slog.v(TAG, "Performing stop of " + r);
+        Bundle state = null;
         if (r != null) {
             if (!keepShown && r.stopped) {
                 if (r.activity.mFinished) {
@@ -2418,6 +2548,17 @@ public final class ActivityThread {
                                 + r.intent.getComponent().toShortString()
                                 + ": " + e.toString(), e);
                     }
+                }
+            }
+
+            // Next have the activity save its current state and managed dialogs...
+            if (!r.activity.mFinished && saveState) {
+                if (r.state == null) {
+                    state = new Bundle();
+                    mInstrumentation.callActivityOnSaveInstanceState(r.activity, state);
+                    r.state = state;
+                } else {
+                    state = r.state;
                 }
             }
 
@@ -2472,7 +2613,7 @@ public final class ActivityThread {
         r.activity.mConfigChangeFlags |= configChanges;
 
         StopInfo info = new StopInfo();
-        performStopActivityInner(r, info, show);
+        performStopActivityInner(r, info, show, true);
 
         if (localLOGV) Slog.v(
             TAG, "Finishing stop of " + r + ": show=" + show
@@ -2480,10 +2621,15 @@ public final class ActivityThread {
 
         updateVisibility(r, show);
 
+        // Make sure any pending writes are now committed.
+        if (!r.isPreHoneycomb()) {
+            QueuedWork.waitToFinish();
+        }
+
         // Tell activity manager we have been stopped.
         try {
             ActivityManagerNative.getDefault().activityStopped(
-                r.token, info.thumbnail, info.description);
+                r.token, r.state, info.thumbnail, info.description);
         } catch (RemoteException ex) {
         }
     }
@@ -2498,8 +2644,14 @@ public final class ActivityThread {
 
     private final void handleWindowVisibility(IBinder token, boolean show) {
         ActivityClientRecord r = mActivities.get(token);
+        
+        if (r == null) {
+            Log.w(TAG, "handleWindowVisibility: no activity for token " + token);
+            return;
+        }
+        
         if (!show && !r.stopped) {
-            performStopActivityInner(r, null, show);
+            performStopActivityInner(r, null, show, false);
         } else if (show && r.stopped) {
             // If we are getting ready to gc after going to the background, well
             // we are back active so skip it.
@@ -2512,6 +2664,48 @@ public final class ActivityThread {
             if (Config.LOGV) Slog.v(
                 TAG, "Handle window " + r + " visibility: " + show);
             updateVisibility(r, show);
+        }
+    }
+
+    private final void handleSleeping(IBinder token, boolean sleeping) {
+        ActivityClientRecord r = mActivities.get(token);
+
+        if (r == null) {
+            Log.w(TAG, "handleSleeping: no activity for token " + token);
+            return;
+        }
+
+        if (sleeping) {
+            if (!r.stopped && !r.isPreHoneycomb()) {
+                try {
+                    // Now we are idle.
+                    r.activity.performStop();
+                } catch (Exception e) {
+                    if (!mInstrumentation.onException(r.activity, e)) {
+                        throw new RuntimeException(
+                                "Unable to stop activity "
+                                + r.intent.getComponent().toShortString()
+                                + ": " + e.toString(), e);
+                    }
+                }
+                r.stopped = true;
+            }
+
+            // Make sure any pending writes are now committed.
+            if (!r.isPreHoneycomb()) {
+                QueuedWork.waitToFinish();
+            }
+
+            // Tell activity manager we slept.
+            try {
+                ActivityManagerNative.getDefault().activitySlept(r.token);
+            } catch (RemoteException ex) {
+            }
+        } else {
+            if (r.stopped && r.activity.mVisibleFromServer) {
+                r.activity.performRestart();
+                r.stopped = false;
+            }
         }
     }
 
@@ -2554,6 +2748,7 @@ public final class ActivityThread {
                 try {
                     // Now we are idle.
                     r.activity.mCalled = false;
+                    r.activity.mTemporaryPause = true;
                     mInstrumentation.callActivityOnPause(r.activity);
                     if (!r.activity.mCalled) {
                         throw new SuperNotCalledException(
@@ -2574,6 +2769,7 @@ public final class ActivityThread {
             deliverResults(r, res.results);
             if (resumed) {
                 mInstrumentation.callActivityOnResume(r.activity);
+                r.activity.mTemporaryPause = false;
             }
         }
     }
@@ -2585,8 +2781,10 @@ public final class ActivityThread {
     private final ActivityClientRecord performDestroyActivity(IBinder token, boolean finishing,
             int configChanges, boolean getNonConfigInstance) {
         ActivityClientRecord r = mActivities.get(token);
+        Class activityClass = null;
         if (localLOGV) Slog.v(TAG, "Performing finish of " + r);
         if (r != null) {
+            activityClass = r.activity.getClass();
             r.activity.mConfigChangeFlags |= configChanges;
             if (finishing) {
                 r.activity.mFinished = true;
@@ -2631,8 +2829,8 @@ public final class ActivityThread {
             }
             if (getNonConfigInstance) {
                 try {
-                    r.lastNonConfigurationInstance
-                            = r.activity.onRetainNonConfigurationInstance();
+                    r.lastNonConfigurationInstances
+                            = r.activity.retainNonConfigurationInstances();
                 } catch (Exception e) {
                     if (!mInstrumentation.onException(r.activity, e)) {
                         throw new RuntimeException(
@@ -2641,22 +2839,10 @@ public final class ActivityThread {
                                 + ": " + e.toString(), e);
                     }
                 }
-                try {
-                    r.lastNonConfigurationChildInstances
-                            = r.activity.onRetainNonConfigurationChildInstances();
-                } catch (Exception e) {
-                    if (!mInstrumentation.onException(r.activity, e)) {
-                        throw new RuntimeException(
-                                "Unable to retain child activities "
-                                + safeToComponentShortString(r.intent)
-                                + ": " + e.toString(), e);
-                    }
-                }
-
             }
             try {
                 r.activity.mCalled = false;
-                r.activity.onDestroy();
+                mInstrumentation.callActivityOnDestroy(r.activity);
                 if (!r.activity.mCalled) {
                     throw new SuperNotCalledException(
                         "Activity " + safeToComponentShortString(r.intent) +
@@ -2676,7 +2862,7 @@ public final class ActivityThread {
             }
         }
         mActivities.remove(token);
-
+        StrictMode.decrementExpectedActivityCount(activityClass);
         return r;
     }
 
@@ -2690,6 +2876,7 @@ public final class ActivityThread {
         ActivityClientRecord r = performDestroyActivity(token, finishing,
                 configChanges, getNonConfigInstance);
         if (r != null) {
+            cleanUpPendingRemoveWindows(r);
             WindowManager wm = r.activity.getWindowManager();
             View v = r.activity.mDecor;
             if (v != null) {
@@ -2698,16 +2885,31 @@ public final class ActivityThread {
                 }
                 IBinder wtoken = v.getWindowToken();
                 if (r.activity.mWindowAdded) {
-                    wm.removeViewImmediate(v);
+                    if (r.onlyLocalRequest) {
+                        // Hold off on removing this until the new activity's
+                        // window is being added.
+                        r.mPendingRemoveWindow = v;
+                        r.mPendingRemoveWindowManager = wm;
+                    } else {
+                        wm.removeViewImmediate(v);
+                    }
                 }
-                if (wtoken != null) {
+                if (wtoken != null && r.mPendingRemoveWindow == null) {
                     WindowManagerImpl.getDefault().closeAll(wtoken,
                             r.activity.getClass().getName(), "Activity");
                 }
                 r.activity.mDecor = null;
             }
-            WindowManagerImpl.getDefault().closeAll(token,
-                    r.activity.getClass().getName(), "Activity");
+            if (r.mPendingRemoveWindow == null) {
+                // If we are delaying the removal of the activity window, then
+                // we can't clean up all windows here.  Note that we can't do
+                // so later either, which means any windows that aren't closed
+                // by the app will leak.  Well we try to warning them a lot
+                // about leaking windows, because that is a bug, so if they are
+                // using this recreate facility then they get to live with leaks.
+                WindowManagerImpl.getDefault().closeAll(token,
+                        r.activity.getClass().getName(), "Activity");
+            }
 
             // Mocked out contexts won't be participating in the normal
             // process lifecycle, but if we're running with a proper
@@ -2728,17 +2930,70 @@ public final class ActivityThread {
         }
     }
 
-    private final void handleRelaunchActivity(ActivityClientRecord tmp, int configChanges) {
+    public final void requestRelaunchActivity(IBinder token,
+            List<ResultInfo> pendingResults, List<Intent> pendingNewIntents,
+            int configChanges, boolean notResumed, Configuration config,
+            boolean fromServer) {
+        ActivityClientRecord target = null;
+
+        synchronized (mPackages) {
+            for (int i=0; i<mRelaunchingActivities.size(); i++) {
+                ActivityClientRecord r = mRelaunchingActivities.get(i);
+                if (r.token == token) {
+                    target = r;
+                    if (pendingResults != null) {
+                        if (r.pendingResults != null) {
+                            r.pendingResults.addAll(pendingResults);
+                        } else {
+                            r.pendingResults = pendingResults;
+                        }
+                    }
+                    if (pendingNewIntents != null) {
+                        if (r.pendingIntents != null) {
+                            r.pendingIntents.addAll(pendingNewIntents);
+                        } else {
+                            r.pendingIntents = pendingNewIntents;
+                        }
+                    }
+                    break;
+                }
+            }
+
+            if (target == null) {
+                target = new ActivityClientRecord();
+                target.token = token;
+                target.pendingResults = pendingResults;
+                target.pendingIntents = pendingNewIntents;
+                if (!fromServer) {
+                    ActivityClientRecord existing = mActivities.get(token);
+                    if (existing != null) {
+                        target.startsNotResumed = existing.paused;
+                    }
+                    target.onlyLocalRequest = true;
+                }
+                mRelaunchingActivities.add(target);
+                queueOrSendMessage(H.RELAUNCH_ACTIVITY, target);
+            }
+
+            if (fromServer) {
+                target.startsNotResumed = notResumed;
+                target.onlyLocalRequest = false;
+            }
+            if (config != null) {
+                target.createdConfig = config;
+            }
+            target.pendingConfigChanges |= configChanges;
+        }
+    }
+
+    private final void handleRelaunchActivity(ActivityClientRecord tmp) {
         // If we are getting ready to gc after going to the background, well
         // we are back active so skip it.
         unscheduleGcIdler();
 
         Configuration changedConfig = null;
+        int configChanges = 0;
 
-        if (DEBUG_CONFIGURATION) Slog.v(TAG, "Relaunching activity "
-                + tmp.token + " with configChanges=0x"
-                + Integer.toHexString(configChanges));
-        
         // First: make sure we have the most recent configuration and most
         // recent version of the activity, or skip it if some previous call
         // had taken a more recent version.
@@ -2750,6 +3005,7 @@ public final class ActivityThread {
                 ActivityClientRecord r = mRelaunchingActivities.get(i);
                 if (r.token == token) {
                     tmp = r;
+                    configChanges |= tmp.pendingConfigChanges;
                     mRelaunchingActivities.remove(i);
                     i--;
                     N--;
@@ -2760,6 +3016,10 @@ public final class ActivityThread {
                 if (DEBUG_CONFIGURATION) Slog.v(TAG, "Abort, activity not relaunching!");
                 return;
             }
+
+            if (DEBUG_CONFIGURATION) Slog.v(TAG, "Relaunching activity "
+                    + tmp.token + " with configChanges=0x"
+                    + Integer.toHexString(configChanges));
 
             if (mPendingConfiguration != null) {
                 changedConfig = mPendingConfiguration;
@@ -2796,11 +3056,18 @@ public final class ActivityThread {
         }
 
         r.activity.mConfigChangeFlags |= configChanges;
+        r.onlyLocalRequest = tmp.onlyLocalRequest;
         Intent currentIntent = r.activity.mIntent;
 
-        Bundle savedState = null;
+        r.activity.mChangingConfigurations = true;
+
+        // Need to ensure state is saved.
         if (!r.paused) {
-            savedState = performPauseActivity(r.token, false, true);
+            performPauseActivity(r.token, false, r.isPreHoneycomb());
+        }
+        if (r.state == null && !r.stopped && !r.isPreHoneycomb()) {
+            r.state = new Bundle();
+            mInstrumentation.callActivityOnSaveInstanceState(r.activity, r.state);
         }
 
         handleDestroyActivity(r.token, false, configChanges, true);
@@ -2825,9 +3092,6 @@ public final class ActivityThread {
             }
         }
         r.startsNotResumed = tmp.startsNotResumed;
-        if (savedState != null) {
-            r.state = savedState;
-        }
 
         handleLaunchActivity(r, currentIntent);
     }
@@ -2971,7 +3235,7 @@ public final class ActivityThread {
 
         Resources.updateSystemConfiguration(config, dm);
 
-        ContextImpl.ApplicationPackageManager.configurationChanged();
+        ApplicationPackageManager.configurationChanged();
         //Slog.i(TAG, "Configuration changed in " + currentPackageName());
         
         Iterator<WeakReference<Resources>> it =
@@ -3068,6 +3332,25 @@ public final class ActivityThread {
         }
     }
 
+    final void handleDumpHeap(boolean managed, DumpHeapData dhd) {
+        if (managed) {
+            try {
+                Debug.dumpHprofData(dhd.path, dhd.fd.getFileDescriptor());
+            } catch (IOException e) {
+                Slog.w(TAG, "Managed heap dump failed on path " + dhd.path
+                        + " -- can the process access this path?");
+            } finally {
+                try {
+                    dhd.fd.close();
+                } catch (IOException e) {
+                    Slog.w(TAG, "Failure closing profile fd", e);
+                }
+            }
+        } else {
+            Debug.dumpNativeHeap(dhd.fd.getFileDescriptor());
+        }
+    }
+
     final void handleDispatchPackageBroadcast(int cmd, String[] packages) {
         boolean hasPkgInfo = false;
         if (packages != null) {
@@ -3089,7 +3372,7 @@ public final class ActivityThread {
                 mResourcePackages.remove(packages[i]);
             }
         }
-        ContextImpl.ApplicationPackageManager.handlePackageBroadcast(cmd, packages,
+        ApplicationPackageManager.handlePackageBroadcast(cmd, packages,
                 hasPkgInfo);
     }
         
@@ -3159,6 +3442,17 @@ public final class ActivityThread {
         }
 
         /**
+         * For apps targetting SDK Honeycomb or later, we don't allow
+         * network usage on the main event loop / UI thread.
+         *
+         * Note to those grepping:  this is what ultimately throws
+         * NetworkOnMainThreadException ...
+         */
+        if (data.appInfo.targetSdkVersion > 9) {
+            StrictMode.enableDeathOnNetwork();
+        }
+
+        /**
          * Switch this process to density compatibility mode if needed.
          */
         if ((data.appInfo.flags&ApplicationInfo.FLAG_SUPPORTS_SCREEN_DENSITIES)
@@ -3191,6 +3485,16 @@ public final class ActivityThread {
                       + " can be debugged on port 8100...");
             }
         }
+
+        /**
+         * Initialize the default http proxy in this process for the reasons we set the time zone.
+         */
+        IBinder b = ServiceManager.getService(Context.CONNECTIVITY_SERVICE);
+        IConnectivityManager service = IConnectivityManager.Stub.asInterface(b);
+        try {
+            ProxyProperties proxyProperties = service.getProxy();
+            Proxy.setHttpProxySystemProperty(proxyProperties);
+        } catch (RemoteException e) {}
 
         if (data.instrumentationName != null) {
             ContextImpl appContext = new ContextImpl();
@@ -3255,6 +3559,10 @@ public final class ActivityThread {
             mInstrumentation = new Instrumentation();
         }
 
+        if ((data.appInfo.flags&ApplicationInfo.FLAG_LARGE_HEAP) != 0) {
+            dalvik.system.VMRuntime.getRuntime().clearGrowthLimit();
+        }
+
         // If the app is being launched for full backup or restore, bring it up in
         // a restricted environment with the base application class.
         Application app = data.info.makeApplication(data.restrictedBackupMode, null);
@@ -3263,7 +3571,7 @@ public final class ActivityThread {
         List<ProviderInfo> providers = data.providers;
         if (providers != null) {
             installContentProviders(app, providers);
-            // For process that contain content providers, we want to
+            // For process that contains content providers, we want to
             // ensure that the JIT is enabled "at some point".
             mH.sendEmptyMessageDelayed(H.ENABLE_JIT, 10*1000);
         }
@@ -3650,6 +3958,7 @@ public final class ActivityThread {
     }
 
     public static final ActivityThread systemMain() {
+        HardwareRenderer.disable();
         ActivityThread thread = new ActivityThread();
         thread.attach(true);
         return thread;
@@ -3664,6 +3973,11 @@ public final class ActivityThread {
 
     public static final void main(String[] args) {
         SamplingProfilerIntegration.start();
+
+        // CloseGuard defaults to true and can be quite spammy.  We
+        // disable it here, but selectively enable it later (via
+        // StrictMode) on debug builds, but using DropBox, not logs.
+        CloseGuard.setEnabled(false);
 
         Process.setArgV0("<pre-initialized>");
 

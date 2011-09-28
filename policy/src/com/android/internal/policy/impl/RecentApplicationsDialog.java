@@ -17,7 +17,9 @@
 package com.android.internal.policy.impl;
 
 import android.app.ActivityManager;
+import android.app.ActivityManagerNative;
 import android.app.Dialog;
+import android.app.IActivityManager;
 import android.app.StatusBarManager;
 import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
@@ -53,6 +55,11 @@ public class RecentApplicationsDialog extends Dialog implements OnClickListener 
     final TextView[] mIcons = new TextView[NUM_BUTTONS];
     View mNoAppsText;
     IntentFilter mBroadcastIntentFilter = new IntentFilter(Intent.ACTION_CLOSE_SYSTEM_DIALOGS);
+
+    class RecentTag {
+        ActivityManager.RecentTaskInfo info;
+        Intent intent;
+    }
 
     Handler mHandler = new Handler();
     Runnable mCleanup = new Runnable() {
@@ -127,12 +134,17 @@ public class RecentApplicationsDialog extends Dialog implements OnClickListener 
 
         for (TextView b: mIcons) {
             if (b == v) {
-                // prepare a launch intent and send it
-                Intent intent = (Intent)b.getTag();
-                if (intent != null) {
-                    intent.addFlags(Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY);
+                RecentTag tag = (RecentTag)b.getTag();
+                if (tag.info.id >= 0) {
+                    // This is an active task; it should just go to the foreground.
+                    final ActivityManager am = (ActivityManager)
+                            getContext().getSystemService(Context.ACTIVITY_SERVICE);
+                    am.moveTaskToFront(tag.info.id, ActivityManager.MOVE_TASK_WITH_HOME);
+                } else if (tag.intent != null) {
+                    tag.intent.addFlags(Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY
+                            | Intent.FLAG_ACTIVITY_TASK_ON_HOME);
                     try {
-                        getContext().startActivity(intent);
+                        getContext().startActivity(tag.intent);
                     } catch (ActivityNotFoundException e) {
                         Log.w("Recent", "Unable to launch recent task", e);
                     }
@@ -234,7 +246,10 @@ public class RecentApplicationsDialog extends Dialog implements OnClickListener 
                     tv.setText(title);
                     icon = iconUtilities.createIconDrawable(icon);
                     tv.setCompoundDrawables(null, icon, null, null);
-                    tv.setTag(intent);
+                    RecentTag tag = new RecentTag();
+                    tag.info = info;
+                    tag.intent = intent;
+                    tv.setTag(tag);
                     tv.setVisibility(View.VISIBLE);
                     tv.setPressed(false);
                     tv.clearFocus();

@@ -132,7 +132,10 @@ status_t M4vH263Decoder::start(MetaData *) {
     }
 
     MP4DecodingMode actualMode = PVGetDecBitstreamMode(mHandle);
-    CHECK_EQ((int)mode, (int)actualMode);
+    if (mode != actualMode) {
+        PVCleanUpVideoDecoder(mHandle);
+        return UNKNOWN_ERROR;
+    }
 
     PVSetPostProcType((VideoDecControls *) mHandle, 0);
 
@@ -239,6 +242,8 @@ status_t M4vH263Decoder::read(
 
         CHECK_LE(disp_width, buf_width);
         CHECK_LE(disp_height, buf_height);
+
+        mFormat->setRect(kKeyCropRect, 0, 0, disp_width - 1, disp_height - 1);
 
         return INFO_FORMAT_CHANGED;
     }

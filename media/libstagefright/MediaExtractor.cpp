@@ -24,6 +24,10 @@
 #include "include/WAVExtractor.h"
 #include "include/OggExtractor.h"
 #include "include/MPEG2TSExtractor.h"
+#include "include/DRMExtractor.h"
+#include "include/WVMExtractor.h"
+#include "include/FLACExtractor.h"
+#include "include/AACExtractor.h"
 
 #include "matroska/MatroskaExtractor.h"
 
@@ -63,6 +67,25 @@ sp<MediaExtractor> MediaExtractor::Create(
              mime, confidence);
     }
 
+    // DRM MIME type syntax is "drm+type+original" where
+    // type is "es_based" or "container_based" and
+    // original is the content's cleartext MIME type
+    if (!strncmp(mime, "drm+", 4)) {
+        const char *originalMime = strchr(mime+4, '+');
+        if (originalMime == NULL) {
+            // second + not found
+            return NULL;
+        }
+        ++originalMime;
+        if (!strncmp(mime, "drm+es_based+", 13)) {
+            return new DRMExtractor(source, originalMime);
+        } else if (!strncmp(mime, "drm+container_based+", 20)) {
+            mime = originalMime;
+        } else {
+            return NULL;
+        }
+    }
+
     if (!strcasecmp(mime, MEDIA_MIMETYPE_CONTAINER_MPEG4)
             || !strcasecmp(mime, "audio/mp4")) {
         return new MPEG4Extractor(source);
@@ -71,6 +94,8 @@ sp<MediaExtractor> MediaExtractor::Create(
     } else if (!strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_AMR_NB)
             || !strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_AMR_WB)) {
         return new AMRExtractor(source);
+    } else if (!strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_FLAC)) {
+        return new FLACExtractor(source);
     } else if (!strcasecmp(mime, MEDIA_MIMETYPE_CONTAINER_WAV)) {
         return new WAVExtractor(source);
     } else if (!strcasecmp(mime, MEDIA_MIMETYPE_CONTAINER_OGG)) {
@@ -79,6 +104,10 @@ sp<MediaExtractor> MediaExtractor::Create(
         return new MatroskaExtractor(source);
     } else if (!strcasecmp(mime, MEDIA_MIMETYPE_CONTAINER_MPEG2TS)) {
         return new MPEG2TSExtractor(source);
+    } else if (!strcasecmp(mime, MEDIA_MIMETYPE_CONTAINER_WVM)) {
+        return new WVMExtractor(source);
+    } else if (!strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_AAC_ADTS)) {
+        return new AACExtractor(source);
     }
 
     return NULL;

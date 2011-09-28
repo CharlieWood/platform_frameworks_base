@@ -42,7 +42,6 @@ import com.android.internal.telephony.SmsHeader;
 import com.android.internal.telephony.SmsMessageBase;
 import com.android.internal.telephony.SmsMessageBase.TextEncodingDetails;
 import com.android.internal.telephony.TelephonyProperties;
-import com.android.internal.telephony.WspTypeDecoder;
 import com.android.internal.telephony.cdma.sms.SmsEnvelope;
 import com.android.internal.telephony.cdma.sms.UserData;
 import com.android.internal.util.HexDump;
@@ -52,17 +51,12 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 
-import android.content.res.Resources;
-
 
 final class CdmaSMSDispatcher extends SMSDispatcher {
     private static final String TAG = "CDMA";
 
     private byte[] mLastDispatchedSmsFingerprint;
     private byte[] mLastAcknowledgedSmsFingerprint;
-
-    private boolean mCheckForDuplicatePortsInOmadmWapPush = Resources.getSystem().getBoolean(
-            com.android.internal.R.bool.config_duplicate_port_omadm_wappush);
 
     CdmaSMSDispatcher(CDMAPhone phone) {
         super(phone);
@@ -76,6 +70,7 @@ final class CdmaSMSDispatcher extends SMSDispatcher {
      * @param ar AsyncResult passed into the message handler.  ar.result should
      *           be a String representing the status report PDU, as ASCII hex.
      */
+    @Override
     protected void handleStatusReport(AsyncResult ar) {
         Log.d(TAG, "handleStatusReport is a special GSM function, should never be called in CDMA!");
     }
@@ -98,7 +93,8 @@ final class CdmaSMSDispatcher extends SMSDispatcher {
     }
 
     /** {@inheritDoc} */
-    protected int dispatchMessage(SmsMessageBase smsb) {
+    @Override
+    public int dispatchMessage(SmsMessageBase smsb) {
 
         // If sms is null, means there was a parsing error.
         if (smsb == null) {
@@ -109,6 +105,13 @@ final class CdmaSMSDispatcher extends SMSDispatcher {
         String inEcm=SystemProperties.get(TelephonyProperties.PROPERTY_INECM_MODE, "false");
         if (inEcm.equals("true")) {
             return Activity.RESULT_OK;
+        }
+
+        if (mSmsReceiveDisabled) {
+            // Device doesn't support receiving SMS,
+            Log.d(TAG, "Received short message on device which doesn't support "
+                    + "receiving SMS. Ignored.");
+            return Intents.RESULT_SMS_HANDLED;
         }
 
         // See if we have a network duplicate SMS.
@@ -251,13 +254,6 @@ final class CdmaSMSDispatcher extends SMSDispatcher {
             sourcePort |= 0xFF & pdu[index++];
             destinationPort = (0xFF & pdu[index++]) << 8;
             destinationPort |= 0xFF & pdu[index++];
-            // Some carriers incorrectly send duplicate port fields in omadm wap pushes.
-            // If configured, check for that here
-            if (mCheckForDuplicatePortsInOmadmWapPush) {
-                if (checkDuplicatePortOmadmWappush(pdu,index)) {
-                    index = index + 4; // skip duplicate port fields
-                }
-            }
         }
 
         // Lookup all other related parts
@@ -278,7 +274,7 @@ final class CdmaSMSDispatcher extends SMSDispatcher {
             if (cursorCount != totalSegments - 1) {
                 // We don't have all the parts yet, store this one away
                 ContentValues values = new ContentValues();
-                values.put("date", (long) 0);
+                values.put("date", new Long(0));
                 values.put("pdu", HexDump.toHexString(pdu, index, pdu.length - index));
                 values.put("address", address);
                 values.put("reference_number", referenceNumber);
@@ -348,6 +344,7 @@ final class CdmaSMSDispatcher extends SMSDispatcher {
     }
 
     /** {@inheritDoc} */
+    @Override
     protected void sendData(String destAddr, String scAddr, int destPort,
             byte[] data, PendingIntent sentIntent, PendingIntent deliveryIntent) {
         SmsMessage.SubmitPdu pdu = SmsMessage.getSubmitPdu(
@@ -356,6 +353,7 @@ final class CdmaSMSDispatcher extends SMSDispatcher {
     }
 
     /** {@inheritDoc} */
+    @Override
     protected void sendText(String destAddr, String scAddr, String text,
             PendingIntent sentIntent, PendingIntent deliveryIntent) {
         SmsMessage.SubmitPdu pdu = SmsMessage.getSubmitPdu(
@@ -364,6 +362,7 @@ final class CdmaSMSDispatcher extends SMSDispatcher {
     }
 
     /** {@inheritDoc} */
+    @Override
     protected void sendMultipartText(String destAddr, String scAddr,
             ArrayList<String> parts, ArrayList<PendingIntent> sentIntents,
             ArrayList<PendingIntent> deliveryIntents) {
@@ -372,7 +371,7 @@ final class CdmaSMSDispatcher extends SMSDispatcher {
          * TODO(cleanup): There is no real code difference between
          * this and the GSM version, and hence it should be moved to
          * the base class or consolidated somehow, provided calling
-         * the proper submitpdu stuff can be arranged.
+         * the proper submit pdu stuff can be arranged.
          */
 
         int refNumber = getNextConcatenatedRef() & 0x00FF;
@@ -445,8 +444,9 @@ final class CdmaSMSDispatcher extends SMSDispatcher {
     }
 
     /** {@inheritDoc} */
+    @Override
     protected void sendSms(SmsTracker tracker) {
-        HashMap map = tracker.mData;
+        HashMap<String, Object> map = tracker.mData;
 
         // byte smsc[] = (byte[]) map.get("smsc");  // unused for CDMA
         byte pdu[] = (byte[]) map.get("pdu");
@@ -457,11 +457,13 @@ final class CdmaSMSDispatcher extends SMSDispatcher {
     }
 
      /** {@inheritDoc} */
+    @Override
     protected void sendMultipartSms (SmsTracker tracker) {
         Log.d(TAG, "TODO: CdmaSMSDispatcher.sendMultipartSms not implemented");
     }
 
     /** {@inheritDoc} */
+    @Override
     protected void acknowledgeLastIncomingSms(boolean success, int result, Message response){
         // FIXME unit test leaves cm == null. this should change
 
@@ -479,6 +481,24 @@ final class CdmaSMSDispatcher extends SMSDispatcher {
             }
             mLastDispatchedSmsFingerprint = null;
         }
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public void activateCellBroadcastSms(int activate, Message response) {
+        mCm.setCdmaBroadcastActivation((activate == 0), response);
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public void getCellBroadcastSmsConfig(Message response) {
+        mCm.getCdmaBroadcastConfig(response);
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public void setCellBroadcastConfig(int[] configValuesArray, Message response) {
+        mCm.setCdmaBroadcastConfig(configValuesArray, response);
     }
 
     protected void handleBroadcastSms(AsyncResult ar) {
@@ -500,46 +520,5 @@ final class CdmaSMSDispatcher extends SMSDispatcher {
         default:
             return CommandsInterface.CDMA_SMS_FAIL_CAUSE_ENCODING_PROBLEM;
         }
-    }
-
-    /**
-     * Optional check to see if the received WapPush is an OMADM notification with erroneous
-     * extra port fields.
-     * - Some carriers make this mistake.
-     * ex: MSGTYPE-TotalSegments-CurrentSegment
-     *       -SourcePortDestPort-SourcePortDestPort-OMADM PDU
-     * @param origPdu The WAP-WDP PDU segment
-     * @param index Current Index while parsing the PDU.
-     * @return True if OrigPdu is OmaDM Push Message which has duplicate ports.
-     *         False if OrigPdu is NOT OmaDM Push Message which has duplicate ports.
-     */
-    private boolean checkDuplicatePortOmadmWappush(byte[] origPdu, int index) {
-        index += 4;
-        byte[] omaPdu = new byte[origPdu.length - index];
-        System.arraycopy(origPdu, index, omaPdu, 0, omaPdu.length);
-
-        WspTypeDecoder pduDecoder = new WspTypeDecoder(omaPdu);
-        int wspIndex = 2;
-
-        // Process header length field
-        if (pduDecoder.decodeUintvarInteger(wspIndex) == false) {
-            return false;
-        }
-
-        wspIndex += pduDecoder.getDecodedDataLength(); // advance to next field
-
-        // Process content type field
-        if (pduDecoder.decodeContentType(wspIndex) == false) {
-            return false;
-        }
-
-        String mimeType = pduDecoder.getValueString();
-        if (mimeType == null) {
-            int binaryContentType = (int)pduDecoder.getValue32();
-            if (binaryContentType == WspTypeDecoder.CONTENT_TYPE_B_PUSH_SYNCML_NOTI) {
-                return true;
-            }
-        }
-        return false;
     }
 }

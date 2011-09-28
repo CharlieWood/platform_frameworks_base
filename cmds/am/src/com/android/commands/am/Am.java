@@ -102,6 +102,8 @@ public class Am {
             sendBroadcast();
         } else if (op.equals("profile")) {
             runProfile();
+        } else if (op.equals("dumpheap")) {
+            runDumpHeap();
         } else if (op.equals("monitor")) {
             runMonitor();
         } else {
@@ -145,6 +147,31 @@ public class Am {
                 String key = nextArgRequired();
                 String value = nextArgRequired();
                 intent.putExtra(key, Integer.valueOf(value));
+                hasIntentInfo = true;
+            } else if (opt.equals("--eia")) {
+                String key = nextArgRequired();
+                String value = nextArgRequired();
+                String[] strings = value.split(",");
+                int[] list = new int[strings.length];
+                for (int i = 0; i < strings.length; i++) {
+                    list[i] = Integer.valueOf(strings[i]);
+                }
+                intent.putExtra(key, list);
+                hasIntentInfo = true;
+            } else if (opt.equals("--el")) {
+                String key = nextArgRequired();
+                String value = nextArgRequired();
+                intent.putExtra(key, Long.valueOf(value));
+                hasIntentInfo = true;
+            } else if (opt.equals("--ela")) {
+                String key = nextArgRequired();
+                String value = nextArgRequired();
+                String[] strings = value.split(",");
+                long[] list = new long[strings.length];
+                for (int i = 0; i < strings.length; i++) {
+                    list[i] = Long.valueOf(strings[i]);
+                }
+                intent.putExtra(key, list);
                 hasIntentInfo = true;
             } else if (opt.equals("--ez")) {
                 String key = nextArgRequired();
@@ -427,6 +454,28 @@ public class Am {
 
         if (!mAm.profileControl(process, start, profileFile, fd)) {
             throw new AndroidException("PROFILE FAILED on process " + process);
+        }
+    }
+
+    private void runDumpHeap() throws Exception {
+        boolean managed = !"-n".equals(nextOption());
+        String process = nextArgRequired();
+        String heapFile = nextArgRequired();
+        ParcelFileDescriptor fd = null;
+
+        try {
+            fd = ParcelFileDescriptor.open(
+                    new File(heapFile),
+                    ParcelFileDescriptor.MODE_CREATE |
+                    ParcelFileDescriptor.MODE_TRUNCATE |
+                    ParcelFileDescriptor.MODE_READ_WRITE);
+        } catch (FileNotFoundException e) {
+            System.err.println("Error: Unable to open file: " + heapFile);
+            return;
+        }
+
+        if (!mAm.dumpHeap(process, managed, heapFile, fd)) {
+            throw new AndroidException("HEAP DUMP FAILED on process " + process);
         }
     }
 
@@ -894,8 +943,15 @@ public class Am {
                 "        -p <FILE>: write profiling data to <FILE>\n" +
                 "        -w: wait for instrumentation to finish before returning\n" +
                 "\n" +
+                "    run a test package against an application: am instrument [flags] <TEST_PACKAGE>/<RUNNER_CLASS>\n" +
+                "        -e <testrunner_flag> <testrunner_value> [,<testrunner_value>]\n" +
+                "        -w wait for the test to finish (required)\n" +
+                "        -r use with -e perf true to generate raw output for performance measurements\n" +
+                "\n" +
                 "    start profiling: am profile <PROCESS> start <FILE>\n" +
                 "    stop profiling: am profile <PROCESS> stop\n" +
+                "    dump heap: am dumpheap [flags] <PROCESS> <FILE>\n" +
+                "        -n: dump native heap instead of managed heap\n" +
                 "\n" +
                 "    start monitoring: am monitor [--gdb <port>]\n" +
                 "        --gdb: start gdbserv on the given port at crash/ANR\n" +
@@ -906,7 +962,10 @@ public class Am {
                 "        [-e|--es <EXTRA_KEY> <EXTRA_STRING_VALUE> ...]\n" +
                 "        [--esn <EXTRA_KEY> ...]\n" +
                 "        [--ez <EXTRA_KEY> <EXTRA_BOOLEAN_VALUE> ...]\n" +
-                "        [-e|--ei <EXTRA_KEY> <EXTRA_INT_VALUE> ...]\n" +
+                "        [--ei <EXTRA_KEY> <EXTRA_INT_VALUE> ...]\n" +
+                "        [--el <EXTRA_KEY> <EXTRA_LONG_VALUE> ...]\n" +
+                "        [--eia <EXTRA_KEY> <EXTRA_INT_VALUE>[,<EXTRA_INT_VALUE...]]\n" +
+                "        [--ela <EXTRA_KEY> <EXTRA_LONG_VALUE>[,<EXTRA_LONG_VALUE...]]\n" +
                 "        [-n <COMPONENT>] [-f <FLAGS>]\n" +
                 "        [--grant-read-uri-permission] [--grant-write-uri-permission]\n" +
                 "        [--debug-log-resolution]\n" +

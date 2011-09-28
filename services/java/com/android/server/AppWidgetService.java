@@ -16,6 +16,23 @@
 
 package com.android.server;
 
+import java.io.File;
+import java.io.FileDescriptor;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Locale;
+
+import org.xmlpull.v1.XmlPullParser;
+import org.xmlpull.v1.XmlPullParserException;
+import org.xmlpull.v1.XmlSerializer;
+
 import android.app.AlarmManager;
 import android.app.PendingIntent;
 import android.appwidget.AppWidgetManager;
@@ -24,46 +41,39 @@ import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.Intent.FilterComparison;
 import android.content.IntentFilter;
+import android.content.ServiceConnection;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
-import android.content.pm.PackageManager;
 import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
+import android.content.pm.ServiceInfo;
 import android.content.res.Resources;
 import android.content.res.TypedArray;
 import android.content.res.XmlResourceParser;
 import android.net.Uri;
 import android.os.Binder;
 import android.os.Bundle;
+import android.os.IBinder;
 import android.os.Process;
 import android.os.RemoteException;
 import android.os.SystemClock;
 import android.util.AttributeSet;
+import android.util.Log;
+import android.util.Pair;
 import android.util.Slog;
 import android.util.TypedValue;
 import android.util.Xml;
 import android.widget.RemoteViews;
+import android.widget.RemoteViewsService;
 
-import java.io.IOException;
-import java.io.File;
-import java.io.FileDescriptor;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.PrintWriter;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Locale;
-import java.util.HashMap;
-import java.util.HashSet;
-
-import com.android.internal.appwidget.IAppWidgetService;
 import com.android.internal.appwidget.IAppWidgetHost;
+import com.android.internal.appwidget.IAppWidgetService;
 import com.android.internal.util.FastXmlSerializer;
-
-import org.xmlpull.v1.XmlPullParser;
-import org.xmlpull.v1.XmlPullParserException;
-import org.xmlpull.v1.XmlSerializer;
+import com.android.internal.widget.IRemoteViewsAdapterConnection;
+import com.android.internal.widget.IRemoteViewsFactory;
 
 class AppWidgetService extends IAppWidgetService.Stub
 {
@@ -107,6 +117,49 @@ class AppWidgetService extends IAppWidgetService.Stub
         Host host;
     }
 
+    /**
+     * Acts as a proxy between the ServiceConnection and the RemoteViewsAdapterConnection.
+     * This needs to be a static inner class since a reference to the ServiceConnection is held
+     * globally and may lead us to leak AppWidgetService instances (if there were more than one).
+     */
+    static class ServiceConnectionProxy implements ServiceConnection {
+        private final Pair<Integer, Intent.FilterComparison> mKey;
+        private final IBinder mConnectionCb;
+
+        ServiceConnectionProxy(Pair<Integer, Intent.FilterComparison> key, IBinder connectionCb) {
+            mKey = key;
+            mConnectionCb = connectionCb;
+        }
+        public void onServiceConnected(ComponentName name, IBinder service) {
+            final IRemoteViewsAdapterConnection cb =
+                IRemoteViewsAdapterConnection.Stub.asInterface(mConnectionCb);
+            try {
+                cb.onServiceConnected(service);
+            } catch (RemoteException e) {
+                e.printStackTrace();
+            }
+        }
+        public void onServiceDisconnected(ComponentName name) {
+            disconnect();
+        }
+        public void disconnect() {
+            final IRemoteViewsAdapterConnection cb =
+                IRemoteViewsAdapterConnection.Stub.asInterface(mConnectionCb);
+            try {
+                cb.onServiceDisconnected();
+            } catch (RemoteException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    // Manages active connections to RemoteViewsServices
+    private final HashMap<Pair<Integer, FilterComparison>, ServiceConnection>
+        mBoundRemoteViewsServices = new HashMap<Pair<Integer,FilterComparison>,ServiceConnection>();
+    // Manages persistent references to RemoteViewsServices from different App Widgets
+    private final HashMap<FilterComparison, HashSet<Integer>>
+        mRemoteViewsServicesAppWidgets = new HashMap<FilterComparison, HashSet<Integer>>();
+
     Context mContext;
     Locale mLocale;
     PackageManager mPackageManager;
@@ -144,6 +197,7 @@ class AppWidgetService extends IAppWidgetService.Stub
         // update the provider list.
         IntentFilter filter = new IntentFilter();
         filter.addAction(Intent.ACTION_PACKAGE_ADDED);
+        filter.addAction(Intent.ACTION_PACKAGE_CHANGED);
         filter.addAction(Intent.ACTION_PACKAGE_REMOVED);
         filter.addDataScheme("package");
         mContext.registerReceiver(mBroadcastReceiver, filter);
@@ -293,6 +347,9 @@ class AppWidgetService extends IAppWidgetService.Stub
     }
 
     void deleteAppWidgetLocked(AppWidgetId id) {
+        // We first unbind all services that are bound to this id
+        unbindAppWidgetRemoteViewsServicesLocked(id);
+
         Host host = id.host;
         host.instances.remove(id);
         pruneHostLocked(host);
@@ -375,6 +432,167 @@ class AppWidgetService extends IAppWidgetService.Stub
         }
     }
 
+    // Binds to a specific RemoteViewsService
+    public void bindRemoteViewsService(int appWidgetId, Intent intent, IBinder connection) {
+        synchronized (mAppWidgetIds) {
+            AppWidgetId id = lookupAppWidgetIdLocked(appWidgetId);
+            if (id == null) {
+                throw new IllegalArgumentException("bad appWidgetId");
+            }
+            final ComponentName componentName = intent.getComponent();
+            try {
+                final ServiceInfo si = mContext.getPackageManager().getServiceInfo(componentName,
+                        PackageManager.GET_PERMISSIONS);
+                if (!android.Manifest.permission.BIND_REMOTEVIEWS.equals(si.permission)) {
+                    throw new SecurityException("Selected service does not require "
+                            + android.Manifest.permission.BIND_REMOTEVIEWS
+                            + ": " + componentName);
+                }
+            } catch (PackageManager.NameNotFoundException e) {
+                throw new IllegalArgumentException("Unknown component " + componentName);
+            }
+
+            // If there is already a connection made for this service intent, then disconnect from
+            // that first.  (This does not allow multiple connections to the same service under
+            // the same key)
+            ServiceConnectionProxy conn = null;
+            FilterComparison fc = new FilterComparison(intent);
+            Pair<Integer, FilterComparison> key = Pair.create(appWidgetId, fc);
+            if (mBoundRemoteViewsServices.containsKey(key)) {
+                conn = (ServiceConnectionProxy) mBoundRemoteViewsServices.get(key);
+                conn.disconnect();
+                mContext.unbindService(conn);
+                mBoundRemoteViewsServices.remove(key);
+            }
+
+            // Bind to the RemoteViewsService (which will trigger a callback to the
+            // RemoteViewsAdapter.onServiceConnected())
+            final long token = Binder.clearCallingIdentity();
+            try {
+                conn = new ServiceConnectionProxy(key, connection);
+                mContext.bindService(intent, conn, Context.BIND_AUTO_CREATE);
+                mBoundRemoteViewsServices.put(key, conn);
+            } finally {
+                Binder.restoreCallingIdentity(token);
+            }
+
+            // Add it to the mapping of RemoteViewsService to appWidgetIds so that we can determine
+            // when we can call back to the RemoteViewsService later to destroy associated
+            // factories.
+            incrementAppWidgetServiceRefCount(appWidgetId, fc);
+        }
+    }
+
+    // Unbinds from a specific RemoteViewsService
+    public void unbindRemoteViewsService(int appWidgetId, Intent intent) {
+        synchronized (mAppWidgetIds) {
+            // Unbind from the RemoteViewsService (which will trigger a callback to the bound
+            // RemoteViewsAdapter)
+            Pair<Integer, FilterComparison> key = Pair.create(appWidgetId,
+                    new FilterComparison(intent));
+            if (mBoundRemoteViewsServices.containsKey(key)) {
+                // We don't need to use the appWidgetId until after we are sure there is something
+                // to unbind.  Note that this may mask certain issues with apps calling unbind()
+                // more than necessary.
+                AppWidgetId id = lookupAppWidgetIdLocked(appWidgetId);
+                if (id == null) {
+                    throw new IllegalArgumentException("bad appWidgetId");
+                }
+
+                ServiceConnectionProxy conn =
+                    (ServiceConnectionProxy) mBoundRemoteViewsServices.get(key);
+                conn.disconnect();
+                mContext.unbindService(conn);
+                mBoundRemoteViewsServices.remove(key);
+            } else {
+                Log.e("AppWidgetService", "Error (unbindRemoteViewsService): Connection not bound");
+            }
+        }
+    }
+
+    // Unbinds from a RemoteViewsService when we delete an app widget
+    private void unbindAppWidgetRemoteViewsServicesLocked(AppWidgetId id) {
+        int appWidgetId = id.appWidgetId;
+        // Unbind all connections to Services bound to this AppWidgetId
+        Iterator<Pair<Integer, Intent.FilterComparison>> it =
+            mBoundRemoteViewsServices.keySet().iterator();
+        while (it.hasNext()) {
+            final Pair<Integer, Intent.FilterComparison> key = it.next();
+            if (key.first.intValue() == appWidgetId) {
+                final ServiceConnectionProxy conn = (ServiceConnectionProxy)
+                        mBoundRemoteViewsServices.get(key);
+                conn.disconnect();
+                mContext.unbindService(conn);
+                it.remove();
+            }
+        }
+
+        // Check if we need to destroy any services (if no other app widgets are
+        // referencing the same service)
+        decrementAppWidgetServiceRefCount(appWidgetId);
+    }
+
+    // Destroys the cached factory on the RemoteViewsService's side related to the specified intent
+    private void destroyRemoteViewsService(final Intent intent) {
+        final ServiceConnection conn = new ServiceConnection() {
+            @Override
+            public void onServiceConnected(ComponentName name, IBinder service) {
+                final IRemoteViewsFactory cb =
+                    IRemoteViewsFactory.Stub.asInterface(service);
+                try {
+                    cb.onDestroy(intent);
+                } catch (RemoteException e) {
+                    e.printStackTrace();
+                }
+                mContext.unbindService(this);
+            }
+            @Override
+            public void onServiceDisconnected(android.content.ComponentName name) {
+                // Do nothing
+            }
+        };
+
+        // Bind to the service and remove the static intent->factory mapping in the
+        // RemoteViewsService.
+        final long token = Binder.clearCallingIdentity();
+        try {
+            mContext.bindService(intent, conn, Context.BIND_AUTO_CREATE);
+        } finally {
+            Binder.restoreCallingIdentity(token);
+        }
+    }
+
+    // Adds to the ref-count for a given RemoteViewsService intent
+    private void incrementAppWidgetServiceRefCount(int appWidgetId, FilterComparison fc) {
+        HashSet<Integer> appWidgetIds = null;
+        if (mRemoteViewsServicesAppWidgets.containsKey(fc)) {
+            appWidgetIds = mRemoteViewsServicesAppWidgets.get(fc);
+        } else {
+            appWidgetIds = new HashSet<Integer>();
+            mRemoteViewsServicesAppWidgets.put(fc, appWidgetIds);
+        }
+        appWidgetIds.add(appWidgetId);
+    }
+
+    // Subtracts from the ref-count for a given RemoteViewsService intent, prompting a delete if
+    // the ref-count reaches zero.
+    private void decrementAppWidgetServiceRefCount(int appWidgetId) {
+        Iterator<FilterComparison> it =
+            mRemoteViewsServicesAppWidgets.keySet().iterator();
+        while (it.hasNext()) {
+            final FilterComparison key = it.next();
+            final HashSet<Integer> ids = mRemoteViewsServicesAppWidgets.get(key);
+            if (ids.remove(appWidgetId)) {
+                // If we have removed the last app widget referencing this service, then we
+                // should destroy it and remove it from this set
+                if (ids.isEmpty()) {
+                    destroyRemoteViewsService(key.getIntent());
+                    it.remove();
+                }
+            }
+        }
+    }
+
     public AppWidgetProviderInfo getAppWidgetInfo(int appWidgetId) {
         synchronized (mAppWidgetIds) {
             AppWidgetId id = lookupAppWidgetIdLocked(appWidgetId);
@@ -426,6 +644,40 @@ class AppWidgetService extends IAppWidgetService.Stub
         }
     }
 
+    public void partiallyUpdateAppWidgetIds(int[] appWidgetIds, RemoteViews views) {
+        if (appWidgetIds == null) {
+            return;
+        }
+        if (appWidgetIds.length == 0) {
+            return;
+        }
+        final int N = appWidgetIds.length;
+
+        synchronized (mAppWidgetIds) {
+            for (int i=0; i<N; i++) {
+                AppWidgetId id = lookupAppWidgetIdLocked(appWidgetIds[i]);
+                updateAppWidgetInstanceLocked(id, views, true);
+            }
+        }
+    }
+
+    public void notifyAppWidgetViewDataChanged(int[] appWidgetIds, int viewId) {
+        if (appWidgetIds == null) {
+            return;
+        }
+        if (appWidgetIds.length == 0) {
+            return;
+        }
+        final int N = appWidgetIds.length;
+
+        synchronized (mAppWidgetIds) {
+            for (int i=0; i<N; i++) {
+                AppWidgetId id = lookupAppWidgetIdLocked(appWidgetIds[i]);
+                notifyAppWidgetViewDataChangedInstanceLocked(id, viewId);
+            }
+        }
+    }
+
     public void updateAppWidgetProvider(ComponentName provider, RemoteViews views) {
         synchronized (mAppWidgetIds) {
             Provider p = lookupProviderLocked(provider);
@@ -443,17 +695,42 @@ class AppWidgetService extends IAppWidgetService.Stub
     }
 
     void updateAppWidgetInstanceLocked(AppWidgetId id, RemoteViews views) {
+        updateAppWidgetInstanceLocked(id, views, false);
+    }
+
+    void updateAppWidgetInstanceLocked(AppWidgetId id, RemoteViews views, boolean isPartialUpdate) {
         // allow for stale appWidgetIds and other badness
         // lookup also checks that the calling process can access the appWidgetId
         // drop unbound appWidgetIds (shouldn't be possible under normal circumstances)
         if (id != null && id.provider != null && !id.provider.zombie && !id.host.zombie) {
-            id.views = views;
+
+            // We do not want to save this RemoteViews
+            if (!isPartialUpdate) id.views = views;
 
             // is anyone listening?
             if (id.host.callbacks != null) {
                 try {
                     // the lock is held, but this is a oneway call
                     id.host.callbacks.updateAppWidget(id.appWidgetId, views);
+                } catch (RemoteException e) {
+                    // It failed; remove the callback. No need to prune because
+                    // we know that this host is still referenced by this instance.
+                    id.host.callbacks = null;
+                }
+            }
+        }
+    }
+
+    void notifyAppWidgetViewDataChangedInstanceLocked(AppWidgetId id, int viewId) {
+        // allow for stale appWidgetIds and other badness
+        // lookup also checks that the calling process can access the appWidgetId
+        // drop unbound appWidgetIds (shouldn't be possible under normal circumstances)
+        if (id != null && id.provider != null && !id.provider.zombie && !id.host.zombie) {
+            // is anyone listening?
+            if (id.host.callbacks != null) {
+                try {
+                    // the lock is held, but this is a oneway call
+                    id.host.callbacks.viewDataChanged(id.appWidgetId, viewId);
                 } catch (RemoteException e) {
                     // It failed; remove the callback. No need to prune because
                     // we know that this host is still referenced by this instance.
@@ -584,6 +861,12 @@ class AppWidgetService extends IAppWidgetService.Stub
     }
 
     boolean addProviderLocked(ResolveInfo ri) {
+        if ((ri.activityInfo.applicationInfo.flags & ApplicationInfo.FLAG_EXTERNAL_STORAGE) != 0) {
+            return false;
+        }
+        if (!ri.activityInfo.isEnabled()) {
+            return false;
+        }
         Provider p = parseProviderInfoXml(new ComponentName(ri.activityInfo.packageName,
                     ri.activityInfo.name), ri);
         if (p != null) {
@@ -690,15 +973,15 @@ class AppWidgetService extends IAppWidgetService.Stub
                         + "AppWidget provider '" + component + '\'');
                 return null;
             }
-        
+
             AttributeSet attrs = Xml.asAttributeSet(parser);
-            
+
             int type;
             while ((type=parser.next()) != XmlPullParser.END_DOCUMENT
                     && type != XmlPullParser.START_TAG) {
                 // drain whitespace, comments, etc.
             }
-            
+
             String nodeName = parser.getName();
             if (!"appwidget-provider".equals(nodeName)) {
                 Slog.w(TAG, "Meta-data does not start with appwidget-provider tag for"
@@ -718,10 +1001,10 @@ class AppWidgetService extends IAppWidgetService.Stub
 
             Resources res = mPackageManager.getResourcesForApplication(
                     activityInfo.applicationInfo);
-            
+
             TypedArray sa = res.obtainAttributes(attrs,
                     com.android.internal.R.styleable.AppWidgetProviderInfo);
-            
+
             // These dimensions has to be resolved in the application's context.
             // We simply send back the raw complex data, which will be
             // converted to dp in {@link AppWidgetManager#getAppWidgetInfo}.
@@ -730,7 +1013,7 @@ class AppWidgetService extends IAppWidgetService.Stub
             info.minWidth = value != null ? value.data : 0; 
             value = sa.peekValue(com.android.internal.R.styleable.AppWidgetProviderInfo_minHeight);
             info.minHeight = value != null ? value.data : 0;
-                    
+
             info.updatePeriodMillis = sa.getInt(
                     com.android.internal.R.styleable.AppWidgetProviderInfo_updatePeriodMillis, 0);
             info.initialLayout = sa.getResourceId(
@@ -742,6 +1025,14 @@ class AppWidgetService extends IAppWidgetService.Stub
             }
             info.label = activityInfo.loadLabel(mPackageManager).toString();
             info.icon = ri.getIconResource();
+            info.previewImage = sa.getResourceId(
+            		com.android.internal.R.styleable.AppWidgetProviderInfo_previewImage, 0);
+            info.autoAdvanceViewId = sa.getResourceId(
+                    com.android.internal.R.styleable.AppWidgetProviderInfo_autoAdvanceViewId, -1);
+            info.resizableMode = sa.getInt(
+                    com.android.internal.R.styleable.AppWidgetProviderInfo_resizeMode,
+                    AppWidgetProviderInfo.RESIZE_NONE);
+
             sa.recycle();
         } catch (Exception e) {
             // Ok to catch Exception here, because anything going wrong because
@@ -1096,6 +1387,7 @@ class AppWidgetService extends IAppWidgetService.Stub
                 }
             } else {
                 boolean added = false;
+                boolean changed = false;
                 String pkgList[] = null;
                 if (Intent.ACTION_EXTERNAL_APPLICATIONS_AVAILABLE.equals(action)) {
                     pkgList = intent.getStringArrayExtra(Intent.EXTRA_CHANGED_PACKAGE_LIST);
@@ -1114,14 +1406,16 @@ class AppWidgetService extends IAppWidgetService.Stub
                     }
                     pkgList = new String[] { pkgName };
                     added = Intent.ACTION_PACKAGE_ADDED.equals(action);
+                    changed = Intent.ACTION_PACKAGE_CHANGED.equals(action);
                 }
                 if (pkgList == null || pkgList.length == 0) {
                     return;
                 }
-                if (added) {
+                if (added || changed) {
                     synchronized (mAppWidgetIds) {
                         Bundle extras = intent.getExtras();
-                        if (extras != null && extras.getBoolean(Intent.EXTRA_REPLACING, false)) {
+                        if (changed || (extras != null &&
+                                    extras.getBoolean(Intent.EXTRA_REPLACING, false))) {
                             for (String pkgName : pkgList) {
                                 // The package was just upgraded
                                 updateProvidersForPackageLocked(pkgName);

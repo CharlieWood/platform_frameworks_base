@@ -215,7 +215,12 @@ public class CdmaCellLocation extends CellLocation {
                 this.mNetworkId == -1);
     }
 
-
+    /**
+     * @hide
+     */
+    public int getCellId() {
+        return getBaseStationId();
+    }
 }
 
 

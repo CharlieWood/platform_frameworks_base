@@ -16,6 +16,8 @@
 
 package com.android.internal.service.wallpaper;
 
+import java.io.IOException;
+
 import com.android.internal.view.WindowManagerPolicyThread;
 
 import android.app.WallpaperManager;
@@ -39,6 +41,9 @@ import android.content.BroadcastReceiver;
  * Default built-in wallpaper that simply shows a static image.
  */
 public class ImageWallpaper extends WallpaperService {
+    private static final String TAG = "ImageWallpaper";
+    private static final boolean DEBUG = false;
+
     WallpaperManager mWallpaperManager;
     private HandlerThread mThread;
 
@@ -75,10 +80,23 @@ public class ImageWallpaper extends WallpaperService {
         float mXOffset;
         float mYOffset;
 
+        boolean mVisible = true;
+        boolean mRedrawNeeded;
+        boolean mOffsetsChanged;
+        int mLastXTranslation;
+        int mLastYTranslation;
+
         class WallpaperObserver extends BroadcastReceiver {
             public void onReceive(Context context, Intent intent) {
-                updateWallpaper();
-                drawFrame();
+                if (DEBUG) {
+                    Log.d(TAG, "onReceive");
+                }
+
+                synchronized (mLock) {
+                    updateWallpaperLocked();
+                    drawFrameLocked();
+                }
+
                 // Assume we are the only one using the wallpaper in this
                 // process, and force a GC now to release the old wallpaper.
                 System.gc();
@@ -87,12 +105,20 @@ public class ImageWallpaper extends WallpaperService {
 
         @Override
         public void onCreate(SurfaceHolder surfaceHolder) {
+            if (DEBUG) {
+                Log.d(TAG, "onCreate");
+            }
+
             super.onCreate(surfaceHolder);
             IntentFilter filter = new IntentFilter(Intent.ACTION_WALLPAPER_CHANGED);
             mReceiver = new WallpaperObserver();
             registerReceiver(mReceiver, filter);
-            updateWallpaper();
-            surfaceHolder.setSizeFromLayout();
+
+            updateSurfaceSize(surfaceHolder);
+
+            synchronized (mLock) {
+                updateWallpaperLocked();
+            }
         }
 
         @Override
@@ -102,10 +128,39 @@ public class ImageWallpaper extends WallpaperService {
         }
 
         @Override
-        public void onVisibilityChanged(boolean visible) {
-            drawFrame();
+        public void onDesiredSizeChanged(int desiredWidth, int desiredHeight) {
+            super.onDesiredSizeChanged(desiredWidth, desiredHeight);
+            SurfaceHolder surfaceHolder = getSurfaceHolder();
+            if (surfaceHolder != null) {
+                updateSurfaceSize(surfaceHolder);
+            }
         }
-        
+
+        void updateSurfaceSize(SurfaceHolder surfaceHolder) {
+            surfaceHolder.setFixedSize(getDesiredMinimumWidth(), getDesiredMinimumHeight());
+            // Used a fixed size surface, because we are special.  We can do
+            // this because we know the current design of window animations doesn't
+            // cause this to break.
+            //surfaceHolder.setSizeFromLayout();
+        }
+
+        @Override
+        public void onVisibilityChanged(boolean visible) {
+            if (DEBUG) {
+                Log.d(TAG, "onVisibilityChanged: visible=" + visible);
+            }
+
+            synchronized (mLock) {
+                if (mVisible != visible) {
+                    if (DEBUG) {
+                        Log.d(TAG, "Visibility changed to visible=" + visible);
+                    }
+                    mVisible = visible;
+                    drawFrameLocked();
+                }
+            }
+        }
+
         @Override
         public void onTouchEvent(MotionEvent event) {
             super.onTouchEvent(event);
@@ -115,45 +170,88 @@ public class ImageWallpaper extends WallpaperService {
         public void onOffsetsChanged(float xOffset, float yOffset,
                 float xOffsetStep, float yOffsetStep,
                 int xPixels, int yPixels) {
-            mXOffset = xOffset;
-            mYOffset = yOffset;
-            drawFrame();
+            if (DEBUG) {
+                Log.d(TAG, "onOffsetsChanged: xOffset=" + xOffset + ", yOffset=" + yOffset
+                        + ", xOffsetStep=" + xOffsetStep + ", yOffsetStep=" + yOffsetStep
+                        + ", xPixels=" + xPixels + ", yPixels=" + yPixels);
+            }
+
+            synchronized (mLock) {
+                if (mXOffset != xOffset || mYOffset != yOffset) {
+                    if (DEBUG) {
+                        Log.d(TAG, "Offsets changed to (" + xOffset + "," + yOffset + ").");
+                    }
+                    mXOffset = xOffset;
+                    mYOffset = yOffset;
+                    mOffsetsChanged = true;
+                }
+                drawFrameLocked();
+            }
         }
 
         @Override
         public void onSurfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+            if (DEBUG) {
+                Log.d(TAG, "onSurfaceChanged: width=" + width + ", height=" + height);
+            }
+
             super.onSurfaceChanged(holder, format, width, height);
-            drawFrame();
+
+            synchronized (mLock) {
+                mRedrawNeeded = true;
+                drawFrameLocked();
+            }
         }
 
-        @Override
-        public void onSurfaceCreated(SurfaceHolder holder) {
-            super.onSurfaceCreated(holder);
-        }
+        void drawFrameLocked() {
+            if (!mVisible) {
+                if (DEBUG) {
+                    Log.d(TAG, "Suppressed drawFrame since wallpaper is not visible.");
+                }
+                return;
+            }
+            if (!mRedrawNeeded && !mOffsetsChanged) {
+                if (DEBUG) {
+                    Log.d(TAG, "Suppressed drawFrame since redraw is not needed "
+                            + "and offsets have not changed.");
+                }
+                return;
+            }
 
-        @Override
-        public void onSurfaceDestroyed(SurfaceHolder holder) {
-            super.onSurfaceDestroyed(holder);
-        }
-        
-        void drawFrame() {
             SurfaceHolder sh = getSurfaceHolder();
+            final Rect frame = sh.getSurfaceFrame();
+            final Drawable background = mBackground;
+            final int dw = frame.width();
+            final int dh = frame.height();
+            final int bw = background != null ? background.getIntrinsicWidth() : 0;
+            final int bh = background != null ? background.getIntrinsicHeight() : 0;
+            final int availw = dw - bw;
+            final int availh = dh - bh;
+            int xPixels = availw < 0 ? (int)(availw * mXOffset + .5f) : (availw / 2);
+            int yPixels = availh < 0 ? (int)(availh * mYOffset + .5f) : (availh / 2);
+
+            mOffsetsChanged = false;
+            if (!mRedrawNeeded
+                    && xPixels == mLastXTranslation && yPixels == mLastYTranslation) {
+                if (DEBUG) {
+                    Log.d(TAG, "Suppressed drawFrame since the image has not "
+                            + "actually moved an integral number of pixels.");
+                }
+                return;
+            }
+            mRedrawNeeded = false;
+            mLastXTranslation = xPixels;
+            mLastYTranslation = yPixels;
+
             Canvas c = sh.lockCanvas();
             if (c != null) {
-                final Rect frame = sh.getSurfaceFrame();
-                synchronized (mLock) {
-                    final Drawable background = mBackground;
-                    final int dw = frame.width();
-                    final int dh = frame.height();
-                    final int bw = background != null ? background.getIntrinsicWidth() : 0;
-                    final int bh = background != null ? background.getIntrinsicHeight() : 0;
-                    final int availw = dw-bw;
-                    final int availh = dh-bh;
-                    int xPixels = availw < 0 ? (int)(availw*mXOffset+.5f) : (availw/2);
-                    int yPixels = availh < 0 ? (int)(availh*mYOffset+.5f) : (availh/2);
+                try {
+                    if (DEBUG) {
+                        Log.d(TAG, "Redrawing: xPixels=" + xPixels + ", yPixels=" + yPixels);
+                    }
 
                     c.translate(xPixels, yPixels);
-                    if (availw<0 || availh<0) {
+                    if (availw < 0 || availh < 0) {
                         c.save(Canvas.CLIP_SAVE_FLAG);
                         c.clipRect(0, 0, bw, bh, Op.DIFFERENCE);
                         c.drawColor(0xff000000);
@@ -162,19 +260,35 @@ public class ImageWallpaper extends WallpaperService {
                     if (background != null) {
                         background.draw(c);
                     }
+                } finally {
+                    sh.unlockCanvasAndPost(c);
                 }
-                sh.unlockCanvasAndPost(c);
             }
         }
 
-        void updateWallpaper() {
-            synchronized (mLock) {
+        void updateWallpaperLocked() {
+            Throwable exception = null;
+            try {
+                mBackground = mWallpaperManager.getFastDrawable();
+            } catch (RuntimeException e) {
+                exception = e;
+            } catch (OutOfMemoryError e) {
+                exception = e;
+            }
+            if (exception != null) {
+                mBackground = null;
+                // Note that if we do fail at this, and the default wallpaper can't
+                // be loaded, we will go into a cycle.  Don't do a build where the
+                // default wallpaper can't be loaded.
+                Log.w(TAG, "Unable to load wallpaper!", exception);
                 try {
-                    mBackground = mWallpaperManager.getFastDrawable();
-                } catch (RuntimeException e) {
-                    Log.w("ImageWallpaper", "Unable to load wallpaper!", e);
+                    mWallpaperManager.clear();
+                } catch (IOException ex) {
+                    // now we're really screwed.
+                    Log.w(TAG, "Unable reset to default wallpaper!", ex);
                 }
             }
+            mRedrawNeeded = true;
         }
     }
 }

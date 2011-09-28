@@ -16,9 +16,6 @@
 
 package android.content.pm;
 
-import org.xmlpull.v1.XmlPullParser;
-import org.xmlpull.v1.XmlPullParserException;
-
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -30,14 +27,14 @@ import android.content.res.XmlResourceParser;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.PatternMatcher;
-import android.provider.Settings;
 import android.util.AttributeSet;
 import android.util.Config;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.util.TypedValue;
-
 import com.android.internal.util.XmlUtils;
+import org.xmlpull.v1.XmlPullParser;
+import org.xmlpull.v1.XmlPullParserException;
 
 import java.io.BufferedInputStream;
 import java.io.File;
@@ -49,7 +46,6 @@ import java.security.cert.CertificateEncodingException;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.Iterator;
-import java.util.List;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 
@@ -393,11 +389,15 @@ public class PackageParser {
 
         XmlResourceParser parser = null;
         AssetManager assmgr = null;
+        Resources res = null;
         boolean assetError = true;
         try {
             assmgr = new AssetManager();
             int cookie = assmgr.addAssetPath(mArchiveSourcePath);
-            if(cookie != 0) {
+            if (cookie != 0) {
+                res = new Resources(assmgr, metrics, null);
+                assmgr.setConfiguration(0, 0, null, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        Build.VERSION.RESOURCES_SDK_INT);
                 parser = assmgr.openXmlResourceParser(cookie, "AndroidManifest.xml");
                 assetError = false;
             } else {
@@ -407,7 +407,7 @@ public class PackageParser {
             Log.w(TAG, "Unable to read AndroidManifest.xml of "
                     + mArchiveSourcePath, e);
         }
-        if(assetError) {
+        if (assetError) {
             if (assmgr != null) assmgr.close();
             mParseError = PackageManager.INSTALL_PARSE_FAILED_BAD_MANIFEST;
             return null;
@@ -417,7 +417,6 @@ public class PackageParser {
         Exception errorException = null;
         try {
             // XXXX todo: need to figure out correct configuration.
-            Resources res = new Resources(assmgr, metrics, null);
             pkg = parsePackage(res, parser, flags, errorText);
         } catch (Exception e) {
             errorException = e;
@@ -597,6 +596,8 @@ public class PackageParser {
         AssetManager assmgr = null;
         try {
             assmgr = new AssetManager();
+            assmgr.setConfiguration(0, 0, null, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    Build.VERSION.RESOURCES_SDK_INT);
             int cookie = assmgr.addAssetPath(packageFilePath);
             parser = assmgr.openXmlResourceParser(cookie, "AndroidManifest.xml");
         } catch (Exception e) {
@@ -1266,7 +1267,8 @@ public class PackageParser {
                 "<permission-group>", sa,
                 com.android.internal.R.styleable.AndroidManifestPermissionGroup_name,
                 com.android.internal.R.styleable.AndroidManifestPermissionGroup_label,
-                com.android.internal.R.styleable.AndroidManifestPermissionGroup_icon, 0)) {
+                com.android.internal.R.styleable.AndroidManifestPermissionGroup_icon,
+                com.android.internal.R.styleable.AndroidManifestPermissionGroup_logo)) {
             sa.recycle();
             mParseError = PackageManager.INSTALL_PARSE_FAILED_MANIFEST_MALFORMED;
             return null;
@@ -1301,7 +1303,8 @@ public class PackageParser {
                 "<permission>", sa,
                 com.android.internal.R.styleable.AndroidManifestPermission_name,
                 com.android.internal.R.styleable.AndroidManifestPermission_label,
-                com.android.internal.R.styleable.AndroidManifestPermission_icon, 0)) {
+                com.android.internal.R.styleable.AndroidManifestPermission_icon,
+                com.android.internal.R.styleable.AndroidManifestPermission_logo)) {
             sa.recycle();
             mParseError = PackageManager.INSTALL_PARSE_FAILED_MANIFEST_MALFORMED;
             return null;
@@ -1354,7 +1357,8 @@ public class PackageParser {
                 "<permission-tree>", sa,
                 com.android.internal.R.styleable.AndroidManifestPermissionTree_name,
                 com.android.internal.R.styleable.AndroidManifestPermissionTree_label,
-                com.android.internal.R.styleable.AndroidManifestPermissionTree_icon, 0)) {
+                com.android.internal.R.styleable.AndroidManifestPermissionTree_icon,
+                com.android.internal.R.styleable.AndroidManifestPermissionTree_logo)) {
             sa.recycle();
             mParseError = PackageManager.INSTALL_PARSE_FAILED_MANIFEST_MALFORMED;
             return null;
@@ -1398,7 +1402,8 @@ public class PackageParser {
             mParseInstrumentationArgs = new ParsePackageItemArgs(owner, outError,
                     com.android.internal.R.styleable.AndroidManifestInstrumentation_name,
                     com.android.internal.R.styleable.AndroidManifestInstrumentation_label,
-                    com.android.internal.R.styleable.AndroidManifestInstrumentation_icon, 0);
+                    com.android.internal.R.styleable.AndroidManifestInstrumentation_icon,
+                    com.android.internal.R.styleable.AndroidManifestInstrumentation_logo);
             mParseInstrumentationArgs.tag = "<instrumentation>";
         }
         
@@ -1510,6 +1515,8 @@ public class PackageParser {
 
         ai.icon = sa.getResourceId(
                 com.android.internal.R.styleable.AndroidManifestApplication_icon, 0);
+        ai.logo = sa.getResourceId(
+                com.android.internal.R.styleable.AndroidManifestApplication_logo, 0);
         ai.theme = sa.getResourceId(
                 com.android.internal.R.styleable.AndroidManifestApplication_theme, 0);
         ai.descriptionRes = sa.getResourceId(
@@ -1543,6 +1550,10 @@ public class PackageParser {
             ai.flags |= ApplicationInfo.FLAG_VM_SAFE_MODE;
         }
 
+        boolean hardwareAccelerated = sa.getBoolean(
+                com.android.internal.R.styleable.AndroidManifestApplication_hardwareAccelerated,
+                false);
+
         if (sa.getBoolean(
                 com.android.internal.R.styleable.AndroidManifestApplication_hasCode,
                 true)) {
@@ -1568,9 +1579,9 @@ public class PackageParser {
         }
 
         if (sa.getBoolean(
-                com.android.internal.R.styleable.AndroidManifestApplication_neverEncrypt,
+                com.android.internal.R.styleable.AndroidManifestApplication_largeHeap,
                 false)) {
-            ai.flags |= ApplicationInfo.FLAG_NEVER_ENCRYPT;
+            ai.flags |= ApplicationInfo.FLAG_LARGE_HEAP;
         }
 
         String str;
@@ -1642,7 +1653,8 @@ public class PackageParser {
 
             String tagName = parser.getName();
             if (tagName.equals("activity")) {
-                Activity a = parseActivity(owner, res, parser, attrs, flags, outError, false);
+                Activity a = parseActivity(owner, res, parser, attrs, flags, outError, false,
+                        hardwareAccelerated);
                 if (a == null) {
                     mParseError = PackageManager.INSTALL_PARSE_FAILED_MANIFEST_MALFORMED;
                     return false;
@@ -1651,7 +1663,7 @@ public class PackageParser {
                 owner.activities.add(a);
 
             } else if (tagName.equals("receiver")) {
-                Activity a = parseActivity(owner, res, parser, attrs, flags, outError, true);
+                Activity a = parseActivity(owner, res, parser, attrs, flags, outError, true, false);
                 if (a == null) {
                     mParseError = PackageManager.INSTALL_PARSE_FAILED_MANIFEST_MALFORMED;
                     return false;
@@ -1774,6 +1786,11 @@ public class PackageParser {
             outInfo.nonLocalizedLabel = null;
         }
         
+        int logoVal = sa.getResourceId(logoRes, 0);
+        if (logoVal != 0) {
+            outInfo.logo = logoVal;
+        }
+
         TypedValue v = sa.peekValue(labelRes);
         if (v != null && (outInfo.labelRes=v.resourceId) == 0) {
             outInfo.nonLocalizedLabel = v.coerceToString();
@@ -1786,7 +1803,8 @@ public class PackageParser {
 
     private Activity parseActivity(Package owner, Resources res,
             XmlPullParser parser, AttributeSet attrs, int flags, String[] outError,
-            boolean receiver) throws XmlPullParserException, IOException {
+            boolean receiver, boolean hardwareAccelerated)
+            throws XmlPullParserException, IOException {
         TypedArray sa = res.obtainAttributes(attrs,
                 com.android.internal.R.styleable.AndroidManifestActivity);
 
@@ -1794,7 +1812,8 @@ public class PackageParser {
             mParseActivityArgs = new ParseComponentArgs(owner, outError,
                     com.android.internal.R.styleable.AndroidManifestActivity_name,
                     com.android.internal.R.styleable.AndroidManifestActivity_label,
-                    com.android.internal.R.styleable.AndroidManifestActivity_icon, 0,
+                    com.android.internal.R.styleable.AndroidManifestActivity_icon,
+                    com.android.internal.R.styleable.AndroidManifestActivity_logo,
                     mSeparateProcesses,
                     com.android.internal.R.styleable.AndroidManifestActivity_process,
                     com.android.internal.R.styleable.AndroidManifestActivity_description,
@@ -1890,7 +1909,19 @@ public class PackageParser {
             a.info.flags |= ActivityInfo.FLAG_FINISH_ON_CLOSE_SYSTEM_DIALOGS;
         }
 
+        if (sa.getBoolean(
+                com.android.internal.R.styleable.AndroidManifestActivity_immersive,
+                false)) {
+            a.info.flags |= ActivityInfo.FLAG_IMMERSIVE;
+        }
+        
         if (!receiver) {
+            if (sa.getBoolean(
+                    com.android.internal.R.styleable.AndroidManifestActivity_hardwareAccelerated,
+                    hardwareAccelerated)) {
+                a.info.flags |= ActivityInfo.FLAG_HARDWARE_ACCELERATED;
+            }
+
             a.info.launchMode = sa.getInt(
                     com.android.internal.R.styleable.AndroidManifestActivity_launchMode,
                     ActivityInfo.LAUNCH_MULTIPLE);
@@ -2004,7 +2035,8 @@ public class PackageParser {
             mParseActivityAliasArgs = new ParseComponentArgs(owner, outError,
                     com.android.internal.R.styleable.AndroidManifestActivityAlias_name,
                     com.android.internal.R.styleable.AndroidManifestActivityAlias_label,
-                    com.android.internal.R.styleable.AndroidManifestActivityAlias_icon, 0,
+                    com.android.internal.R.styleable.AndroidManifestActivityAlias_icon,
+                    com.android.internal.R.styleable.AndroidManifestActivityAlias_logo,
                     mSeparateProcesses,
                     0,
                     com.android.internal.R.styleable.AndroidManifestActivityAlias_description,
@@ -2132,7 +2164,8 @@ public class PackageParser {
             mParseProviderArgs = new ParseComponentArgs(owner, outError,
                     com.android.internal.R.styleable.AndroidManifestProvider_name,
                     com.android.internal.R.styleable.AndroidManifestProvider_label,
-                    com.android.internal.R.styleable.AndroidManifestProvider_icon, 0,
+                    com.android.internal.R.styleable.AndroidManifestProvider_icon,
+                    com.android.internal.R.styleable.AndroidManifestProvider_logo,
                     mSeparateProcesses,
                     com.android.internal.R.styleable.AndroidManifestProvider_process,
                     com.android.internal.R.styleable.AndroidManifestProvider_description,
@@ -2404,7 +2437,8 @@ public class PackageParser {
             mParseServiceArgs = new ParseComponentArgs(owner, outError,
                     com.android.internal.R.styleable.AndroidManifestService_name,
                     com.android.internal.R.styleable.AndroidManifestService_label,
-                    com.android.internal.R.styleable.AndroidManifestService_icon, 0,
+                    com.android.internal.R.styleable.AndroidManifestService_icon,
+                    com.android.internal.R.styleable.AndroidManifestService_logo,
                     mSeparateProcesses,
                     com.android.internal.R.styleable.AndroidManifestService_process,
                     com.android.internal.R.styleable.AndroidManifestService_description,
@@ -2612,6 +2646,9 @@ public class PackageParser {
         outInfo.icon = sa.getResourceId(
                 com.android.internal.R.styleable.AndroidManifestIntentFilter_icon, 0);
         
+        outInfo.logo = sa.getResourceId(
+                com.android.internal.R.styleable.AndroidManifestIntentFilter_logo, 0);
+
         sa.recycle();
 
         int outerDepth = parser.getDepth();
@@ -2780,6 +2817,9 @@ public class PackageParser {
         // User set enabled state.
         public int mSetEnabled = PackageManager.COMPONENT_ENABLED_STATE_DEFAULT;
 
+        // Whether the package has been stopped.
+        public boolean mSetStopped = false;
+
         // Additional data supplied by callers.
         public Object mExtras;
 
@@ -2879,6 +2919,11 @@ public class PackageParser {
                 outInfo.nonLocalizedLabel = null;
             }
             
+            int logoVal = args.sa.getResourceId(args.logoRes, 0);
+            if (logoVal != 0) {
+                outInfo.logo = logoVal;
+            }
+
             TypedValue v = args.sa.peekValue(args.labelRes);
             if (v != null && (outInfo.labelRes=v.resourceId) == 0) {
                 outInfo.nonLocalizedLabel = v.coerceToString();
@@ -3029,6 +3074,11 @@ public class PackageParser {
             if (!sCompatibilityModeEnabled) {
                 p.applicationInfo.disableCompatibilityMode();
             }
+            if (p.mSetStopped) {
+                p.applicationInfo.flags |= ApplicationInfo.FLAG_STOPPED;
+            } else {
+                p.applicationInfo.flags &= ~ApplicationInfo.FLAG_STOPPED;
+            }
             return p.applicationInfo;
         }
 
@@ -3042,6 +3092,11 @@ public class PackageParser {
         }
         if (!sCompatibilityModeEnabled) {
             ai.disableCompatibilityMode();
+        }
+        if (p.mSetStopped) {
+            p.applicationInfo.flags |= ApplicationInfo.FLAG_STOPPED;
+        } else {
+            p.applicationInfo.flags &= ~ApplicationInfo.FLAG_STOPPED;
         }
         if (p.mSetEnabled == PackageManager.COMPONENT_ENABLED_STATE_ENABLED) {
             ai.enabled = true;

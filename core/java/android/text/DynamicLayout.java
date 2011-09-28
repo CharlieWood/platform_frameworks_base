@@ -92,7 +92,7 @@ extends Layout
         } else {
             mInts = new PackedIntVector(COLUMNS_NORMAL);
             mEllipsizedWidth = width;
-            mEllipsizeAt = ellipsize;
+            mEllipsizeAt = null;
         }
 
         mObjects = new PackedObjectVector<Directions>(1);
@@ -259,10 +259,9 @@ extends Layout
             reflowed = new StaticLayout(true);
 
         reflowed.generate(text, where, where + after,
-                                      getPaint(), getWidth(), getAlignment(),
-                                      getSpacingMultiplier(), getSpacingAdd(),
-                                      false, true, mEllipsize,
-                                      mEllipsizedWidth, mEllipsizeAt);
+                getPaint(), getWidth(), getAlignment(),
+                getSpacingMultiplier(), getSpacingAdd(),
+                false, true, mEllipsizedWidth, mEllipsizeAt);
         int n = reflowed.getLineCount();
 
         // If the new layout has a blank line at the end, but it is not
@@ -310,7 +309,6 @@ extends Layout
 
         Directions[] objects = new Directions[1];
 
-
         for (int i = 0; i < n; i++) {
             ints[START] = reflowed.getLineStart(i) |
                           (reflowed.getParagraphDirection(i) << DIR_SHIFT) |
@@ -342,55 +340,47 @@ extends Layout
         }
     }
 
-    private void dump(boolean show) {
-        int n = getLineCount();
-
-        for (int i = 0; i < n; i++) {
-            System.out.print("line " + i + ": " + getLineStart(i) + " to " + getLineEnd(i) + " ");
-
-            if (show) {
-                System.out.print(getText().subSequence(getLineStart(i),
-                                                       getLineEnd(i)));
-            }
-
-            System.out.println("");
-        }
-
-        System.out.println("");
-    }
-
+    @Override
     public int getLineCount() {
         return mInts.size() - 1;
     }
 
+    @Override
     public int getLineTop(int line) {
         return mInts.getValue(line, TOP);
     }
 
+    @Override
     public int getLineDescent(int line) {
         return mInts.getValue(line, DESCENT);
     }
 
+    @Override
     public int getLineStart(int line) {
         return mInts.getValue(line, START) & START_MASK;
     }
 
+    @Override
     public boolean getLineContainsTab(int line) {
         return (mInts.getValue(line, TAB) & TAB_MASK) != 0;
     }
 
+    @Override
     public int getParagraphDirection(int line) {
         return mInts.getValue(line, DIR) >> DIR_SHIFT;
     }
 
+    @Override
     public final Directions getLineDirections(int line) {
         return mObjects.getValue(line, 0);
     }
 
+    @Override
     public int getTopPadding() {
         return mTopPadding;
     }
 
+    @Override
     public int getBottomPadding() {
         return mBottomPadding;
     }
@@ -400,15 +390,13 @@ extends Layout
         return mEllipsizedWidth;
     }
 
-    private static class ChangeWatcher
-    implements TextWatcher, SpanWatcher
-    {
+    private static class ChangeWatcher implements TextWatcher, SpanWatcher {
         public ChangeWatcher(DynamicLayout layout) {
-            mLayout = new WeakReference(layout);
+            mLayout = new WeakReference<DynamicLayout>(layout);
         }
 
         private void reflow(CharSequence s, int where, int before, int after) {
-            DynamicLayout ml = (DynamicLayout) mLayout.get();
+            DynamicLayout ml = mLayout.get();
 
             if (ml != null)
                 ml.reflow(s, where, before, after);
@@ -416,18 +404,14 @@ extends Layout
                 ((Spannable) s).removeSpan(this);
         }
 
-        public void beforeTextChanged(CharSequence s,
-                                      int where, int before, int after) {
-            ;
+        public void beforeTextChanged(CharSequence s, int where, int before, int after) {
         }
 
-        public void onTextChanged(CharSequence s,
-                                  int where, int before, int after) {
+        public void onTextChanged(CharSequence s, int where, int before, int after) {
             reflow(s, where, before, after);
         }
 
         public void afterTextChanged(Editable s) {
-            ;
         }
 
         public void onSpanAdded(Spannable s, Object o, int start, int end) {
@@ -440,17 +424,17 @@ extends Layout
                 reflow(s, start, end - start, end - start);
         }
 
-        public void onSpanChanged(Spannable s, Object o, int start, int end,
-                                  int nstart, int nend) {
+        public void onSpanChanged(Spannable s, Object o, int start, int end, int nstart, int nend) {
             if (o instanceof UpdateLayout) {
                 reflow(s, start, end - start, end - start);
                 reflow(s, nstart, nend - nstart, nend - nstart);
             }
         }
 
-        private WeakReference mLayout;
+        private WeakReference<DynamicLayout> mLayout;
     }
 
+    @Override
     public int getEllipsisStart(int line) {
         if (mEllipsizeAt == null) {
             return 0;
@@ -459,6 +443,7 @@ extends Layout
         return mInts.getValue(line, ELLIPSIS_START);
     }
 
+    @Override
     public int getEllipsisCount(int line) {
         if (mEllipsizeAt == null) {
             return 0;
@@ -495,7 +480,6 @@ extends Layout
     private static final int COLUMNS_ELLIPSIZE = 5;
 
     private static final int START_MASK = 0x1FFFFFFF;
-    private static final int DIR_MASK   = 0xC0000000;
     private static final int DIR_SHIFT  = 30;
     private static final int TAB_MASK   = 0x20000000;
 

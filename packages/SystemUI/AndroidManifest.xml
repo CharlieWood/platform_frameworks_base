@@ -5,17 +5,23 @@
         >
 
     <uses-permission android:name="android.permission.STATUS_BAR_SERVICE" />
-    <uses-permission android:name="android.permission.MANAGE_USB" />
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+    <uses-permission android:name="android.permission.GET_TASKS" />
 
     <application
         android:persistent="true"
         android:allowClearUserData="false"
+        android:hardwareAccelerated="true"
         android:label="@string/app_label"
         android:icon="@drawable/ic_launcher_settings">
-                 
-        <service
-            android:name=".statusbar.StatusBarService"
-            android:exported="false"
+
+        <!-- Broadcast receiver that gets the broadcast at boot time and starts
+             up everything else.
+             TODO: Should have an android:permission attribute
+             -->
+        <service android:name="SystemUIService"
+            android:exported="true"
             />
 
         <activity android:name=".usb.UsbStorageActivity"
@@ -26,40 +32,12 @@
                 android:excludeFromRecents="true">
         </activity>
 
-        <!-- started from UsbDeviceSettingsManager -->
-        <activity android:name=".usb.UsbConfirmActivity"
-            android:exported="true"
-            android:permission="android.permission.MANAGE_USB"
-            android:theme="@*android:style/Theme.Dialog.Alert"
-            android:finishOnCloseSystemDialogs="true"
-            android:excludeFromRecents="true">
+        <activity android:name=".recent.RecentApplicationsActivity"
+            android:theme="@android:style/Theme.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:launchMode="singleInstance"
+            android:exported="true">
         </activity>
 
-        <!-- started from UsbDeviceSettingsManager -->
-        <activity android:name=".usb.UsbPermissionActivity"
-            android:exported="true"
-            android:permission="android.permission.MANAGE_USB"
-            android:theme="@*android:style/Theme.Dialog.Alert"
-            android:finishOnCloseSystemDialogs="true"
-            android:excludeFromRecents="true">
-        </activity>
-
-        <!-- started from UsbDeviceSettingsManager -->
-        <activity android:name=".usb.UsbResolverActivity"
-            android:exported="true"
-            android:permission="android.permission.MANAGE_USB"
-            android:theme="@*android:style/Theme.Dialog.Alert"
-            android:finishOnCloseSystemDialogs="true"
-            android:excludeFromRecents="true">
-        </activity>
-
-        <!-- started from UsbDeviceSettingsManager -->
-        <activity android:name=".usb.UsbAccessoryUriActivity"
-            android:exported="true"
-            android:permission="android.permission.MANAGE_USB"
-            android:theme="@*android:style/Theme.Dialog.Alert"
-            android:finishOnCloseSystemDialogs="true"
-            android:excludeFromRecents="true">
-        </activity>
     </application>
 </manifest>

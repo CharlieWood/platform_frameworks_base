@@ -18,9 +18,11 @@ package android.view.animation;
 
 import android.content.Context;
 import android.content.res.TypedArray;
+import android.graphics.RectF;
+import android.os.SystemProperties;
 import android.util.AttributeSet;
 import android.util.TypedValue;
-import android.graphics.RectF;
+import dalvik.system.CloseGuard;
 
 /**
  * Abstraction for an Animation that can be applied to Views, Surfaces, or
@@ -86,7 +88,10 @@ public abstract class Animation implements Cloneable {
      * content for the duration of the animation.
      */
     public static final int ZORDER_BOTTOM = -1;
-    
+
+    private static final boolean USE_CLOSEGUARD
+            = SystemProperties.getBoolean("log.closeguard.Animation", false);
+
     /**
      * Set by {@link #getTransformation(long, Transformation)} when the animation ends.
      */
@@ -174,7 +179,13 @@ public abstract class Animation implements Cloneable {
      * Desired Z order mode during animation.
      */
     private int mZAdjustment;
-    
+
+    /**
+     * scalefactor to apply to pivot points, etc. during animation. Subclasses retrieve the
+     * value via getScaleFactor().
+     */
+    private float mScaleFactor = 1f;
+
     /**
      * Don't animate the wallpaper.
      */
@@ -187,6 +198,8 @@ public abstract class Animation implements Cloneable {
     RectF mRegion = new RectF();
     Transformation mTransformation = new Transformation();
     Transformation mPreviousTransformation = new Transformation();
+
+    private final CloseGuard guard = CloseGuard.get();
 
     /**
      * Creates a new animation with a duration of 0ms, the default interpolator, with
@@ -270,6 +283,7 @@ public abstract class Animation implements Cloneable {
         if (mStarted && !mEnded) {
             if (mListener != null) mListener.onAnimationEnd(this);
             mEnded = true;
+            guard.close();
         }
         // Make sure we move the animation to the end
         mStartTime = Long.MIN_VALUE;
@@ -282,6 +296,7 @@ public abstract class Animation implements Cloneable {
     public void detach() {
         if (mStarted && !mEnded) {
             mEnded = true;
+            guard.close();
             if (mListener != null) mListener.onAnimationEnd(this);
         }
     }
@@ -301,7 +316,7 @@ public abstract class Animation implements Cloneable {
      * animated as well as the objects parents. (This is to support animation
      * sizes being specifed relative to these dimensions.)
      *
-     * <p>Objects that interpret a Animations should call this method when
+     * <p>Objects that interpret Animations should call this method when
      * the sizes of the object being animated and its parent are known, and
      * before calling {@link #getTransformation}.
      *
@@ -553,6 +568,19 @@ public abstract class Animation implements Cloneable {
     }
     
     /**
+     * The scale factor is set by the call to <code>getTransformation</code>. Overrides of 
+     * {@link #getTransformation(long, Transformation, float)} will get this value
+     * directly. Overrides of {@link #applyTransformation(float, Transformation)} can
+     * call this method to get the value.
+     * 
+     * @return float The scale factor that should be applied to pre-scaled values in
+     * an Animation such as the pivot points in {@link ScaleAnimation} and {@link RotateAnimation}.
+     */
+    protected float getScaleFactor() {
+        return mScaleFactor;
+    }
+
+    /**
      * If detachWallpaper is true, and this is a window animation of a window
      * that has a wallpaper background, then the window will be detached from
      * the wallpaper while it runs.  That is, the animation will only be applied
@@ -730,11 +758,12 @@ public abstract class Animation implements Cloneable {
      * otherwise.
      *
      * @param currentTime Where we are in the animation. This is wall clock time.
-     * @param outTransformation A tranformation object that is provided by the
+     * @param outTransformation A transformation object that is provided by the
      *        caller and will be filled in by the animation.
      * @return True if the animation is still running
      */
     public boolean getTransformation(long currentTime, Transformation outTransformation) {
+
         if (mStartTime == -1) {
             mStartTime = currentTime;
         }
@@ -761,6 +790,9 @@ public abstract class Animation implements Cloneable {
                     mListener.onAnimationStart(this);
                 }
                 mStarted = true;
+                if (USE_CLOSEGUARD) {
+                    guard.open("cancel or detach or getTransformation");
+                }
             }
 
             if (mFillEnabled) normalizedTime = Math.max(Math.min(normalizedTime, 1.0f), 0.0f);
@@ -777,6 +809,7 @@ public abstract class Animation implements Cloneable {
             if (mRepeatCount == mRepeated) {
                 if (!mEnded) {
                     mEnded = true;
+                    guard.close();
                     if (mListener != null) {
                         mListener.onAnimationEnd(this);
                     }
@@ -805,6 +838,24 @@ public abstract class Animation implements Cloneable {
         }
 
         return mMore;
+    }
+    
+    /**
+     * Gets the transformation to apply at a specified point in time. Implementations of this
+     * method should always replace the specified Transformation or document they are doing
+     * otherwise.
+     *
+     * @param currentTime Where we are in the animation. This is wall clock time.
+     * @param outTransformation A tranformation object that is provided by the
+     *        caller and will be filled in by the animation.
+     * @param scale Scaling factor to apply to any inputs to the transform operation, such
+     *        pivot points being rotated or scaled around.
+     * @return True if the animation is still running
+     */
+    public boolean getTransformation(long currentTime, Transformation outTransformation,
+            float scale) {
+        mScaleFactor = scale;
+        return getTransformation(currentTime, outTransformation);
     }
 
     /**
@@ -912,6 +963,16 @@ public abstract class Animation implements Cloneable {
         if (mFillBefore) {
             final Transformation previousTransformation = mPreviousTransformation;
             applyTransformation(mInterpolator.getInterpolation(0.0f), previousTransformation);
+        }
+    }
+
+    protected void finalize() throws Throwable {
+        try {
+            if (guard != null) {
+                guard.warnIfOpen();
+            }
+        } finally {
+            super.finalize();
         }
     }
 

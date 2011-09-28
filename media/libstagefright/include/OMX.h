@@ -59,9 +59,19 @@ public:
             node_id node, OMX_INDEXTYPE index,
             const void *params, size_t size);
 
+    virtual status_t enableGraphicBuffers(
+            node_id node, OMX_U32 port_index, OMX_BOOL enable);
+
+    virtual status_t storeMetaDataInBuffers(
+            node_id node, OMX_U32 port_index, OMX_BOOL enable);
+
     virtual status_t useBuffer(
             node_id node, OMX_U32 port_index, const sp<IMemory> &params,
             buffer_id *buffer);
+
+    virtual status_t useGraphicBuffer(
+            node_id node, OMX_U32 port_index,
+            const sp<GraphicBuffer> &graphicBuffer, buffer_id *buffer);
 
     virtual status_t allocateBuffer(
             node_id node, OMX_U32 port_index, size_t size,
@@ -86,14 +96,6 @@ public:
             node_id node,
             const char *parameter_name,
             OMX_INDEXTYPE *index);
-
-    virtual sp<IOMXRenderer> createRenderer(
-            const sp<ISurface> &surface,
-            const char *componentName,
-            OMX_COLOR_FORMATTYPE colorFormat,
-            size_t encodedWidth, size_t encodedHeight,
-            size_t displayWidth, size_t displayHeight,
-            int32_t rotationDegrees);
 
     virtual void binderDied(const wp<IBinder> &the_late_who);
 

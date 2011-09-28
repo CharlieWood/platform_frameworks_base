@@ -18,10 +18,9 @@
 
 #define HTTP_STREAM_H_
 
-#include "stagefright_string.h"
-
 #include <sys/types.h>
 
+#include <media/stagefright/foundation/AString.h>
 #include <media/stagefright/MediaErrors.h>
 #include <utils/KeyedVector.h>
 #include <utils/threads.h>
@@ -33,7 +32,7 @@ public:
     HTTPStream();
     ~HTTPStream();
 
-    status_t connect(const char *server, int port = 80);
+    status_t connect(const char *server, int port = -1, bool https = false);
     status_t disconnect();
 
     status_t send(const char *data, size_t size);
@@ -50,7 +49,7 @@ public:
     static const char *kStatusKey;
 
     bool find_header_value(
-            const string &key, string *value) const;
+            const AString &key, AString *value) const;
 
     // Pass a negative value to disable the timeout.
     void setReceiveTimeout(int seconds);
@@ -70,7 +69,10 @@ private:
     Mutex mLock;
     int mSocket;
 
-    KeyedVector<string, string> mHeaders;
+    KeyedVector<AString, AString> mHeaders;
+
+    void *mSSLContext;
+    void *mSSL;
 
     HTTPStream(const HTTPStream &);
     HTTPStream &operator=(const HTTPStream &);

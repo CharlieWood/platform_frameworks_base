@@ -22,12 +22,12 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.database.ContentObserver;
+import android.net.ConnectivityManager;
+import android.net.LinkProperties;
 import android.net.NetworkInfo;
-import android.net.DhcpInfo;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
-import android.net.wifi.WifiStateTracker;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
@@ -43,6 +43,7 @@ import java.net.InetAddress;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
+import java.util.Collection;
 import java.util.List;
 import java.util.Random;
 
@@ -77,9 +78,9 @@ public class WifiWatchdogService {
     
     private Context mContext;
     private ContentResolver mContentResolver;
-    private WifiStateTracker mWifiStateTracker;
     private WifiManager mWifiManager;
-    
+    private ConnectivityManager mConnectivityManager;
+
     /**
      * The main watchdog thread.
      */
@@ -108,10 +109,9 @@ public class WifiWatchdogService {
     /** Whether the current AP check should be canceled. */
     private boolean mShouldCancel;
     
-    WifiWatchdogService(Context context, WifiStateTracker wifiStateTracker) {
+    WifiWatchdogService(Context context) {
         mContext = context;
         mContentResolver = context.getContentResolver();
-        mWifiStateTracker = wifiStateTracker;
         mWifiManager = (WifiManager) context.getSystemService(Context.WIFI_SERVICE);
         
         createThread();
@@ -275,12 +275,13 @@ public class WifiWatchdogService {
     /**
      * Unregister broadcasts and quit the watchdog thread
      */
-    private void quit() {
-        unregisterForWifiBroadcasts();
-        mContext.getContentResolver().unregisterContentObserver(mContentObserver);
-        mHandler.removeAllActions();
-        mHandler.getLooper().quit();
-    }
+    //TODO: Change back to running WWS when needed
+//    private void quit() {
+//        unregisterForWifiBroadcasts();
+//        mContext.getContentResolver().unregisterContentObserver(mContentObserver);
+//        mHandler.removeAllActions();
+//        mHandler.getLooper().quit();
+//    }
 
     /**
      * Waits for the main watchdog thread to create the handler.
@@ -312,19 +313,26 @@ public class WifiWatchdogService {
     }
     
     /**
-     * Gets the DNS of the current AP.
+     * Gets the first DNS of the current AP.
      * 
-     * @return The DNS of the current AP.
+     * @return The first DNS of the current AP.
      */
-    private int getDns() {
-        DhcpInfo addressInfo = mWifiManager.getDhcpInfo();
-        if (addressInfo != null) {
-            return addressInfo.dns1;
-        } else {
-            return -1;
+    private InetAddress getDns() {
+        if (mConnectivityManager == null) {
+            mConnectivityManager = (ConnectivityManager)mContext.getSystemService(
+                    Context.CONNECTIVITY_SERVICE);
         }
+
+        LinkProperties linkProperties = mConnectivityManager.getLinkProperties(
+                ConnectivityManager.TYPE_WIFI);
+        if (linkProperties == null) return null;
+
+        Collection<InetAddress> dnses = linkProperties.getDnses();
+        if (dnses == null || dnses.size() == 0) return null;
+
+        return dnses.iterator().next();
     }
-    
+
     /**
      * Checks whether the DNS can be reached using multiple attempts according
      * to the current setting values.
@@ -332,29 +340,28 @@ public class WifiWatchdogService {
      * @return Whether the DNS is reachable
      */
     private boolean checkDnsConnectivity() {
-        int dns = getDns();
-        if (dns == -1) {
+        InetAddress dns = getDns();
+        if (dns == null) {
             if (V) {
                 myLogV("checkDnsConnectivity: Invalid DNS, returning false");
             }
             return false;
         }
-        
+
         if (V) {
-            myLogV("checkDnsConnectivity: Checking 0x" +
-                    Integer.toHexString(Integer.reverseBytes(dns)) + " for connectivity");
+            myLogV("checkDnsConnectivity: Checking " + dns.getHostAddress() + " for connectivity");
         }
 
         int numInitialIgnoredPings = getInitialIgnoredPingCount();
         int numPings = getPingCount();
         int pingDelay = getPingDelayMs();
         int acceptableLoss = getAcceptablePacketLossPercentage();
-        
+
         /** See {@link Secure#WIFI_WATCHDOG_INITIAL_IGNORED_PING_COUNT} */
         int ignoredPingCounter = 0;
         int pingCounter = 0;
         int successCounter = 0;
-        
+
         // No connectivity check needed
         if (numPings == 0) {
             return true;
@@ -373,20 +380,20 @@ public class WifiWatchdogService {
                 pingCounter++;
                 successCounter++;
             }
-            
+
             if (V) {
                 Slog.v(TAG, (dnsAlive ? "  +" : "  Ignored: -"));
             }
 
             if (shouldCancel()) return false;
-            
+
             try {
                 Thread.sleep(pingDelay);
             } catch (InterruptedException e) {
                 Slog.w(TAG, "Interrupted while pausing between pings", e);
             }
         }
-        
+
         // Do the pings that we use to measure packet loss
         for (; pingCounter < numPings; pingCounter++) {
             if (shouldCancel()) return false;
@@ -403,40 +410,41 @@ public class WifiWatchdogService {
             }
 
             if (shouldCancel()) return false;
-            
+
             try {
                 Thread.sleep(pingDelay);
             } catch (InterruptedException e) {
                 Slog.w(TAG, "Interrupted while pausing between pings", e);
             }
         }
-        
+
         int packetLossPercentage = 100 * (numPings - successCounter) / numPings;
         if (D) {
             Slog.d(TAG, packetLossPercentage
                     + "% packet loss (acceptable is " + acceptableLoss + "%)");
         }
-        
+
         return !shouldCancel() && (packetLossPercentage <= acceptableLoss);
     }
 
     private boolean backgroundCheckDnsConnectivity() {
-        int dns = getDns();
-        if (false && V) {
-            myLogV("backgroundCheckDnsConnectivity: Background checking " + dns +
-                    " for connectivity");
-        }
-        
-        if (dns == -1) {
+        InetAddress dns = getDns();
+
+        if (dns == null) {
             if (V) {
                 myLogV("backgroundCheckDnsConnectivity: DNS is empty, returning false");
             }
             return false;
         }
-        
+
+        if (false && V) {
+            myLogV("backgroundCheckDnsConnectivity: Background checking " +
+                    dns.getHostAddress() + " for connectivity");
+        }
+
         return DnsPinger.isDnsReachable(dns, getBackgroundCheckTimeoutMs());
     }
-    
+
     /**
      * Signals the current action to cancel.
      */
@@ -751,7 +759,7 @@ public class WifiWatchdogService {
         // Black list this "bad" AP, this will cause an attempt to connect to another
         blacklistAp(ap.bssid);
         // Initiate an association to an alternate AP
-        mWifiStateTracker.reassociate();
+        mWifiManager.reassociate();
     }
 
     private void blacklistAp(String bssid) {
@@ -762,10 +770,7 @@ public class WifiWatchdogService {
         // Before taking action, make sure we should not cancel our processing
         if (shouldCancel()) return;
         
-        if (!mWifiStateTracker.addToBlacklist(bssid)) {
-            // There's a known bug where this method returns failure on success
-            //Slog.e(TAG, "Blacklisting " + bssid + " failed");
-        }
+        mWifiManager.addToBlacklist(bssid);
 
         if (D) {
             myLogD("Blacklisting " + bssid);
@@ -860,10 +865,7 @@ public class WifiWatchdogService {
              * (and blacklisted them). Clear the blacklist so the AP with best
              * signal is chosen.
              */
-            if (!mWifiStateTracker.clearBlacklist()) {
-                // There's a known bug where this method returns failure on success
-                //Slog.e(TAG, "Clearing blacklist failed");
-            }
+            mWifiManager.clearBlacklist();
             
             if (V) {
                 myLogV("handleSleep: Set state to SLEEP and cleared blacklist");
@@ -934,7 +936,7 @@ public class WifiWatchdogService {
      * should revert anything done by the watchdog monitoring.
      */
     private void handleReset() {
-        mWifiStateTracker.clearBlacklist();
+        mWifiManager.clearBlacklist();
         setIdleState(true);
     }
     
@@ -1151,7 +1153,7 @@ public class WifiWatchdogService {
 
         private void handleWifiStateChanged(int wifiState) {
             if (wifiState == WifiManager.WIFI_STATE_DISABLED) {
-                quit();
+                onDisconnected();
             } else if (wifiState == WifiManager.WIFI_STATE_ENABLED) {
                 onEnabled();
             }
@@ -1215,43 +1217,37 @@ public class WifiWatchdogService {
         
         /** Used to generate IDs */
         private static Random sRandom = new Random();
-        
-        static boolean isDnsReachable(int dns, int timeout) {
+
+        static boolean isDnsReachable(InetAddress dnsAddress, int timeout) {
             DatagramSocket socket = null;
             try {
                 socket = new DatagramSocket();
-                
+
                 // Set some socket properties
                 socket.setSoTimeout(timeout);
-                
+
                 byte[] buf = new byte[DNS_QUERY_BASE_SIZE];
                 fillQuery(buf);
-                
-                // Send the DNS query
-                byte parts[] = new byte[4];
-                parts[0] = (byte)(dns & 0xff);
-                parts[1] = (byte)((dns >> 8) & 0xff);
-                parts[2] = (byte)((dns >> 16) & 0xff);
-                parts[3] = (byte)((dns >> 24) & 0xff);
 
-                InetAddress dnsAddress = InetAddress.getByAddress(parts);
+                // Send the DNS query
+
                 DatagramPacket packet = new DatagramPacket(buf,
                         buf.length, dnsAddress, DNS_PORT);
                 socket.send(packet);
-                
+
                 // Wait for reply (blocks for the above timeout)
                 DatagramPacket replyPacket = new DatagramPacket(buf, buf.length);
                 socket.receive(replyPacket);
 
                 // If a timeout occurred, an exception would have been thrown.  We got a reply!
                 return true;
-                
+
             } catch (SocketException e) {
                 if (V) {
                     Slog.v(TAG, "DnsPinger.isReachable received SocketException", e);
                 }
                 return false;
-                
+
             } catch (UnknownHostException e) {
                 if (V) {
                     Slog.v(TAG, "DnsPinger.isReachable is unable to resolve the DNS host", e);

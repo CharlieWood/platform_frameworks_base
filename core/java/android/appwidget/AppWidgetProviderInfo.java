@@ -25,6 +25,24 @@ import android.content.ComponentName;
  * correspond to the fields in the <code>&lt;appwidget-provider&gt;</code> xml tag.
  */
 public class AppWidgetProviderInfo implements Parcelable {
+
+    /**
+     * Widget is not resizable.
+     */
+    public static final int RESIZE_NONE             = 0;
+    /**
+     * Widget is resizable in the horizontal axis only.
+     */
+    public static final int RESIZE_HORIZONTAL       = 1;
+    /**
+     * Widget is resizable in the vertical axis only.
+     */
+    public static final int RESIZE_VERTICAL         = 2;
+    /**
+     * Widget is resizable in both the horizontal and vertical axes.
+     */
+    public static final int RESIZE_BOTH = RESIZE_HORIZONTAL | RESIZE_VERTICAL;
+
     /**
      * Identity of this AppWidget component.  This component should be a {@link
      * android.content.BroadcastReceiver}, and it will be sent the AppWidget intents
@@ -98,8 +116,7 @@ public class AppWidgetProviderInfo implements Parcelable {
      * the <code>&lt;receiver&gt;</code> element in the AndroidManifest.xml file.
      */
     public int icon;
-    
-    
+
     /**
      * The previous name, if any, of the app widget receiver. If not supplied, it will be
      * ignored.
@@ -110,6 +127,27 @@ public class AppWidgetProviderInfo implements Parcelable {
      * @hide Pending API approval
      */
     public String oldName;
+
+    /**
+     * The view id of the AppWidget subview which should be auto-advanced by the widget's host.
+     */
+    public int autoAdvanceViewId;
+
+    /**
+     * A preview of what the AppWidget will look like after it's configured.
+     * If not supplied, the AppWidget's icon will be used.
+     *
+     * <p>This field corresponds to the <code>android:previewImage</code> attribute in
+     * the <code>&lt;receiver&gt;</code> element in the AndroidManifest.xml file.
+     */
+	public int previewImage;
+
+    /**
+     * The rules by which a widget can be resized. See {@link #RESIZE_NONE},
+     * {@link #RESIZE_NONE}, {@link #RESIZE_HORIZONTAL},
+     * {@link #RESIZE_VERTICAL}, {@link #RESIZE_BOTH}.
+     */
+    public int resizableMode;
 
     public AppWidgetProviderInfo() {
     }
@@ -130,8 +168,10 @@ public class AppWidgetProviderInfo implements Parcelable {
         }
         this.label = in.readString();
         this.icon = in.readInt();
+        this.previewImage = in.readInt();
+        this.autoAdvanceViewId = in.readInt();
+        this.resizableMode = in.readInt();
     }
-
 
     public void writeToParcel(android.os.Parcel out, int flags) {
         if (this.provider != null) {
@@ -152,6 +192,9 @@ public class AppWidgetProviderInfo implements Parcelable {
         }
         out.writeString(this.label);
         out.writeInt(this.icon);
+        out.writeInt(this.previewImage);
+        out.writeInt(this.autoAdvanceViewId);
+        out.writeInt(this.resizableMode);
     }
 
     public int describeContents() {
@@ -179,5 +222,3 @@ public class AppWidgetProviderInfo implements Parcelable {
         return "AppWidgetProviderInfo(provider=" + this.provider + ")";
     }
 }
-
-

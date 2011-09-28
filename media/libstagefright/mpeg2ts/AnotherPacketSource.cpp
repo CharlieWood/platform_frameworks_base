@@ -33,6 +33,11 @@ AnotherPacketSource::AnotherPacketSource(const sp<MetaData> &meta)
       mEOSResult(OK) {
 }
 
+void AnotherPacketSource::setFormat(const sp<MetaData> &meta) {
+    CHECK(mFormat == NULL);
+    mFormat = meta;
+}
+
 AnotherPacketSource::~AnotherPacketSource() {
 }
 
@@ -46,6 +51,34 @@ status_t AnotherPacketSource::stop() {
 
 sp<MetaData> AnotherPacketSource::getFormat() {
     return mFormat;
+}
+
+status_t AnotherPacketSource::dequeueAccessUnit(sp<ABuffer> *buffer) {
+    buffer->clear();
+
+    Mutex::Autolock autoLock(mLock);
+    while (mEOSResult == OK && mBuffers.empty()) {
+        mCondition.wait(mLock);
+    }
+
+    if (!mBuffers.empty()) {
+        *buffer = *mBuffers.begin();
+        mBuffers.erase(mBuffers.begin());
+
+        int32_t discontinuity;
+        if ((*buffer)->meta()->findInt32("discontinuity", &discontinuity)) {
+
+            if (discontinuity == ATSParser::DISCONTINUITY_FORMATCHANGE) {
+                mFormat.clear();
+            }
+
+            return INFO_DISCONTINUITY;
+        }
+
+        return OK;
+    }
+
+    return mEOSResult;
 }
 
 status_t AnotherPacketSource::read(
@@ -62,13 +95,15 @@ status_t AnotherPacketSource::read(
         mBuffers.erase(mBuffers.begin());
 
         int32_t discontinuity;
-        if (buffer->meta()->findInt32("discontinuity", &discontinuity)
-                && discontinuity) {
+        if (buffer->meta()->findInt32("discontinuity", &discontinuity)) {
+            if (discontinuity == ATSParser::DISCONTINUITY_FORMATCHANGE) {
+                mFormat.clear();
+            }
+
             return INFO_DISCONTINUITY;
         } else {
-            uint64_t timeUs;
-            CHECK(buffer->meta()->findInt64(
-                        "time", (int64_t *)&timeUs));
+            int64_t timeUs;
+            CHECK(buffer->meta()->findInt64("timeUs", &timeUs));
 
             MediaBuffer *mediaBuffer = new MediaBuffer(buffer->size());
             mediaBuffer->meta_data()->setInt64(kKeyTime, timeUs);
@@ -92,7 +127,7 @@ void AnotherPacketSource::queueAccessUnit(const sp<ABuffer> &buffer) {
     }
 
     int64_t timeUs;
-    CHECK(buffer->meta()->findInt64("time", &timeUs));
+    CHECK(buffer->meta()->findInt64("timeUs", &timeUs));
     LOGV("queueAccessUnit timeUs=%lld us (%.2f secs)", timeUs, timeUs / 1E6);
 
     Mutex::Autolock autoLock(mLock);
@@ -100,20 +135,28 @@ void AnotherPacketSource::queueAccessUnit(const sp<ABuffer> &buffer) {
     mCondition.signal();
 }
 
-void AnotherPacketSource::queueDiscontinuity() {
+void AnotherPacketSource::queueDiscontinuity(
+        ATSParser::DiscontinuityType type) {
     sp<ABuffer> buffer = new ABuffer(0);
-    buffer->meta()->setInt32("discontinuity", true);
+    buffer->meta()->setInt32("discontinuity", static_cast<int32_t>(type));
 
     Mutex::Autolock autoLock(mLock);
+
+#if 0
+    if (type == ATSParser::DISCONTINUITY_SEEK
+            || type == ATSParser::DISCONTINUITY_FORMATCHANGE) {
+        // XXX Fix this: This will also clear any pending discontinuities,
+        // If there's a pending DISCONTINUITY_FORMATCHANGE and the new
+        // discontinuity is "just" a DISCONTINUITY_SEEK, this will effectively
+        // downgrade the type of discontinuity received by the client.
+
+        mBuffers.clear();
+        mEOSResult = OK;
+    }
+#endif
 
     mBuffers.push_back(buffer);
     mCondition.signal();
-}
-
-void AnotherPacketSource::clear() {
-    Mutex::Autolock autoLock(mLock);
-    mBuffers.clear();
-    mEOSResult = OK;
 }
 
 void AnotherPacketSource::signalEOS(status_t result) {
@@ -132,6 +175,21 @@ bool AnotherPacketSource::hasBufferAvailable(status_t *finalResult) {
 
     *finalResult = mEOSResult;
     return false;
+}
+
+status_t AnotherPacketSource::nextBufferTime(int64_t *timeUs) {
+    *timeUs = 0;
+
+    Mutex::Autolock autoLock(mLock);
+
+    if (mBuffers.empty()) {
+        return mEOSResult != OK ? mEOSResult : -EWOULDBLOCK;
+    }
+
+    sp<ABuffer> buffer = *mBuffers.begin();
+    CHECK(buffer->meta()->findInt64("timeUs", timeUs));
+
+    return OK;
 }
 
 }  // namespace android

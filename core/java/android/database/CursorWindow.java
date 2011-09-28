@@ -16,20 +16,38 @@
 
 package android.database;
 
+import android.content.res.Resources;
+import android.database.sqlite.DatabaseObjectNotClosedException;
 import android.database.sqlite.SQLiteClosable;
+import android.os.Binder;
 import android.os.IBinder;
 import android.os.Parcel;
 import android.os.Parcelable;
+import android.os.Process;
+import android.os.StrictMode;
+import android.util.Log;
+import android.util.SparseIntArray;
 
 /**
  * A buffer containing multiple cursor rows.
  */
 public class CursorWindow extends SQLiteClosable implements Parcelable {
-    /** The pointer to the native window class */
-    @SuppressWarnings("unused")
+    private static final String STATS_TAG = "CursorWindowStats";
+
+    /** The cursor window size. resource xml file specifies the value in kB.
+     * convert it to bytes here by multiplying with 1024.
+     */
+    private static final int sCursorWindowSize =
+        Resources.getSystem().getInteger(
+                com.android.internal.R.integer.config_cursorWindowSize) * 1024;
+
+    /** The pointer to the native window class. set by the native methods in
+     * android_database_CursorWindow.cpp
+     */
     private int nWindow;
 
     private int mStartPos;
+    private final Throwable mStackTrace;
 
     /**
      * Creates a new empty window.
@@ -38,7 +56,19 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      */
     public CursorWindow(boolean localWindow) {
         mStartPos = 0;
-        native_init(localWindow);
+        int rslt = native_init(sCursorWindowSize, localWindow);
+        printDebugMsgIfError(rslt);
+        recordNewWindow(Binder.getCallingPid(), nWindow);
+        mStackTrace = new DatabaseObjectNotClosedException().fillInStackTrace();
+    }
+
+    private void printDebugMsgIfError(int rslt) {
+        if (rslt > 0) {
+            // cursor window allocation failed. either low memory or too many cursors being open.
+            // print info to help in debugging this.
+            throw new CursorWindowAllocationException("Cursor Window allocation of " +
+                    sCursorWindowSize/1024 + " kb failed. " + printStats());
+        }
     }
 
     /**
@@ -217,17 +247,12 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      * @param row the row to read from, row - getStartPosition() being the actual row in the window
      * @param col the column to read from
      * @return {@code true} if given field is {@code NULL}
+     * @deprecated use {@link #getType(int, int)} instead
      */
+    @Deprecated
     public boolean isNull(int row, int col) {
-        acquireReference();
-        try {
-            return isNull_native(row - mStartPos, col);
-        } finally {
-            releaseReference();
-        }
+        return getType(row, col) == Cursor.FIELD_TYPE_NULL;
     }
-    
-    private native boolean isNull_native(int row, int col);
     
     /**
      * Returns a byte array for the given field.
@@ -245,7 +270,42 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
         }
     }
 
+    /**
+     * Returns the value at (<code>row</code>, <code>col</code>) as a <code>byte</code> array.
+     *
+     * <p>If the value is null, then <code>null</code> is returned. If the
+     * type of column <code>col</code> is a string type, then the result
+     * is the array of bytes that make up the internal representation of the
+     * string value. If the type of column <code>col</code> is integral or floating-point,
+     * then an {@link SQLiteException} is thrown.
+     */
     private native byte[] getBlob_native(int row, int col);
+
+    /**
+     * Returns data type of the given column's value.
+     *<p>
+     * Returned column types are
+     * <ul>
+     *   <li>{@link Cursor#FIELD_TYPE_NULL}</li>
+     *   <li>{@link Cursor#FIELD_TYPE_INTEGER}</li>
+     *   <li>{@link Cursor#FIELD_TYPE_FLOAT}</li>
+     *   <li>{@link Cursor#FIELD_TYPE_STRING}</li>
+     *   <li>{@link Cursor#FIELD_TYPE_BLOB}</li>
+     *</ul>
+     *</p>
+     *
+     * @param row the row to read from, row - getStartPosition() being the actual row in the window
+     * @param col the column to read from
+     * @return the value type
+     */
+    public int getType(int row, int col) {
+        acquireReference();
+        try {
+            return getType_native(row - mStartPos, col);
+        } finally {
+            releaseReference();
+        }
+    }
 
     /**
      * Checks if a field contains either a blob or is null.
@@ -253,14 +313,12 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      * @param row the row to read from, row - getStartPosition() being the actual row in the window
      * @param col the column to read from
      * @return {@code true} if given field is {@code NULL} or a blob
+     * @deprecated use {@link #getType(int, int)} instead
      */
+    @Deprecated
     public boolean isBlob(int row, int col) {
-        acquireReference();
-        try {
-            return isBlob_native(row - mStartPos, col);
-        } finally {
-            releaseReference();
-        }
+        int type = getType(row, col);
+        return type == Cursor.FIELD_TYPE_BLOB || type == Cursor.FIELD_TYPE_NULL;
     }
 
     /**
@@ -269,14 +327,11 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      * @param row the row to read from, row - getStartPosition() being the actual row in the window
      * @param col the column to read from
      * @return {@code true} if given field is a long
+     * @deprecated use {@link #getType(int, int)} instead
      */
+    @Deprecated
     public boolean isLong(int row, int col) {
-        acquireReference();
-        try {
-            return isInteger_native(row - mStartPos, col);
-        } finally {
-            releaseReference();
-        }
+        return getType(row, col) == Cursor.FIELD_TYPE_INTEGER;
     }
 
     /**
@@ -285,14 +340,11 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      * @param row the row to read from, row - getStartPosition() being the actual row in the window
      * @param col the column to read from
      * @return {@code true} if given field is a float
+     * @deprecated use {@link #getType(int, int)} instead
      */
+    @Deprecated
     public boolean isFloat(int row, int col) {
-        acquireReference();
-        try {
-            return isFloat_native(row - mStartPos, col);
-        } finally {
-            releaseReference();
-        }
+        return getType(row, col) == Cursor.FIELD_TYPE_FLOAT;
     }
 
     /**
@@ -301,20 +353,15 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
      * @param row the row to read from, row - getStartPosition() being the actual row in the window
      * @param col the column to read from
      * @return {@code true} if given field is {@code NULL} or a String
+     * @deprecated use {@link #getType(int, int)} instead
      */
+    @Deprecated
     public boolean isString(int row, int col) {
-        acquireReference();
-        try {
-            return isString_native(row - mStartPos, col);
-        } finally {
-            releaseReference();
-        }
+        int type = getType(row, col);
+        return type == Cursor.FIELD_TYPE_STRING || type == Cursor.FIELD_TYPE_NULL;
     }
 
-    private native boolean isBlob_native(int row, int col);
-    private native boolean isString_native(int row, int col);
-    private native boolean isInteger_native(int row, int col);
-    private native boolean isFloat_native(int row, int col);
+    private native int getType_native(int row, int col);
 
     /**
      * Returns a String for the given field.
@@ -332,6 +379,19 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
         }
     }
     
+    /**
+     * Returns the value at (<code>row</code>, <code>col</code>) as a <code>String</code>.
+     *
+     * <p>If the value is null, then <code>null</code> is returned. If the
+     * type of column <code>col</code> is integral, then the result is the string
+     * that is obtained by formatting the integer value with the <code>printf</code>
+     * family of functions using format specifier <code>%lld</code>. If the
+     * type of column <code>col</code> is floating-point, then the result is the string
+     * that is obtained by formatting the floating-point value with the
+     * <code>printf</code> family of functions using format specifier <code>%g</code>.
+     * If the type of column <code>col</code> is a blob type, then an
+     * {@link SQLiteException} is thrown.
+     */
     private native String getString_native(int row, int col);
 
     /**
@@ -383,6 +443,17 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
         }
     }
     
+    /**
+     * Returns the value at (<code>row</code>, <code>col</code>) as a <code>long</code>.
+     *
+     * <p>If the value is null, then <code>0L</code> is returned. If the
+     * type of column <code>col</code> is a string type, then the result
+     * is the <code>long</code> that is obtained by parsing the string value with
+     * <code>strtoll</code>. If the type of column <code>col</code> is
+     * floating-point, then the result is the floating-point value casted to a <code>long</code>.
+     * If the type of column <code>col</code> is a blob type, then an
+     * {@link SQLiteException} is thrown.
+     */
     private native long getLong_native(int row, int col);
 
     /**
@@ -402,6 +473,17 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
         }
     }
     
+    /**
+     * Returns the value at (<code>row</code>, <code>col</code>) as a <code>double</code>.
+     *
+     * <p>If the value is null, then <code>0.0</code> is returned. If the
+     * type of column <code>col</code> is a string type, then the result
+     * is the <code>double</code> that is obtained by parsing the string value with
+     * <code>strtod</code>. If the type of column <code>col</code> is
+     * integral, then the result is the integer value casted to a <code>double</code>.
+     * If the type of column <code>col</code> is a blob type, then an
+     * {@link SQLiteException} is thrown.
+     */
     private native double getDouble_native(int row, int col);
 
     /**
@@ -483,7 +565,16 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
 
     @Override
     protected void finalize() {
-        // Just in case someone forgot to call close...
+        if (nWindow == 0) {
+            return;
+        }
+        if (StrictMode.vmSqliteObjectLeaksEnabled()) {
+            StrictMode.onSqliteObjectLeaked(
+                    "Releasing cursor in a finalizer. Please ensure " +
+                    "that you explicitly call close() on your cursor: ",
+                    mStackTrace);
+        }
+        recordClosingOfWindow(nWindow);
         close_native();
     }
     
@@ -514,21 +605,78 @@ public class CursorWindow extends SQLiteClosable implements Parcelable {
     private CursorWindow(Parcel source) {
         IBinder nativeBinder = source.readStrongBinder();
         mStartPos = source.readInt();
-
-        native_init(nativeBinder);
+        int rslt = native_init(nativeBinder);
+        mStackTrace = new DatabaseObjectNotClosedException().fillInStackTrace();
+        printDebugMsgIfError(rslt);
     }
 
     /** Get the binder for the native side of the window */
     private native IBinder native_getBinder();
 
     /** Does the native side initialization for an empty window */
-    private native void native_init(boolean localOnly);
+    private native int native_init(int cursorWindowSize, boolean localOnly);
 
     /** Does the native side initialization with an existing binder from another process */
-    private native void native_init(IBinder nativeBinder);
+    private native int native_init(IBinder nativeBinder);
 
     @Override
     protected void onAllReferencesReleased() {
-        close_native();        
+        recordClosingOfWindow(nWindow);
+        close_native();
+    }
+
+    private static final SparseIntArray sWindowToPidMap = new SparseIntArray();
+
+    private void recordNewWindow(int pid, int window) {
+        synchronized (sWindowToPidMap) {
+            sWindowToPidMap.put(window, pid);
+            if (Log.isLoggable(STATS_TAG, Log.VERBOSE)) {
+                Log.i(STATS_TAG, "Created a new Cursor. " + printStats());
+            }
+        }
+    }
+
+    private void recordClosingOfWindow(int window) {
+        synchronized (sWindowToPidMap) {
+            if (sWindowToPidMap.size() == 0) {
+                // this means we are not in the ContentProvider.
+                return;
+            }
+            sWindowToPidMap.delete(window);
+        }
+    }
+    private String printStats() {
+        StringBuilder buff = new StringBuilder();
+        int myPid = Process.myPid();
+        int total = 0;
+        SparseIntArray pidCounts = new SparseIntArray();
+        synchronized (sWindowToPidMap) {
+            int size = sWindowToPidMap.size();
+            if (size == 0) {
+                // this means we are not in the ContentProvider.
+                return "";
+            }
+            for (int indx = 0; indx < size; indx++) {
+                int pid = sWindowToPidMap.valueAt(indx);
+                int value = pidCounts.get(pid);
+                pidCounts.put(pid, ++value);
+            }
+        }
+        int numPids = pidCounts.size();
+        for (int i = 0; i < numPids;i++) {
+            buff.append(" (# cursors opened by ");
+            int pid = pidCounts.keyAt(i);
+            if (pid == myPid) {
+                buff.append("this proc=");
+            } else {
+                buff.append("pid " + pid + "=");
+            }
+            int num = pidCounts.get(pid);
+            buff.append(num + ")");
+            total += num;
+        }
+        // limit the returned string size to 1000
+        String s = (buff.length() > 980) ? buff.substring(0, 980) : buff.toString();
+        return "# Open Cursors=" + total + s;
     }
 }

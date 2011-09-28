@@ -18,7 +18,6 @@ package android.widget;
 
 import android.content.Context;
 import android.database.DataSetObserver;
-import android.os.Handler;
 import android.os.Parcelable;
 import android.os.SystemClock;
 import android.util.AttributeSet;
@@ -172,7 +171,7 @@ public abstract class AdapterView<T extends Adapter> extends ViewGroup {
     int mItemCount;
 
     /**
-     * The number of items in the adapter before a data changed event occured.
+     * The number of items in the adapter before a data changed event occurred.
      */
     int mOldItemCount;
 
@@ -227,7 +226,6 @@ public abstract class AdapterView<T extends Adapter> extends ViewGroup {
     public AdapterView(Context context, AttributeSet attrs, int defStyle) {
         super(context, attrs, defStyle);
     }
-
 
     /**
      * Interface definition for a callback to be invoked when an item in this
@@ -558,7 +556,7 @@ public abstract class AdapterView<T extends Adapter> extends ViewGroup {
     /**
      * @return The number of items owned by the Adapter associated with this
      *         AdapterView. (This is the number of data items, which may be
-     *         larger than the number of visible view.)
+     *         larger than the number of visible views.)
      */
     @ViewDebug.CapturedViewProperty
     public int getCount() {
@@ -629,6 +627,7 @@ public abstract class AdapterView<T extends Adapter> extends ViewGroup {
     /**
      * Sets the view to show if the adapter is empty
      */
+    @android.view.RemotableViewMethod
     public void setEmptyView(View emptyView) {
         mEmptyView = emptyView;
 

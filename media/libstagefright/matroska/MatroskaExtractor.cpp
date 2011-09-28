@@ -58,7 +58,7 @@ struct DataSourceReader : public mkvparser::IMkvReader {
     }
 
     virtual int Length(long long* total, long long* available) {
-        off_t size;
+        off64_t size;
         if (mSource->getSize(&size) != OK) {
             return -1;
         }
@@ -706,6 +706,12 @@ void MatroskaExtractor::addTracks() {
 
     for (size_t index = 0; index < tracks->GetTracksCount(); ++index) {
         const mkvparser::Track *track = tracks->GetTrackByIndex(index);
+
+        if (track == NULL) {
+            // Apparently this is currently valid (if unexpected) behaviour
+            // of the mkv parser lib.
+            continue;
+        }
 
         const char *const codecID = track->GetCodecId();
         LOGV("codec id = %s", codecID);

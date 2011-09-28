@@ -37,13 +37,14 @@ import android.util.Printer;
 import android.util.Xml;
 
 import java.io.IOException;
+import java.util.ArrayList;
 
 /**
  * This class is used to specify meta information of an input method.
  */
 public final class InputMethodInfo implements Parcelable {
     static final String TAG = "InputMethodInfo";
-    
+
     /**
      * The Service that implements this input method component.
      */
@@ -68,7 +69,12 @@ public final class InputMethodInfo implements Parcelable {
      * can change based on the configuration (in particular locale).
      */
     final int mIsDefaultResId;
-    
+
+    /**
+     * The array of the subtypes.
+     */
+    private final ArrayList<InputMethodSubtype> mSubtypes = new ArrayList<InputMethodSubtype>();
+
     /**
      * Constructor.
      * 
@@ -81,11 +87,11 @@ public final class InputMethodInfo implements Parcelable {
         mService = service;
         ServiceInfo si = service.serviceInfo;
         mId = new ComponentName(si.packageName, si.name).flattenToShortString();
-        
+
         PackageManager pm = context.getPackageManager();
         String settingsActivityComponent = null;
         int isDefaultResId = 0;
-        
+
         XmlResourceParser parser = null;
         try {
             parser = si.loadXmlMetaData(pm, InputMethod.SERVICE_META_DATA);
@@ -116,13 +122,39 @@ public final class InputMethodInfo implements Parcelable {
             isDefaultResId = sa.getResourceId(
                     com.android.internal.R.styleable.InputMethod_isDefault, 0);
             sa.recycle();
+
+            final int depth = parser.getDepth();
+            // Parse all subtypes
+            while (((type = parser.next()) != XmlPullParser.END_TAG || parser.getDepth() > depth)
+                    && type != XmlPullParser.END_DOCUMENT) {
+                if (type == XmlPullParser.START_TAG) {
+                    nodeName = parser.getName();
+                    if (!"subtype".equals(nodeName)) {
+                        throw new XmlPullParserException(
+                                "Meta-data in input-method does not start with subtype tag");
+                    }
+                    final TypedArray a = res.obtainAttributes(
+                            attrs, com.android.internal.R.styleable.InputMethod_Subtype);
+                    InputMethodSubtype subtype = new InputMethodSubtype(
+                            a.getResourceId(com.android.internal.R.styleable
+                                    .InputMethod_Subtype_label, 0),
+                            a.getResourceId(com.android.internal.R.styleable
+                                    .InputMethod_Subtype_icon, 0),
+                            a.getString(com.android.internal.R.styleable
+                                    .InputMethod_Subtype_imeSubtypeLocale),
+                            a.getString(com.android.internal.R.styleable
+                                    .InputMethod_Subtype_imeSubtypeMode),
+                            a.getString(com.android.internal.R.styleable
+                                    .InputMethod_Subtype_imeSubtypeExtraValue));
+                    mSubtypes.add(subtype);
+                }
+            }
         } catch (NameNotFoundException e) {
             throw new XmlPullParserException(
                     "Unable to create context for: " + si.packageName);
         } finally {
             if (parser != null) parser.close();
         }
-        
         mSettingsActivityName = settingsActivityComponent;
         mIsDefaultResId = isDefaultResId;
     }
@@ -132,8 +164,9 @@ public final class InputMethodInfo implements Parcelable {
         mSettingsActivityName = source.readString();
         mIsDefaultResId = source.readInt();
         mService = ResolveInfo.CREATOR.createFromParcel(source);
+        source.readTypedList(mSubtypes, InputMethodSubtype.CREATOR);
     }
-    
+
     /**
      * Temporary API for creating a built-in input method.
      */
@@ -156,7 +189,7 @@ public final class InputMethodInfo implements Parcelable {
         mSettingsActivityName = settingsActivity;
         mIsDefaultResId = 0;
     }
-    
+
     /**
      * Return a unique ID for this input method.  The ID is generated from
      * the package and class name implementing the method.
@@ -164,14 +197,14 @@ public final class InputMethodInfo implements Parcelable {
     public String getId() {
         return mId;
     }
-    
+
     /**
      * Return the .apk package that implements this input method.
      */
     public String getPackageName() {
         return mService.serviceInfo.packageName;
     }
-    
+
     /**
      * Return the class name of the service component that implements
      * this input method.
@@ -196,7 +229,7 @@ public final class InputMethodInfo implements Parcelable {
         return new ComponentName(mService.serviceInfo.packageName,
                 mService.serviceInfo.name);
     }
-    
+
     /**
      * Load the user-displayed label for this input method.
      * 
@@ -206,7 +239,7 @@ public final class InputMethodInfo implements Parcelable {
     public CharSequence loadLabel(PackageManager pm) {
         return mService.loadLabel(pm);
     }
-    
+
     /**
      * Load the user-displayed icon for this input method.
      * 
@@ -216,7 +249,7 @@ public final class InputMethodInfo implements Parcelable {
     public Drawable loadIcon(PackageManager pm) {
         return mService.loadIcon(pm);
     }
-    
+
     /**
      * Return the class name of an activity that provides a settings UI for
      * the input method.  You can launch this activity be starting it with
@@ -230,7 +263,23 @@ public final class InputMethodInfo implements Parcelable {
     public String getSettingsActivity() {
         return mSettingsActivityName;
     }
-    
+
+    /**
+     * Return the count of the subtypes of Input Method.
+     */
+    public int getSubtypeCount() {
+        return mSubtypes.size();
+    }
+
+    /**
+     * Return the Input Method's subtype at the specified index.
+     *
+     * @param index the index of the subtype to return.
+     */
+    public InputMethodSubtype getSubtypeAt(int index) {
+        return mSubtypes.get(index);
+    }
+
     /**
      * Return the resource identifier of a resource inside of this input
      * method's .apk that determines whether it should be considered a
@@ -239,7 +288,7 @@ public final class InputMethodInfo implements Parcelable {
     public int getIsDefaultResourceId() {
         return mIsDefaultResId;
     }
-    
+
     public void dump(Printer pw, String prefix) {
         pw.println(prefix + "mId=" + mId
                 + " mSettingsActivityName=" + mSettingsActivityName);
@@ -285,12 +334,14 @@ public final class InputMethodInfo implements Parcelable {
         dest.writeString(mSettingsActivityName);
         dest.writeInt(mIsDefaultResId);
         mService.writeToParcel(dest, flags);
+        dest.writeTypedList(mSubtypes);
     }
 
     /**
      * Used to make this class parcelable.
      */
-    public static final Parcelable.Creator<InputMethodInfo> CREATOR = new Parcelable.Creator<InputMethodInfo>() {
+    public static final Parcelable.Creator<InputMethodInfo> CREATOR
+            = new Parcelable.Creator<InputMethodInfo>() {
         public InputMethodInfo createFromParcel(Parcel source) {
             return new InputMethodInfo(source);
         }

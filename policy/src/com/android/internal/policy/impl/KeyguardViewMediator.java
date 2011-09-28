@@ -16,6 +16,8 @@
 
 package com.android.internal.policy.impl;
 
+import static android.provider.Settings.System.SCREEN_OFF_TIMEOUT;
+
 import com.android.internal.telephony.IccCard;
 import com.android.internal.widget.LockPatternUtils;
 
@@ -41,6 +43,7 @@ import android.os.RemoteException;
 import android.os.SystemClock;
 import android.os.SystemProperties;
 import android.provider.Settings;
+import android.provider.Settings.SettingNotFoundException;
 import android.telephony.TelephonyManager;
 import android.util.Config;
 import android.util.EventLog;
@@ -86,13 +89,14 @@ import android.view.WindowManagerPolicy;
  * This class is created by the initialization routine of the {@link WindowManagerPolicy},
  * and runs on its thread.  The keyguard UI is created from that thread in the
  * constructor of this class.  The apis may be called from other threads, including the
- * {@link com.android.server.InputManager}'s and {@link android.view.WindowManager}'s.
+ * {@link com.android.server.wm.InputManager}'s and {@link android.view.WindowManager}'s.
  * Therefore, methods on this class are synchronized, and any action that is pointed
  * directly to the keyguard UI is posted to a {@link Handler} to ensure it is taken on the UI
  * thread of the keyguard.
  */
 public class KeyguardViewMediator implements KeyguardViewCallback,
         KeyguardUpdateMonitor.SimStateCallback {
+    private static final int KEYGUARD_DISPLAY_TIMEOUT_DELAY_DEFAULT = 30000;
     private final static boolean DEBUG = false;
     private final static boolean DBG_WAKE = false;
 
@@ -119,7 +123,7 @@ public class KeyguardViewMediator implements KeyguardViewCallback,
     /**
      * The default amount of time we stay awake (used for all key input)
      */
-    protected static final int AWAKE_INTERVAL_DEFAULT_MS = 5000;
+    protected static final int AWAKE_INTERVAL_DEFAULT_MS = 10000;
 
 
     /**
@@ -133,7 +137,7 @@ public class KeyguardViewMediator implements KeyguardViewCallback,
      * turning on the keyguard (i.e, the user has this much time to turn
      * the screen back on without having to face the keyguard).
      */
-    private static final int KEYGUARD_DELAY_MS = 5000;
+    private static final int KEYGUARD_LOCK_AFTER_DELAY_DEFAULT = 5000;
 
     /**
      * How long we'll wait for the {@link KeyguardViewCallback#keyguardDoneDrawing()}
@@ -244,6 +248,7 @@ public class KeyguardViewMediator implements KeyguardViewCallback,
      * the keyguard.
      */
     private boolean mWaitingUntilKeyguardVisible = false;
+    private LockPatternUtils mLockPatternUtils;
 
     public KeyguardViewMediator(Context context, PhoneWindowManager callback,
             LocalPowerManager powerManager) {
@@ -275,8 +280,9 @@ public class KeyguardViewMediator implements KeyguardViewCallback,
 
         mUpdateMonitor.registerSimStateCallback(this);
 
-        mKeyguardViewProperties = new LockPatternKeyguardViewProperties(
-                new LockPatternUtils(mContext), mUpdateMonitor);
+        mLockPatternUtils = new LockPatternUtils(mContext);
+        mKeyguardViewProperties
+                = new LockPatternKeyguardViewProperties(mLockPatternUtils, mUpdateMonitor);
 
         mKeyguardViewManager = new KeyguardViewManager(
                 context, WindowManagerImpl.getDefault(), this,
@@ -326,15 +332,46 @@ public class KeyguardViewMediator implements KeyguardViewCallback,
                 // to enable it a little bit later (i.e, give the user a chance
                 // to turn the screen back on within a certain window without
                 // having to unlock the screen)
-                long when = SystemClock.elapsedRealtime() + KEYGUARD_DELAY_MS;
-                Intent intent = new Intent(DELAYED_KEYGUARD_ACTION);
-                intent.putExtra("seq", mDelayedShowingSequence);
-                PendingIntent sender = PendingIntent.getBroadcast(mContext,
-                        0, intent, PendingIntent.FLAG_CANCEL_CURRENT);
-                mAlarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, when,
-                        sender);
-                if (DEBUG) Log.d(TAG, "setting alarm to turn off keyguard, seq = "
-                                 + mDelayedShowingSequence);
+                final ContentResolver cr = mContext.getContentResolver();
+
+                // From DisplaySettings
+                long displayTimeout = Settings.System.getInt(cr, SCREEN_OFF_TIMEOUT,
+                        KEYGUARD_DISPLAY_TIMEOUT_DELAY_DEFAULT);
+
+                // From SecuritySettings
+                final long lockAfterTimeout = Settings.Secure.getInt(cr,
+                        Settings.Secure.LOCK_SCREEN_LOCK_AFTER_TIMEOUT,
+                        KEYGUARD_LOCK_AFTER_DELAY_DEFAULT);
+
+                // From DevicePolicyAdmin
+                final long policyTimeout = mLockPatternUtils.getDevicePolicyManager()
+                        .getMaximumTimeToLock(null);
+
+                long timeout;
+                if (policyTimeout > 0) {
+                    // policy in effect. Make sure we don't go beyond policy limit.
+                    displayTimeout = Math.max(displayTimeout, 0); // ignore negative values
+                    timeout = Math.min(policyTimeout - displayTimeout, lockAfterTimeout);
+                } else {
+                    timeout = lockAfterTimeout;
+                }
+
+                if (timeout <= 0) {
+                    // Lock now
+                    mSuppressNextLockSound = true;
+                    doKeyguard();
+                } else {
+                    // Lock in the future
+                    long when = SystemClock.elapsedRealtime() + timeout;
+                    Intent intent = new Intent(DELAYED_KEYGUARD_ACTION);
+                    intent.putExtra("seq", mDelayedShowingSequence);
+                    PendingIntent sender = PendingIntent.getBroadcast(mContext,
+                            0, intent, PendingIntent.FLAG_CANCEL_CURRENT);
+                    mAlarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, when,
+                            sender);
+                    if (DEBUG) Log.d(TAG, "setting alarm to turn off keyguard, seq = "
+                                     + mDelayedShowingSequence);
+                }
             } else if (why == WindowManagerPolicy.OFF_BECAUSE_OF_PROX_SENSOR) {
                 // Do not enable the keyguard if the prox sensor forced the screen off.
             } else {
@@ -552,6 +589,11 @@ public class KeyguardViewMediator implements KeyguardViewCallback,
                 return;
             }
 
+            if (mLockPatternUtils.isLockScreenDisabled()) {
+                if (DEBUG) Log.d(TAG, "doKeyguard: not showing because lockscreen is off");
+                return;
+            }
+
             if (DEBUG) Log.d(TAG, "doKeyguard: showing the lock screen");
             showLocked();
         }
@@ -749,13 +791,17 @@ public class KeyguardViewMediator implements KeyguardViewCallback,
         switch (keyCode) {
             case KeyEvent.KEYCODE_VOLUME_UP:
             case KeyEvent.KEYCODE_VOLUME_DOWN:
+            case KeyEvent.KEYCODE_VOLUME_MUTE:
             case KeyEvent.KEYCODE_MUTE:
             case KeyEvent.KEYCODE_HEADSETHOOK:
+            case KeyEvent.KEYCODE_MEDIA_PLAY:
+            case KeyEvent.KEYCODE_MEDIA_PAUSE:
             case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
             case KeyEvent.KEYCODE_MEDIA_STOP:
             case KeyEvent.KEYCODE_MEDIA_NEXT:
             case KeyEvent.KEYCODE_MEDIA_PREVIOUS:
             case KeyEvent.KEYCODE_MEDIA_REWIND:
+            case KeyEvent.KEYCODE_MEDIA_RECORD:
             case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
             case KeyEvent.KEYCODE_CAMERA:
                 return false;
@@ -964,7 +1010,7 @@ public class KeyguardViewMediator implements KeyguardViewCallback,
                 Log.d(TAG, "playSounds: whichSound = " + whichSound + "; soundPath was null");
             }
         }
-    }        
+    }
 
     /**
      * Handle message sent by {@link #showLocked}.
@@ -1054,7 +1100,9 @@ public class KeyguardViewMediator implements KeyguardViewCallback,
             boolean enable = !mShowing || (mHidden && !isSecure());
             mStatusBarManager.disable(enable ?
                          StatusBarManager.DISABLE_NONE :
-                         StatusBarManager.DISABLE_EXPAND);
+                         ( StatusBarManager.DISABLE_EXPAND
+                         | StatusBarManager.DISABLE_NAVIGATION
+                         | StatusBarManager.DISABLE_CLOCK));
         }
     }
 
@@ -1132,5 +1180,3 @@ public class KeyguardViewMediator implements KeyguardViewCallback,
         }
     }
 }
-
-

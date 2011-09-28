@@ -111,20 +111,23 @@ public class ClipDrawable extends Drawable implements Drawable.Callback {
     // overrides from Drawable.Callback
 
     public void invalidateDrawable(Drawable who) {
-        if (mCallback != null) {
-            mCallback.invalidateDrawable(this);
+        final Callback callback = getCallback();
+        if (callback != null) {
+            callback.invalidateDrawable(this);
         }
     }
 
     public void scheduleDrawable(Drawable who, Runnable what, long when) {
-        if (mCallback != null) {
-            mCallback.scheduleDrawable(this, what, when);
+        final Callback callback = getCallback();
+        if (callback != null) {
+            callback.scheduleDrawable(this, what, when);
         }
     }
 
     public void unscheduleDrawable(Drawable who, Runnable what) {
-        if (mCallback != null) {
-            mCallback.unscheduleDrawable(this, what);
+        final Callback callback = getCallback();
+        if (callback != null) {
+            callback.unscheduleDrawable(this, what);
         }
     }
 
@@ -229,7 +232,7 @@ public class ClipDrawable extends Drawable implements Drawable.Callback {
     @Override
     public ConstantState getConstantState() {
         if (mClipState.canConstantState()) {
-            mClipState.mChangingConfigurations = super.getChangingConfigurations();
+            mClipState.mChangingConfigurations = getChangingConfigurations();
             return mClipState;
         }
         return null;

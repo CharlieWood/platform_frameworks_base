@@ -54,16 +54,49 @@ public class PasswordEntryKeyboardHelper implements OnKeyboardActionListener {
     private Vibrator mVibrator;
 
     public PasswordEntryKeyboardHelper(Context context, KeyboardView keyboardView, View targetView) {
+        this(context, keyboardView, targetView, true);
+    }
+
+    public PasswordEntryKeyboardHelper(Context context, KeyboardView keyboardView, View targetView,
+            boolean useFullScreenWidth) {
         mContext = context;
         mTargetView = targetView;
         mKeyboardView = keyboardView;
-        createKeyboards();
+        if (useFullScreenWidth || mKeyboardView.getLayoutParams().width == -1) {
+            createKeyboards();
+        } else {
+            createKeyboardsWithSpecificSize(mKeyboardView.getLayoutParams().width,
+                    mKeyboardView.getLayoutParams().height);
+        }
         mKeyboardView.setOnKeyboardActionListener(this);
         mVibrator = new Vibrator();
     }
 
     public boolean isAlpha() {
         return mKeyboardMode == KEYBOARD_MODE_ALPHA;
+    }
+
+    private void createKeyboardsWithSpecificSize(int viewWidth, int viewHeight) {
+        mNumericKeyboard = new PasswordEntryKeyboard(mContext, R.xml.password_kbd_numeric,
+                viewWidth, viewHeight);
+        mQwertyKeyboard = new PasswordEntryKeyboard(mContext,
+                R.xml.password_kbd_qwerty, R.id.mode_normal, viewWidth, viewHeight);
+        mQwertyKeyboard.enableShiftLock();
+
+        mQwertyKeyboardShifted = new PasswordEntryKeyboard(mContext,
+                R.xml.password_kbd_qwerty_shifted,
+                R.id.mode_normal, viewWidth, viewHeight);
+        mQwertyKeyboardShifted.enableShiftLock();
+        mQwertyKeyboardShifted.setShifted(true); // always shifted.
+
+        mSymbolsKeyboard = new PasswordEntryKeyboard(mContext, R.xml.password_kbd_symbols,
+                viewWidth, viewHeight);
+        mSymbolsKeyboard.enableShiftLock();
+
+        mSymbolsKeyboardShifted = new PasswordEntryKeyboard(mContext,
+                R.xml.password_kbd_symbols_shift, viewWidth, viewHeight);
+        mSymbolsKeyboardShifted.enableShiftLock();
+        mSymbolsKeyboardShifted.setShifted(true); // always shifted
     }
 
     private void createKeyboards() {
@@ -95,7 +128,8 @@ public class PasswordEntryKeyboardHelper implements OnKeyboardActionListener {
                 final boolean visiblePassword = Settings.System.getInt(
                         mContext.getContentResolver(),
                         Settings.System.TEXT_SHOW_PASSWORD, 1) != 0;
-                mKeyboardView.setPreviewEnabled(visiblePassword);
+                final boolean enablePreview = false; // TODO: grab from configuration
+                mKeyboardView.setPreviewEnabled(visiblePassword && enablePreview);
                 break;
             case KEYBOARD_MODE_NUMERIC:
                 mKeyboardView.setKeyboard(mNumericKeyboard);
@@ -108,7 +142,7 @@ public class PasswordEntryKeyboardHelper implements OnKeyboardActionListener {
 
     private void sendKeyEventsToTarget(int character) {
         Handler handler = mTargetView.getHandler();
-        KeyEvent[] events = KeyCharacterMap.load(KeyCharacterMap.ALPHA).getEvents(
+        KeyEvent[] events = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD).getEvents(
                 new char[] { (char) character });
         if (events != null) {
             final int N = events.length;
@@ -125,10 +159,12 @@ public class PasswordEntryKeyboardHelper implements OnKeyboardActionListener {
         long eventTime = SystemClock.uptimeMillis();
         Handler handler = mTargetView.getHandler();
         handler.sendMessage(handler.obtainMessage(ViewRoot.DISPATCH_KEY_FROM_IME,
-                new KeyEvent(eventTime, eventTime, KeyEvent.ACTION_DOWN, keyEventCode, 0, 0, 0, 0,
+                new KeyEvent(eventTime, eventTime, KeyEvent.ACTION_DOWN, keyEventCode, 0, 0,
+                        KeyCharacterMap.VIRTUAL_KEYBOARD, 0,
                     KeyEvent.FLAG_SOFT_KEYBOARD|KeyEvent.FLAG_KEEP_TOUCH_MODE)));
         handler.sendMessage(handler.obtainMessage(ViewRoot.DISPATCH_KEY_FROM_IME,
-                new KeyEvent(eventTime, eventTime, KeyEvent.ACTION_UP, keyEventCode, 0, 0, 0, 0,
+                new KeyEvent(eventTime, eventTime, KeyEvent.ACTION_UP, keyEventCode, 0, 0,
+                        KeyCharacterMap.VIRTUAL_KEYBOARD, 0,
                         KeyEvent.FLAG_SOFT_KEYBOARD|KeyEvent.FLAG_KEEP_TOUCH_MODE)));
     }
 

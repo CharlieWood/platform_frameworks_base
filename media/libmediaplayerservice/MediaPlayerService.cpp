@@ -23,6 +23,7 @@
 
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <dirent.h>
 #include <unistd.h>
 
@@ -51,14 +52,16 @@
 #include <media/Metadata.h>
 #include <media/AudioTrack.h>
 
+#include <private/android_filesystem_config.h>
+
 #include "MediaRecorderClient.h"
 #include "MediaPlayerService.h"
 #include "MetadataRetrieverClient.h"
 
 #include "MidiFile.h"
-#include <media/PVPlayer.h>
 #include "TestPlayerStub.h"
 #include "StagefrightPlayer.h"
+#include "nuplayer/NuPlayerDriver.h"
 
 #include <OMX.h>
 
@@ -196,11 +199,6 @@ extmap FILE_EXTS [] =  {
         {".rtttl", SONIVOX_PLAYER},
         {".rtx", SONIVOX_PLAYER},
         {".ota", SONIVOX_PLAYER},
-#ifndef NO_OPENCORE
-        {".wma", PV_PLAYER},
-        {".wmv", PV_PLAYER},
-        {".asf", PV_PLAYER},
-#endif
 };
 
 // TODO: Find real cause of Audio/Video delay in PV framework and remove this workaround
@@ -281,6 +279,26 @@ sp<IMediaPlayer> MediaPlayerService::create(pid_t pid, const sp<IMediaPlayerClie
         mClients.add(w);
     }
     ::close(fd);
+    return c;
+}
+
+sp<IMediaPlayer> MediaPlayerService::create(
+        pid_t pid, const sp<IMediaPlayerClient> &client,
+        const sp<IStreamSource> &source, int audioSessionId) {
+    int32_t connId = android_atomic_inc(&mNextConnId);
+    sp<Client> c = new Client(this, pid, connId, client, audioSessionId);
+
+    LOGV("Create new client(%d) from pid %d, audioSessionId=%d",
+         connId, pid, audioSessionId);
+
+    if (OK != c->setDataSource(source)) {
+        c.clear();
+    } else {
+        wp<Client> w = c;
+        Mutex::Autolock lock(mLock);
+        mClients.add(w);
+    }
+
     return c;
 }
 
@@ -691,14 +709,6 @@ player_type getPlayerType(int fd, int64_t offset, int64_t length)
     if (ident == 0x5367674f) // 'OggS'
         return STAGEFRIGHT_PLAYER;
 
-#ifndef NO_OPENCORE
-    if (ident == 0x75b22630) {
-        // The magic number for .asf files, i.e. wmv and wma content.
-        // These are not currently supported through stagefright.
-        return PV_PLAYER;
-    }
-#endif
-
     // Some kind of MIDI?
     EAS_DATA_HANDLE easdata;
     if (EAS_Init(&easdata) == EAS_SUCCESS) {
@@ -725,6 +735,17 @@ player_type getPlayerType(const char* url)
         return TEST_PLAYER;
     }
 
+    if (!strncasecmp("http://", url, 7)) {
+        size_t len = strlen(url);
+        if (len >= 5 && !strcasecmp(".m3u8", &url[len - 5])) {
+            return NU_PLAYER;
+        }
+
+        if (strstr(url,"m3u8")) {
+            return NU_PLAYER;
+        }
+    }
+
     // use MidiFile for MIDI extensions
     int lenURL = strlen(url);
     for (int i = 0; i < NELEM(FILE_EXTS); ++i) {
@@ -737,16 +758,6 @@ player_type getPlayerType(const char* url)
         }
     }
 
-    if (!strncasecmp(url, "rtsp://", 7)) {
-        char value[PROPERTY_VALUE_MAX];
-        if (property_get("media.stagefright.enable-rtsp", value, NULL)
-            && (strcmp(value, "1") && strcasecmp(value, "true"))) {
-            // For now, we're going to use PV for rtsp-based playback
-            // by default until we can clear up a few more issues.
-            return PV_PLAYER;
-        }
-    }
-
     return getDefaultPlayerType();
 }
 
@@ -755,12 +766,6 @@ static sp<MediaPlayerBase> createPlayer(player_type playerType, void* cookie,
 {
     sp<MediaPlayerBase> p;
     switch (playerType) {
-#ifndef NO_OPENCORE
-        case PV_PLAYER:
-            LOGV(" create PVPlayer");
-            p = new PVPlayer();
-            break;
-#endif
         case SONIVOX_PLAYER:
             LOGV(" create MidiFile");
             p = new MidiFile();
@@ -769,10 +774,17 @@ static sp<MediaPlayerBase> createPlayer(player_type playerType, void* cookie,
             LOGV(" create StagefrightPlayer");
             p = new StagefrightPlayer;
             break;
+        case NU_PLAYER:
+            LOGV(" create NuPlayer");
+            p = new NuPlayerDriver;
+            break;
         case TEST_PLAYER:
             LOGV("Create Test Player stub");
             p = new TestPlayerStub();
             break;
+        default:
+            LOGE("Unknown player type: %d", playerType);
+            return NULL;
     }
     if (p != NULL) {
         if (p->initCheck() == NO_ERROR) {
@@ -891,12 +903,45 @@ status_t MediaPlayerService::Client::setDataSource(int fd, int64_t offset, int64
     return mStatus;
 }
 
-status_t MediaPlayerService::Client::setVideoSurface(const sp<ISurface>& surface)
+status_t MediaPlayerService::Client::setDataSource(
+        const sp<IStreamSource> &source) {
+    // create the right type of player
+    sp<MediaPlayerBase> p = createPlayer(NU_PLAYER);
+
+    if (p == NULL) {
+        return NO_INIT;
+    }
+
+    if (!p->hardwareOutput()) {
+        mAudioOutput = new AudioOutput(mAudioSessionId);
+        static_cast<MediaPlayerInterface*>(p.get())->setAudioSink(mAudioOutput);
+    }
+
+    // now set data source
+    mStatus = p->setDataSource(source);
+
+    if (mStatus == OK) {
+        mPlayer = p;
+    }
+
+    return mStatus;
+}
+
+status_t MediaPlayerService::Client::setVideoSurface(const sp<Surface>& surface)
 {
     LOGV("[%d] setVideoSurface(%p)", mConnId, surface.get());
     sp<MediaPlayerBase> p = getPlayer();
     if (p == 0) return UNKNOWN_ERROR;
     return p->setVideoSurface(surface);
+}
+
+status_t MediaPlayerService::Client::setVideoSurfaceTexture(
+        const sp<ISurfaceTexture>& surfaceTexture)
+{
+    LOGV("[%d] setVideoSurfaceTexture(%p)", mConnId, surfaceTexture.get());
+    sp<MediaPlayerBase> p = getPlayer();
+    if (p == 0) return UNKNOWN_ERROR;
+    return p->setVideoSurfaceTexture(surfaceTexture);
 }
 
 status_t MediaPlayerService::Client::invoke(const Parcel& request,
@@ -964,20 +1009,6 @@ status_t MediaPlayerService::Client::getMetadata(
     // Everything is fine, update the metadata length.
     metadata.updateLength();
     return OK;
-}
-
-status_t MediaPlayerService::Client::suspend() {
-    sp<MediaPlayerBase> p = getPlayer();
-    if (p == 0) return UNKNOWN_ERROR;
-
-    return p->suspend();
-}
-
-status_t MediaPlayerService::Client::resume() {
-    sp<MediaPlayerBase> p = getPlayer();
-    if (p == 0) return UNKNOWN_ERROR;
-
-    return p->resume();
 }
 
 status_t MediaPlayerService::Client::prepareAsync()
@@ -1743,4 +1774,93 @@ int MediaPlayerService::AudioCache::getSessionId()
     return 0;
 }
 
+void MediaPlayerService::addBatteryData(uint32_t params)
+{
+    Mutex::Autolock lock(mLock);
+    int uid = IPCThreadState::self()->getCallingUid();
+    if (uid == AID_MEDIA) {
+        return;
+    }
+    int index = mBatteryData.indexOfKey(uid);
+    int32_t time = systemTime() / 1000000L;
+
+    if (index < 0) { // create a new entry for this UID
+        BatteryUsageInfo info;
+        info.audioTotalTime = 0;
+        info.videoTotalTime = 0;
+        info.audioLastTime = 0;
+        info.videoLastTime = 0;
+        info.refCount = 0;
+
+        mBatteryData.add(uid, info);
+    }
+
+    BatteryUsageInfo &info = mBatteryData.editValueFor(uid);
+
+    if (params & kBatteryDataCodecStarted) {
+        if (params & kBatteryDataTrackAudio) {
+            info.audioLastTime -= time;
+            info.refCount ++;
+        }
+        if (params & kBatteryDataTrackVideo) {
+            info.videoLastTime -= time;
+            info.refCount ++;
+        }
+    } else {
+        if (info.refCount == 0) {
+            LOGW("Battery track warning: refCount is already 0");
+            return;
+        } else if (info.refCount < 0) {
+            LOGE("Battery track error: refCount < 0");
+            mBatteryData.removeItem(uid);
+            return;
+        }
+
+        if (params & kBatteryDataTrackAudio) {
+            info.audioLastTime += time;
+            info.refCount --;
+        }
+        if (params & kBatteryDataTrackVideo) {
+            info.videoLastTime += time;
+            info.refCount --;
+        }
+
+        // no stream is being played by this UID
+        if (info.refCount == 0) {
+            info.audioTotalTime += info.audioLastTime;
+            info.audioLastTime = 0;
+            info.videoTotalTime += info.videoLastTime;
+            info.videoLastTime = 0;
+        }
+    }
+}
+
+status_t MediaPlayerService::pullBatteryData(Parcel* reply) {
+    Mutex::Autolock lock(mLock);
+    BatteryUsageInfo info;
+    int size = mBatteryData.size();
+
+    reply->writeInt32(size);
+    int i = 0;
+
+    while (i < size) {
+        info = mBatteryData.valueAt(i);
+
+        reply->writeInt32(mBatteryData.keyAt(i)); //UID
+        reply->writeInt32(info.audioTotalTime);
+        reply->writeInt32(info.videoTotalTime);
+
+        info.audioTotalTime = 0;
+        info.videoTotalTime = 0;
+
+        // remove the UID entry where no stream is being played
+        if (info.refCount <= 0) {
+            mBatteryData.removeItemsAt(i);
+            size --;
+            i --;
+        }
+        i++;
+    }
+    return NO_ERROR;
+}
 } // namespace android

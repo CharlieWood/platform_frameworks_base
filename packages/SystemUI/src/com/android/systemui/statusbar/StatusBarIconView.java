@@ -84,7 +84,7 @@ public class StatusBarIconView extends AnimatedImageView {
         if (!iconEquals) {
             Drawable drawable = getIcon(icon);
             if (drawable == null) {
-                Slog.w(StatusBarService.TAG, "No icon for slot " + mSlot);
+                Slog.w(StatusBar.TAG, "No icon for slot " + mSlot);
                 return false;
             }
             setImageDrawable(drawable);
@@ -93,7 +93,8 @@ public class StatusBarIconView extends AnimatedImageView {
             setImageLevel(icon.iconLevel);
         }
         if (!numberEquals) {
-            if (icon.number > 0) {
+            if (icon.number > 0 && mContext.getResources().getBoolean(
+                        R.bool.config_statusBarShowNumber)) {
                 if (mNumberBackground == null) {
                     mNumberBackground = getContext().getResources().getDrawable(
                             R.drawable.ic_notification_overlay);
@@ -130,7 +131,7 @@ public class StatusBarIconView extends AnimatedImageView {
             try {
                 r = context.getPackageManager().getResourcesForApplication(icon.iconPackage);
             } catch (PackageManager.NameNotFoundException ex) {
-                Slog.e(StatusBarService.TAG, "Icon package not found: " + icon.iconPackage);
+                Slog.e(StatusBar.TAG, "Icon package not found: " + icon.iconPackage);
                 return null;
             }
         } else {
@@ -144,7 +145,7 @@ public class StatusBarIconView extends AnimatedImageView {
         try {
             return r.getDrawable(icon.iconId);
         } catch (RuntimeException e) {
-            Slog.w(StatusBarService.TAG, "Icon not found in "
+            Slog.w(StatusBar.TAG, "Icon not found in "
                   + (icon.iconPackage != null ? icon.iconId : "<system>")
                   + ": " + Integer.toHexString(icon.iconId));
         }

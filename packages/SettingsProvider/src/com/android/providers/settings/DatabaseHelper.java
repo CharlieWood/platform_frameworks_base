@@ -16,12 +16,20 @@
 
 package com.android.providers.settings;
 
+import com.android.internal.content.PackageHelper;
+import com.android.internal.telephony.RILConstants;
+import com.android.internal.util.XmlUtils;
+import com.android.internal.widget.LockPatternUtils;
+import com.android.internal.widget.LockPatternView;
+
+import org.xmlpull.v1.XmlPullParser;
+import org.xmlpull.v1.XmlPullParserException;
+
 import android.content.ComponentName;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
-import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.res.XmlResourceParser;
 import android.database.Cursor;
@@ -35,18 +43,7 @@ import android.os.SystemProperties;
 import android.provider.Settings;
 import android.provider.Settings.Secure;
 import android.text.TextUtils;
-import android.util.AttributeSet;
-import android.util.Config;
 import android.util.Log;
-import android.util.Xml;
-
-import com.android.internal.content.PackageHelper;
-import com.android.internal.telephony.RILConstants;
-import com.android.internal.util.XmlUtils;
-import com.android.internal.widget.LockPatternUtils;
-import com.android.internal.widget.LockPatternView;
-import org.xmlpull.v1.XmlPullParser;
-import org.xmlpull.v1.XmlPullParserException;
 
 import java.io.IOException;
 import java.util.HashSet;
@@ -64,7 +61,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
     // database gets upgraded properly. At a minimum, please confirm that 'upgradeVersion'
     // is properly propagated through your change.  Not doing so will result in a loss of user
     // settings.
-    private static final int DATABASE_VERSION = 57;
+    private static final int DATABASE_VERSION = 64;
 
     private Context mContext;
 
@@ -444,18 +441,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         }
 
         if (upgradeVersion == 39) {
-            db.beginTransaction();
-            try {
-                String value =
-                        mContext.getResources().getBoolean(
-                        R.bool.def_screen_brightness_automatic_mode) ? "1" : "0";
-                db.execSQL("INSERT OR IGNORE INTO system(name,value) values('" +
-                        Settings.System.SCREEN_BRIGHTNESS_MODE + "','" + value + "');");
-                db.setTransactionSuccessful();
-            } finally {
-                db.endTransaction();
-            }
-
+            upgradeAutoBrightness(db);
             upgradeVersion = 40;
         }
 
@@ -734,6 +720,105 @@ public class DatabaseHelper extends SQLiteOpenHelper {
             }
             upgradeVersion = 57;
         }
+
+        if (upgradeVersion == 57) {
+            /*
+             * New settings to:
+             *  1. Enable injection of accessibility scripts in WebViews.
+             *  2. Define the key bindings for traversing web content in WebViews.
+             */
+            db.beginTransaction();
+            SQLiteStatement stmt = null;
+            try {
+                stmt = db.compileStatement("INSERT INTO secure(name,value)"
+                        + " VALUES(?,?);");
+                loadBooleanSetting(stmt, Settings.Secure.ACCESSIBILITY_SCRIPT_INJECTION,
+                        R.bool.def_accessibility_script_injection);
+                stmt.close();
+                stmt = db.compileStatement("INSERT INTO secure(name,value)"
+                        + " VALUES(?,?);");
+                loadStringSetting(stmt, Settings.Secure.ACCESSIBILITY_WEB_CONTENT_KEY_BINDINGS,
+                        R.string.def_accessibility_web_content_key_bindings);
+                db.setTransactionSuccessful();
+            } finally {
+                db.endTransaction();
+                if (stmt != null) stmt.close();
+            }
+            upgradeVersion = 58;
+        }
+
+        if (upgradeVersion == 58) {
+            /* Add default for new Auto Time Zone */
+            db.beginTransaction();
+            SQLiteStatement stmt = null;
+            try {
+                stmt = db.compileStatement("INSERT INTO secure(name,value)"
+                        + " VALUES(?,?);");
+                loadBooleanSetting(stmt, Settings.System.AUTO_TIME_ZONE,
+                        R.bool.def_auto_time_zone); // Sync timezone to NITZ
+                db.setTransactionSuccessful();
+            } finally {
+                db.endTransaction();
+                if (stmt != null) stmt.close();
+            }
+            upgradeVersion = 59;
+        }
+
+        if (upgradeVersion == 59) {
+            // Persistence for the rotation lock feature.
+            db.beginTransaction();
+            SQLiteStatement stmt = null;
+            try {
+                stmt = db.compileStatement("INSERT INTO system(name,value)"
+                        + " VALUES(?,?);");
+                loadBooleanSetting(stmt, Settings.System.USER_ROTATION,
+                        R.integer.def_user_rotation); // should be zero degrees
+                db.setTransactionSuccessful();
+            } finally {
+                db.endTransaction();
+                if (stmt != null) stmt.close();
+            }
+            upgradeVersion = 60;
+        }
+
+        if (upgradeVersion == 60) {
+            upgradeScreenTimeout(db);
+            upgradeVersion = 61;
+        }
+
+        if (upgradeVersion == 61) {
+            upgradeScreenTimeout(db);
+            upgradeVersion = 62;
+        }
+
+        // Change the default for screen auto-brightness mode
+        if (upgradeVersion == 62) {
+            upgradeAutoBrightness(db);
+            upgradeVersion = 63;
+        }
+
+        if (upgradeVersion == 63) {
+            // This upgrade adds the STREAM_MUSIC type to the list of
+             // types affected by ringer modes (silent, vibrate, etc.)
+             db.beginTransaction();
+             try {
+                 db.execSQL("DELETE FROM system WHERE name='"
+                         + Settings.System.MODE_RINGER_STREAMS_AFFECTED + "'");
+                 int newValue = (1 << AudioManager.STREAM_RING)
+                         | (1 << AudioManager.STREAM_NOTIFICATION)
+                         | (1 << AudioManager.STREAM_SYSTEM)
+                         | (1 << AudioManager.STREAM_SYSTEM_ENFORCED)
+                         | (1 << AudioManager.STREAM_MUSIC);
+                 db.execSQL("INSERT INTO system ('name', 'value') values ('"
+                         + Settings.System.MODE_RINGER_STREAMS_AFFECTED + "', '"
+                         + String.valueOf(newValue) + "')");
+                 db.setTransactionSuccessful();
+             } finally {
+                 db.endTransaction();
+             }
+             upgradeVersion = 64;
+         }
+
         // *** Remember to update DATABASE_VERSION above!
 
         if (upgradeVersion != currentVersion) {
@@ -839,6 +924,37 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         }
     }
 
+    private void upgradeScreenTimeout(SQLiteDatabase db) {
+        // Change screen timeout to current default
+        db.beginTransaction();
+        SQLiteStatement stmt = null;
+        try {
+            stmt = db.compileStatement("INSERT OR REPLACE INTO system(name,value)"
+                    + " VALUES(?,?);");
+            loadIntegerSetting(stmt, Settings.System.SCREEN_OFF_TIMEOUT,
+                    R.integer.def_screen_off_timeout);
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+            if (stmt != null)
+                stmt.close();
+        }
+    }
+
+    private void upgradeAutoBrightness(SQLiteDatabase db) {
+        db.beginTransaction();
+        try {
+            String value =
+                    mContext.getResources().getBoolean(
+                    R.bool.def_screen_brightness_automatic_mode) ? "1" : "0";
+            db.execSQL("INSERT OR REPLACE INTO system(name,value) values('" +
+                    Settings.System.SCREEN_BRIGHTNESS_MODE + "','" + value + "');");
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+        }
+    }
+
     /**
      * Loads the default set of bookmarked shortcuts from an xml file.
      *
@@ -876,7 +992,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
                 String cls = parser.getAttributeValue(null, "class");
                 String shortcutStr = parser.getAttributeValue(null, "shortcut");
 
-                int shortcutValue = (int) shortcutStr.charAt(0);
+                int shortcutValue = shortcutStr.charAt(0);
                 if (TextUtils.isEmpty(shortcutStr)) {
                     Log.w(TAG, "Unable to get shortcut for: " + pkg + "/" + cls);
                 }
@@ -963,10 +1079,11 @@ public class DatabaseHelper extends SQLiteOpenHelper {
     
             loadVibrateSetting(db, false);
     
-            // By default, only the ring/notification and system streams are affected
+            // By default, only the ring/notification, system and music streams are affected
             loadSetting(stmt, Settings.System.MODE_RINGER_STREAMS_AFFECTED,
                     (1 << AudioManager.STREAM_RING) | (1 << AudioManager.STREAM_NOTIFICATION) |
-                    (1 << AudioManager.STREAM_SYSTEM) | (1 << AudioManager.STREAM_SYSTEM_ENFORCED));
+                    (1 << AudioManager.STREAM_SYSTEM) | (1 << AudioManager.STREAM_SYSTEM_ENFORCED) |
+                    (1 << AudioManager.STREAM_MUSIC));
     
             loadSetting(stmt, Settings.System.MUTE_STREAMS_AFFECTED,
                     ((1 << AudioManager.STREAM_MUSIC) |
@@ -1044,7 +1161,10 @@ public class DatabaseHelper extends SQLiteOpenHelper {
     
             loadBooleanSetting(stmt, Settings.System.AUTO_TIME,
                     R.bool.def_auto_time); // Sync time to NITZ
-    
+
+            loadBooleanSetting(stmt, Settings.System.AUTO_TIME_ZONE,
+                    R.bool.def_auto_time_zone); // Sync timezone to NITZ
+
             loadIntegerSetting(stmt, Settings.System.SCREEN_BRIGHTNESS,
                     R.integer.def_screen_brightness);
     
@@ -1068,6 +1188,9 @@ public class DatabaseHelper extends SQLiteOpenHelper {
     
             loadBooleanSetting(stmt, Settings.System.VIBRATE_IN_SILENT,
                     R.bool.def_vibrate_in_silent);
+
+            loadBooleanSetting(stmt, Settings.System.USE_PTP_INTERFACE,
+                    R.bool.def_use_ptp_interface);
 
             // Set notification volume to follow ringer volume by default
             loadBooleanSetting(stmt, Settings.System.NOTIFICATIONS_USE_RING_VOLUME,
@@ -1189,6 +1312,26 @@ public class DatabaseHelper extends SQLiteOpenHelper {
     
             loadBooleanSetting(stmt, Settings.Secure.MOUNT_UMS_NOTIFY_ENABLED,
                     R.bool.def_mount_ums_notify_enabled);
+
+            loadBooleanSetting(stmt, Settings.Secure.ACCESSIBILITY_SCRIPT_INJECTION,
+                    R.bool.def_accessibility_script_injection);
+
+            loadStringSetting(stmt, Settings.Secure.ACCESSIBILITY_WEB_CONTENT_KEY_BINDINGS,
+                    R.string.def_accessibility_web_content_key_bindings);
+
+            final int maxBytes = mContext.getResources().getInteger(
+                    R.integer.def_download_manager_max_bytes_over_mobile);
+            if (maxBytes > 0) {
+                loadSetting(stmt, Settings.Secure.DOWNLOAD_MAX_BYTES_OVER_MOBILE,
+                        Integer.toString(maxBytes));
+            }
+
+            final int recommendedMaxBytes = mContext.getResources().getInteger(
+                    R.integer.def_download_manager_recommended_max_bytes_over_mobile);
+            if (recommendedMaxBytes > 0) {
+                loadSetting(stmt, Settings.Secure.DOWNLOAD_RECOMMENDED_MAX_BYTES_OVER_MOBILE,
+                        Integer.toString(recommendedMaxBytes));
+            }
         } finally {
             if (stmt != null) stmt.close();
         }

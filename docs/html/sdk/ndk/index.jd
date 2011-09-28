@@ -59,10 +59,9 @@ padding: .25em 1em;
 }
 </style>
 
-
 <div class="toggleable open">
     <a href="#"
-         onclick="return toggleDiv(this)"><img src="{@docRoot}assets/images/triangle-opened.png"
+         onclick="return toggleDiv(this)"><img src="{@docRoot}assets/images/triangle-closed.png"
          class="toggle-img"
          height="9px"
          width="9px" /> Android NDK, Revision 5b</a> <em>(January 2011)</em>

@@ -364,6 +364,13 @@ status_t Surface::writeToParcel(
         height   = surface->mHeight;
         format   = surface->mFormat;
         flags    = surface->mFlags;
+    } else if (surface != 0 && surface->mSurface != 0) {
+        LOGW("Parceling invalid surface with non-NULL ISurface as NULL: "
+             "mSurface = %p, mIdentity = %d, mWidth = %d, mHeight = %d, "
+             "mFormat = %d, mFlags = 0x%08x, mInitCheck = %d",
+             surface->mSurface.get(), surface->mIdentity, surface->mWidth,
+             surface->mHeight, surface->mFormat, surface->mFlags,
+             surface->mInitCheck);
     }
     parcel->writeStrongBinder(sur!=0 ? sur->asBinder() : NULL);
     parcel->writeInt32(identity);
@@ -438,21 +445,15 @@ void Surface::init()
             mSharedBufferClient = new SharedBufferClient(
                     mClient.getSharedClient(), token, 2, mIdentity);
             mInitCheck = mClient.getSharedClient()->validate(token);
+        } else {
+            LOGW("Not initializing the shared buffer client because token = %d",
+                    token);
         }
     }
 }
 
 Surface::~Surface()
 {
-    // this is a client-side operation, the surface is destroyed, unmap
-    // its buffers in this process.
-    size_t size = mBuffers.size();
-    for (size_t i=0 ; i<size ; i++) {
-        if (mBuffers[i] != 0 && mBuffers[i]->handle != 0) {
-            getBufferMapper().unregisterBuffer(mBuffers[i]->handle);
-        }
-    }
-
     // clear all references and trigger an IPC now, to make sure things
     // happen without delay, since these resources are quite heavy.
     mBuffers.clear();
@@ -465,7 +466,7 @@ bool Surface::isValid() {
     return mInitCheck == NO_ERROR;
 }
 
-status_t Surface::validate() const
+status_t Surface::validate(bool inCancelBuffer) const
 {
     // check that we initialized ourself properly
     if (mInitCheck != NO_ERROR) {
@@ -475,27 +476,26 @@ status_t Surface::validate() const
 
     // verify the identity of this surface
     uint32_t identity = mSharedBufferClient->getIdentity();
-
-    // this is a bit of a (temporary) special case, identity==0 means that
-    // no operation are allowed from the client (eg: dequeue/queue), this
-    // is used with PUSH_BUFFER surfaces for instance
-    if (identity == 0) {
-        LOGE("[Surface] invalid operation (identity=%u)", mIdentity);
-        return INVALID_OPERATION;
-    }
-
     if (mIdentity != identity) {
         LOGE("[Surface] using an invalid surface, "
                 "identity=%u should be %d",
                 mIdentity, identity);
-        return NO_INIT;
+        CallStack stack;
+        stack.update();
+        stack.dump("Surface");
+        return BAD_INDEX;
     }
 
     // check the surface didn't become invalid
     status_t err = mSharedBufferClient->getStatus();
     if (err != NO_ERROR) {
-        LOGE("surface (identity=%u) is invalid, err=%d (%s)",
-                mIdentity, err, strerror(-err));
+        if (!inCancelBuffer) {
+            LOGE("surface (identity=%u) is invalid, err=%d (%s)",
+                    mIdentity, err, strerror(-err));
+            CallStack stack;
+            stack.update();
+            stack.dump("Surface");
+        }
         return err;
     }
 
@@ -626,12 +626,12 @@ int Surface::dequeueBuffer(android_native_buffer_t** buffer)
 
 int Surface::cancelBuffer(android_native_buffer_t* buffer)
 {
-    status_t err = validate();
+    status_t err = validate(true);
     switch (err) {
     case NO_ERROR:
         // no error, common case
         break;
-    case INVALID_OPERATION:
+    case BAD_INDEX:
         // legitimate errors here
         return err;
     default:
@@ -827,13 +827,15 @@ int Surface::disconnect(int api)
 
 int Surface::crop(Rect const* rect)
 {
-    // empty/invalid rects are not allowed
-    if (rect->isEmpty())
-        return BAD_VALUE;
-
     Mutex::Autolock _l(mSurfaceLock);
     // TODO: validate rect size
-    mNextBufferCrop = *rect;
+
+    if (rect == NULL || rect->isEmpty()) {
+        mNextBufferCrop = Rect(0,0);
+    } else {
+        mNextBufferCrop = *rect;
+    }
+
     return NO_ERROR;
 }
 
@@ -854,6 +856,12 @@ int Surface::setBufferCount(int bufferCount)
     status_t err = mSharedBufferClient->setBufferCount(bufferCount, ipc);
     LOGE_IF(err, "ISurface::setBufferCount(%d) returned %s",
             bufferCount, strerror(-err));
+
+    if (err == NO_ERROR) {
+        // Clear out any references to the old buffers.
+        mBuffers.clear();
+    }
+
     return err;
 }
 
@@ -878,6 +886,9 @@ int Surface::setBuffersGeometry(int w, int h, int format)
         // EGLConfig validation.
         mFormat = format;
     }
+
+    mNextBufferCrop = Rect(0,0);
+
     return NO_ERROR;
 }
 
@@ -1022,7 +1033,20 @@ void Surface::setSwapRectangle(const Rect& r) {
 
 int Surface::getBufferIndex(const sp<GraphicBuffer>& buffer) const
 {
-    return buffer->getIndex();
+    int idx = buffer->getIndex();
+    if (idx < 0) {
+        // The buffer doesn't have an index set.  See if the handle the same as
+        // one of the buffers for which we do know the index.  This can happen
+        // e.g. if GraphicBuffer is used to wrap an android_native_buffer_t that
+        // was dequeued from an ANativeWindow.
+        for (size_t i = 0; i < mBuffers.size(); i++) {
+            if (buffer->handle == mBuffers[i]->handle) {
+                idx = mBuffers[i]->getIndex();
+                break;
+            }
+        }
+    }
+    return idx;
 }
 
 status_t Surface::getBufferLocked(int index,
@@ -1036,7 +1060,6 @@ status_t Surface::getBufferLocked(int index,
     // free the current buffer
     sp<GraphicBuffer>& currentBuffer(mBuffers.editItemAt(index));
     if (currentBuffer != 0) {
-        getBufferMapper().unregisterBuffer(currentBuffer->handle);
         currentBuffer.clear();
     }
 
@@ -1044,7 +1067,7 @@ status_t Surface::getBufferLocked(int index,
     LOGE_IF(buffer==0,
             "ISurface::getBuffer(%d, %08x) returned NULL",
             index, usage);
-    if (buffer != 0) { // this should never happen by construction
+    if (buffer != 0) { // this should always happen by construction
         LOGE_IF(buffer->handle == NULL, 
                 "Surface (identity=%d) requestBuffer(%d, %u, %u, %u, %08x) "
                 "returned a buffer with a null handle",
@@ -1052,13 +1075,8 @@ status_t Surface::getBufferLocked(int index,
         err = mSharedBufferClient->getStatus();
         LOGE_IF(err,  "Surface (identity=%d) state = %d", mIdentity, err);
         if (!err && buffer->handle != NULL) {
-            err = getBufferMapper().registerBuffer(buffer->handle);
-            LOGW_IF(err, "registerBuffer(...) failed %d (%s)",
-                    err, strerror(-err));
-            if (err == NO_ERROR) {
-                currentBuffer = buffer;
-                currentBuffer->setIndex(index);
-            }
+            currentBuffer = buffer;
+            currentBuffer->setIndex(index);
         } else {
             err = err<0 ? err : status_t(NO_MEMORY);
         }

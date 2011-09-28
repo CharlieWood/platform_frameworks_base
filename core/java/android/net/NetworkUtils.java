@@ -17,7 +17,11 @@
 package android.net;
 
 import java.net.InetAddress;
+import java.net.Inet4Address;
+import java.net.Inet6Address;
 import java.net.UnknownHostException;
+
+import android.util.Log;
 
 /**
  * Native methods for managing network interfaces.
@@ -25,20 +29,34 @@ import java.net.UnknownHostException;
  * {@hide}
  */
 public class NetworkUtils {
+
+    private static final String TAG = "NetworkUtils";
+
     /** Bring the named network interface up. */
     public native static int enableInterface(String interfaceName);
 
     /** Bring the named network interface down. */
     public native static int disableInterface(String interfaceName);
 
-    /** Add a route to the specified host via the named interface. */
-    public native static int addHostRoute(String interfaceName, int hostaddr);
-
-    /** Add a default route for the named interface. */
-    public native static int setDefaultRoute(String interfaceName, int gwayAddr);
+    /**
+     * Add a route to the routing table.
+     *
+     * @param interfaceName the interface to route through.
+     * @param dst the network or host to route to. May be IPv4 or IPv6, e.g.
+     * "0.0.0.0" or "2001:4860::".
+     * @param prefixLength the prefix length of the route.
+     * @param gw the gateway to use, e.g., "192.168.251.1". If null,
+     * indicates a directly-connected route.
+     */
+    public native static int addRoute(String interfaceName, String dst,
+          int prefixLength, String gw);
 
     /** Return the gateway address for the default route for the named interface. */
-    public native static int getDefaultRoute(String interfaceName);
+    public static InetAddress getDefaultRoute(String interfaceName) {
+        int addr = getDefaultRouteNative(interfaceName);
+        return intToInetAddress(addr);
+    }
+    private native static int getDefaultRouteNative(String interfaceName);
 
     /** Remove host routes that uses the named interface. */
     public native static int removeHostRoutes(String interfaceName);
@@ -59,7 +77,7 @@ public class NetworkUtils {
      * the IP address information.
      * @return {@code true} for success, {@code false} for failure
      */
-    public native static boolean runDhcp(String interfaceName, DhcpInfo ipInfo);
+    public native static boolean runDhcp(String interfaceName, DhcpInfoInternal ipInfo);
 
     /**
      * Shut down the DHCP client daemon.
@@ -86,73 +104,115 @@ public class NetworkUtils {
     public native static String getDhcpError();
 
     /**
-     * When static IP configuration has been specified, configure the network
-     * interface according to the values supplied.
-     * @param interfaceName the name of the interface to configure
-     * @param ipInfo the IP address, default gateway, and DNS server addresses
-     * with which to configure the interface.
-     * @return {@code true} for success, {@code false} for failure
+     * Convert a IPv4 address from an integer to an InetAddress.
+     * @param hostAddress an int corresponding to the IPv4 address in network byte order
      */
-    public static boolean configureInterface(String interfaceName, DhcpInfo ipInfo) {
-        return configureNative(interfaceName,
-            ipInfo.ipAddress,
-            ipInfo.netmask,
-            ipInfo.gateway,
-            ipInfo.dns1,
-            ipInfo.dns2);
-    }
+    public static InetAddress intToInetAddress(int hostAddress) {
+        byte[] addressBytes = { (byte)(0xff & hostAddress),
+                                (byte)(0xff & (hostAddress >> 8)),
+                                (byte)(0xff & (hostAddress >> 16)),
+                                (byte)(0xff & (hostAddress >> 24)) };
 
-    private native static boolean configureNative(
-        String interfaceName, int ipAddress, int netmask, int gateway, int dns1, int dns2);
-
-    /**
-     * Look up a host name and return the result as an int. Works if the argument
-     * is an IP address in dot notation. Obviously, this can only be used for IPv4
-     * addresses.
-     * @param hostname the name of the host (or the IP address)
-     * @return the IP address as an {@code int} in network byte order
-     */
-    public static int lookupHost(String hostname) {
-        InetAddress inetAddress;
         try {
-            inetAddress = InetAddress.getByName(hostname);
+           return InetAddress.getByAddress(addressBytes);
         } catch (UnknownHostException e) {
-            return -1;
+           throw new AssertionError();
         }
-        byte[] addrBytes;
-        int addr;
-        addrBytes = inetAddress.getAddress();
-        addr = ((addrBytes[3] & 0xff) << 24)
-                | ((addrBytes[2] & 0xff) << 16)
-                | ((addrBytes[1] & 0xff) << 8)
-                |  (addrBytes[0] & 0xff);
-        return addr;
-    }
-
-    public static int v4StringToInt(String str) {
-        int result = 0;
-        String[] array = str.split("\\.");
-        if (array.length != 4) return 0;
-        try {
-            result = Integer.parseInt(array[3]);
-            result = (result << 8) + Integer.parseInt(array[2]);
-            result = (result << 8) + Integer.parseInt(array[1]);
-            result = (result << 8) + Integer.parseInt(array[0]);
-        } catch (NumberFormatException e) {
-            return 0;
-        }
-        return result;
     }
 
     /**
-     * Start the DHCP renew service for wimax,
-     * This call blocks until it obtains a result (either success
-     * or failure) from the daemon.
-     * @param interfaceName the name of the interface to configure
-     * @param ipInfo if the request succeeds, this object is filled in with
-     * the IP address information.
-     * @return {@code true} for success, {@code false} for failure
-     * {@hide}
+     * Convert a IPv4 address from an InetAddress to an integer
+     * @param inetAddr is an InetAddress corresponding to the IPv4 address
+     * @return the IP address as an integer in network byte order
      */
-    public native static boolean runDhcpRenew(String interfaceName, DhcpInfo ipInfo);
+    public static int inetAddressToInt(InetAddress inetAddr)
+            throws IllegalArgumentException {
+        byte [] addr = inetAddr.getAddress();
+        if (addr.length != 4) {
+            throw new IllegalArgumentException("Not an IPv4 address");
+        }
+        return ((addr[3] & 0xff) << 24) | ((addr[2] & 0xff) << 16) |
+                ((addr[1] & 0xff) << 8) | (addr[0] & 0xff);
+    }
+
+    /**
+     * Convert a network prefix length to an IPv4 netmask integer
+     * @param prefixLength
+     * @return the IPv4 netmask as an integer in network byte order
+     */
+    public static int prefixLengthToNetmaskInt(int prefixLength)
+            throws IllegalArgumentException {
+        if (prefixLength < 0 || prefixLength > 32) {
+            throw new IllegalArgumentException("Invalid prefix length (0 <= prefix <= 32)");
+        }
+        int value = 0xffffffff << (32 - prefixLength);
+        return Integer.reverseBytes(value);
+    }
+
+    /**
+     * Create an InetAddress from a string where the string must be a standard
+     * representation of a V4 or V6 address.  Avoids doing a DNS lookup on failure
+     * but it will throw an IllegalArgumentException in that case.
+     * @param addrString
+     * @return the InetAddress
+     * @hide
+     */
+    public static InetAddress numericToInetAddress(String addrString)
+            throws IllegalArgumentException {
+        return InetAddress.parseNumericAddress(addrString);
+    }
+
+    /**
+     * Add a default route through the specified gateway.
+     * @param interfaceName interface on which the route should be added
+     * @param gw the IP address of the gateway to which the route is desired,
+     * @return {@code true} on success, {@code false} on failure
+     */
+    public static boolean addDefaultRoute(String interfaceName, InetAddress gw) {
+        String dstStr;
+        String gwStr = gw.getHostAddress();
+
+        if (gw instanceof Inet4Address) {
+            dstStr = "0.0.0.0";
+        } else if (gw instanceof Inet6Address) {
+            dstStr = "::";
+        } else {
+            Log.w(TAG, "addDefaultRoute failure: address is neither IPv4 nor IPv6" +
+                       "(" + gwStr + ")");
+            return false;
+        }
+        return addRoute(interfaceName, dstStr, 0, gwStr) == 0;
+    }
+
+    /**
+     * Add a host route.
+     * @param interfaceName interface on which the route should be added
+     * @param dst the IP address of the host to which the route is desired,
+     * this should not be null.
+     * @param gw the IP address of the gateway to which the route is desired,
+     * if null, indicates a directly-connected route.
+     * @return {@code true} on success, {@code false} on failure
+     */
+    public static boolean addHostRoute(String interfaceName, InetAddress dst,
+          InetAddress gw) {
+        if (dst == null) {
+            Log.w(TAG, "addHostRoute: dst should not be null");
+            return false;
+        }
+
+        int prefixLength;
+        String dstStr = dst.getHostAddress();
+        String gwStr = (gw != null) ? gw.getHostAddress() : null;
+
+        if (dst instanceof Inet4Address) {
+            prefixLength = 32;
+        } else if (dst instanceof Inet6Address) {
+            prefixLength = 128;
+        } else {
+            Log.w(TAG, "addHostRoute failure: address is neither IPv4 nor IPv6" +
+                       "(" + dst + ")");
+            return false;
+        }
+        return addRoute(interfaceName, dstStr, prefixLength, gwStr) == 0;
+    }
 }

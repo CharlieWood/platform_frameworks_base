@@ -19,14 +19,13 @@ package android.net.wifi;
 import android.util.Log;
 import android.util.Config;
 import android.net.NetworkInfo;
-import android.net.NetworkStateTracker;
 
 import java.util.regex.Pattern;
 import java.util.regex.Matcher;
 
 /**
  * Listens for events from the wpa_supplicant server, and passes them on
- * to the {@link WifiStateTracker} for handling. Runs in its own thread.
+ * to the {@link WifiStateMachine} for handling. Runs in its own thread.
  *
  * @hide
  */
@@ -43,7 +42,8 @@ public class WifiMonitor {
     private static final int LINK_SPEED   = 5;
     private static final int TERMINATING  = 6;
     private static final int DRIVER_STATE = 7;
-    private static final int UNKNOWN      = 8;
+    private static final int EAP_FAILURE  = 8;
+    private static final int UNKNOWN      = 9;
 
     /** All events coming from the supplicant start with this prefix */
     private static final String eventPrefix = "CTRL-EVENT-";
@@ -53,6 +53,9 @@ public class WifiMonitor {
     private static final String wpaEventPrefix = "WPA:";
     private static final String passwordKeyMayBeIncorrectEvent =
        "pre-shared key may be incorrect";
+
+    /* WPS events */
+    private static final String wpsOverlapEvent = "WPS-OVERLAP-DETECTED";
 
     /**
      * Names of events from wpa_supplicant (minus the prefix). In the
@@ -108,6 +111,17 @@ public class WifiMonitor {
      * <code>state</code> is either STARTED or STOPPED
      */
     private static final String driverStateEvent = "DRIVER-STATE";
+    /**
+     * <pre>
+     * CTRL-EVENT-EAP-FAILURE EAP authentication failed
+     * </pre>
+     */
+    private static final String eapFailureEvent = "EAP-FAILURE";
+
+    /**
+     * This indicates an authentication failure on EAP FAILURE event
+     */
+    private static final String eapAuthFailure = "EAP authentication failed";
 
     /**
      * Regex pattern for extracting an Ethernet-style MAC address from a string.
@@ -117,7 +131,7 @@ public class WifiMonitor {
     private static Pattern mConnectedEventPattern =
         Pattern.compile("((?:[0-9a-f]{2}:){5}[0-9a-f]{2}) .* \\[id=([0-9]+) ");
 
-    private final WifiStateTracker mWifiStateTracker;
+    private final WifiStateMachine mWifiStateMachine;
 
     /**
      * This indicates the supplicant connection for the monitor is closed
@@ -139,31 +153,27 @@ public class WifiMonitor {
      */
     private static final int MAX_RECV_ERRORS    = 10;
 
-    public WifiMonitor(WifiStateTracker tracker) {
-        mWifiStateTracker = tracker;
+    public WifiMonitor(WifiStateMachine wifiStateMachine) {
+        mWifiStateMachine = wifiStateMachine;
     }
 
     public void startMonitoring() {
         new MonitorThread().start();
     }
 
-    public NetworkStateTracker getNetworkStateTracker() {
-        return mWifiStateTracker;
-    }
-
     class MonitorThread extends Thread {
         public MonitorThread() {
             super("WifiMonitor");
         }
-        
+
         public void run() {
 
             if (connectToSupplicant()) {
                 // Send a message indicating that it is now possible to send commands
                 // to the supplicant
-                mWifiStateTracker.notifySupplicantConnection();
+                mWifiStateMachine.notifySupplicantConnection();
             } else {
-                mWifiStateTracker.notifySupplicantLost();
+                mWifiStateMachine.notifySupplicantLost();
                 return;
             }
 
@@ -178,7 +188,9 @@ public class WifiMonitor {
                 if (!eventStr.startsWith(eventPrefix)) {
                     if (eventStr.startsWith(wpaEventPrefix) &&
                             0 < eventStr.indexOf(passwordKeyMayBeIncorrectEvent)) {
-                        handlePasswordKeyMayBeIncorrect();
+                        mWifiStateMachine.notifyAuthenticationFailure();
+                    } else if (eventStr.startsWith(wpsOverlapEvent)) {
+                        mWifiStateMachine.notifyWpsOverlap();
                     }
                     continue;
                 }
@@ -207,16 +219,17 @@ public class WifiMonitor {
                     event = LINK_SPEED;
                 else if (eventName.equals(terminatingEvent))
                     event = TERMINATING;
-                else if (eventName.equals(driverStateEvent)) {
+                else if (eventName.equals(driverStateEvent))
                     event = DRIVER_STATE;
-                }
+                else if (eventName.equals(eapFailureEvent))
+                    event = EAP_FAILURE;
                 else
                     event = UNKNOWN;
 
                 String eventData = eventStr;
                 if (event == DRIVER_STATE || event == LINK_SPEED)
                     eventData = eventData.split(" ")[1];
-                else if (event == STATE_CHANGE) {
+                else if (event == STATE_CHANGE || event == EAP_FAILURE) {
                     int ind = eventStr.indexOf(" ");
                     if (ind != -1) {
                         eventData = eventStr.substring(ind + 1);
@@ -259,8 +272,12 @@ public class WifiMonitor {
                     }
 
                     // notify and exit
-                    mWifiStateTracker.notifySupplicantLost();
+                    mWifiStateMachine.notifySupplicantLost();
                     break;
+                } else if (event == EAP_FAILURE) {
+                    if (eventData.startsWith(eapAuthFailure)) {
+                        mWifiStateMachine.notifyAuthenticationFailure();
+                    }
                 } else {
                     handleEvent(event, eventData);
                 }
@@ -272,11 +289,11 @@ public class WifiMonitor {
             int connectTries = 0;
 
             while (true) {
-                if (mWifiStateTracker.connectToSupplicant()) {
+                if (WifiNative.connectToSupplicant()) {
                     return true;
                 }
-                if (connectTries++ < 3) {
-                    nap(5);
+                if (connectTries++ < 5) {
+                    nap(1);
                 } else {
                     break;
                 }
@@ -284,20 +301,16 @@ public class WifiMonitor {
             return false;
         }
 
-        private void handlePasswordKeyMayBeIncorrect() {
-            mWifiStateTracker.notifyPasswordKeyMayBeIncorrect();
-        }
-
         private void handleDriverEvent(String state) {
             if (state == null) {
                 return;
             }
             if (state.equals("STOPPED")) {
-                mWifiStateTracker.notifyDriverStopped();
+                mWifiStateMachine.notifyDriverStopped();
             } else if (state.equals("STARTED")) {
-                mWifiStateTracker.notifyDriverStarted();
+                mWifiStateMachine.notifyDriverStarted();
             } else if (state.equals("HANGED")) {
-                mWifiStateTracker.notifyDriverHung();
+                mWifiStateMachine.notifyDriverHung();
             }
         }
 
@@ -318,7 +331,7 @@ public class WifiMonitor {
                     break;
 
                 case SCAN_RESULTS:
-                    mWifiStateTracker.notifyScanResultsAvailable();
+                    mWifiStateMachine.notifyScanResultsAvailable();
                     break;
 
                 case UNKNOWN:
@@ -375,7 +388,7 @@ public class WifiMonitor {
             if (newSupplicantState == SupplicantState.INVALID) {
                 Log.w(TAG, "Invalid supplicant state: " + newState);
             }
-            mWifiStateTracker.notifyStateChange(networkId, BSSID, newSupplicantState);
+            mWifiStateMachine.notifySupplicantStateChange(networkId, BSSID, newSupplicantState);
         }
     }
 
@@ -395,7 +408,7 @@ public class WifiMonitor {
                 }
             }
         }
-        mWifiStateTracker.notifyStateChange(newState, BSSID, networkId);
+        mWifiStateMachine.notifyNetworkStateChange(newState, BSSID, networkId);
     }
 
     /**

@@ -83,7 +83,7 @@ public final class Configuration implements Parcelable, Comparable<Configuration
      * <p>The {@link #SCREENLAYOUT_SIZE_MASK} bits define the overall size
      * of the screen.  They may be one of
      * {@link #SCREENLAYOUT_SIZE_SMALL}, {@link #SCREENLAYOUT_SIZE_NORMAL},
-     * {@link #SCREENLAYOUT_SIZE_LARGE}.
+     * {@link #SCREENLAYOUT_SIZE_LARGE}, or {@link #SCREENLAYOUT_SIZE_XLARGE}.
      * 
      * <p>The {@link #SCREENLAYOUT_LONG_MASK} defines whether the screen
      * is wider/taller than normal.  They may be one of
@@ -91,6 +91,22 @@ public final class Configuration implements Parcelable, Comparable<Configuration
      */
     public int screenLayout;
     
+    /**
+     * Check if the Configuration's current {@link #screenLayout} is at
+     * least the given size.
+     *
+     * @param size The desired size, either {@link #SCREENLAYOUT_SIZE_SMALL},
+     * {@link #SCREENLAYOUT_SIZE_NORMAL}, {@link #SCREENLAYOUT_SIZE_LARGE}, or
+     * {@link #SCREENLAYOUT_SIZE_XLARGE}.
+     * @return Returns true if the current screen layout size is at least
+     * the given size.
+     */
+    public boolean isLayoutSizeAtLeast(int size) {
+        int cur = screenLayout&SCREENLAYOUT_SIZE_MASK;
+        if (cur == SCREENLAYOUT_SIZE_UNDEFINED) return false;
+        return cur >= size;
+    }
+
     public static final int TOUCHSCREEN_UNDEFINED = 0;
     public static final int TOUCHSCREEN_NOTOUCH = 1;
     public static final int TOUCHSCREEN_STYLUS = 2;
@@ -266,11 +282,18 @@ public final class Configuration implements Parcelable, Comparable<Configuration
         sb.append("/");
         sb.append(navigationHidden);
         sb.append(" orien=");
-        sb.append(orientation);
-        sb.append(" layout=");
-        sb.append(screenLayout);
-        sb.append(" uiMode=");
-        sb.append(uiMode);
+        switch(orientation) {
+            case ORIENTATION_LANDSCAPE:
+                sb.append("L"); break;
+            case ORIENTATION_PORTRAIT:
+                sb.append("P"); break;
+            default:
+                sb.append(orientation);
+        }
+        sb.append(" layout=0x");
+        sb.append(java.lang.Integer.toHexString(screenLayout));
+        sb.append(" uiMode=0x");
+        sb.append(java.lang.Integer.toHexString(uiMode));
         if (seq != 0) {
             sb.append(" seq=");
             sb.append(seq);

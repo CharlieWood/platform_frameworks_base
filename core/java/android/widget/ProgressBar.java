@@ -154,6 +154,8 @@ public class ProgressBar extends View {
 
     private boolean mInDrawing;
 
+    private int mAnimationResolution;
+
     /**
      * Create a new progress bar with range 0...100 and initial progress of 0.
      * @param context the application environment
@@ -167,12 +169,19 @@ public class ProgressBar extends View {
     }
 
     public ProgressBar(Context context, AttributeSet attrs, int defStyle) {
+        this(context, attrs, defStyle, 0);
+    }
+
+    /**
+     * @hide
+     */
+    public ProgressBar(Context context, AttributeSet attrs, int defStyle, int styleRes) {
         super(context, attrs, defStyle);
         mUiThreadId = Thread.currentThread().getId();
         initProgressBar();
 
         TypedArray a =
-            context.obtainStyledAttributes(attrs, R.styleable.ProgressBar, defStyle, 0);
+            context.obtainStyledAttributes(attrs, R.styleable.ProgressBar, defStyle, styleRes);
         
         mNoInvalidate = true;
         
@@ -221,6 +230,9 @@ public class ProgressBar extends View {
 
         setIndeterminate(mOnlyIndeterminate || a.getBoolean(
                 R.styleable.ProgressBar_indeterminate, mIndeterminate));
+
+        mAnimationResolution = a.getInteger(R.styleable.ProgressBar_animationResolution,
+                ANIMATION_RESOLUTION);
 
         a.recycle();
     }
@@ -424,6 +436,14 @@ public class ProgressBar extends View {
      * @see #setIndeterminate(boolean)
      */
     public void setProgressDrawable(Drawable d) {
+        boolean needUpdate;
+        if (mProgressDrawable != null && d != mProgressDrawable) {
+            mProgressDrawable.setCallback(null);
+            needUpdate = true;
+        } else {
+            needUpdate = false;
+        }
+
         if (d != null) {
             d.setCallback(this);
 
@@ -439,6 +459,13 @@ public class ProgressBar extends View {
             mCurrentDrawable = d;
             postInvalidate();
         }
+
+        if (needUpdate) {
+            updateDrawableBounds(getWidth(), getHeight());
+            updateDrawableState();
+            doRefreshProgress(R.id.progress, mProgress, false, false);
+            doRefreshProgress(R.id.secondaryProgress, mSecondaryProgress, false, false);
+        }
     }
     
     /**
@@ -452,6 +479,13 @@ public class ProgressBar extends View {
     protected boolean verifyDrawable(Drawable who) {
         return who == mProgressDrawable || who == mIndeterminateDrawable
                 || super.verifyDrawable(who);
+    }
+
+    @Override
+    public void jumpDrawablesToCurrentState() {
+        super.jumpDrawablesToCurrentState();
+        if (mProgressDrawable != null) mProgressDrawable.jumpToCurrentState();
+        if (mIndeterminateDrawable != null) mIndeterminateDrawable.jumpToCurrentState();
     }
 
     @Override
@@ -474,7 +508,7 @@ public class ProgressBar extends View {
         }
         
         public void run() {
-            doRefreshProgress(mId, mProgress, mFromUser);
+            doRefreshProgress(mId, mProgress, mFromUser, true);
             // Put ourselves back in the cache when we are done
             mRefreshProgressRunnable = this;
         }
@@ -487,7 +521,8 @@ public class ProgressBar extends View {
         
     }
     
-    private synchronized void doRefreshProgress(int id, int progress, boolean fromUser) {
+    private synchronized void doRefreshProgress(int id, int progress, boolean fromUser,
+            boolean callBackToApp) {
         float scale = mMax > 0 ? (float) progress / (float) mMax : 0;
         final Drawable d = mCurrentDrawable;
         if (d != null) {
@@ -503,7 +538,7 @@ public class ProgressBar extends View {
             invalidate();
         }
         
-        if (id == R.id.progress) {
+        if (callBackToApp && id == R.id.progress) {
             onProgressRefresh(scale, fromUser);
         }
     }
@@ -513,7 +548,7 @@ public class ProgressBar extends View {
 
     private synchronized void refreshProgress(int id, int progress, boolean fromUser) {
         if (mUiThreadId == Thread.currentThread().getId()) {
-            doRefreshProgress(id, progress, fromUser);
+            doRefreshProgress(id, progress, fromUser, true);
         } else {
             RefreshProgressRunnable r;
             if (mRefreshProgressRunnable != null) {
@@ -666,8 +701,8 @@ public class ProgressBar extends View {
 
             if (mProgress > max) {
                 mProgress = max;
-                refreshProgress(R.id.progress, mProgress, false);
             }
+            refreshProgress(R.id.progress, mProgress, false);
         }
     }
     
@@ -716,8 +751,8 @@ public class ProgressBar extends View {
             mAnimation.setDuration(mDuration);
             mAnimation.setInterpolator(mInterpolator);
             mAnimation.setStartTime(Animation.START_ON_FIRST_FRAME);
-            postInvalidate();
         }
+        postInvalidate();
     }
 
     /**
@@ -730,6 +765,7 @@ public class ProgressBar extends View {
             ((Animatable) mIndeterminateDrawable).stop();
             mShouldStartAnimationDrawable = false;
         }
+        postInvalidate();
     }
 
     /**
@@ -811,6 +847,10 @@ public class ProgressBar extends View {
 
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+        updateDrawableBounds(w, h);
+    }
+
+    private void updateDrawableBounds(int w, int h) {
         // onDraw will translate the canvas so we draw starting at 0,0
         int right = w - mPaddingRight - mPaddingLeft;
         int bottom = h - mPaddingBottom - mPaddingTop;
@@ -844,9 +884,9 @@ public class ProgressBar extends View {
                 } finally {
                     mInDrawing = false;
                 }
-                if (SystemClock.uptimeMillis() - mLastDrawTime >= ANIMATION_RESOLUTION) {
+                if (SystemClock.uptimeMillis() - mLastDrawTime >= mAnimationResolution) {
                     mLastDrawTime = SystemClock.uptimeMillis();
-                    postInvalidateDelayed(ANIMATION_RESOLUTION);
+                    postInvalidateDelayed(mAnimationResolution);
                 }
             }
             d.draw(canvas);
@@ -868,17 +908,21 @@ public class ProgressBar extends View {
             dw = Math.max(mMinWidth, Math.min(mMaxWidth, d.getIntrinsicWidth()));
             dh = Math.max(mMinHeight, Math.min(mMaxHeight, d.getIntrinsicHeight()));
         }
+        updateDrawableState();
         dw += mPaddingLeft + mPaddingRight;
         dh += mPaddingTop + mPaddingBottom;
 
-        setMeasuredDimension(resolveSize(dw, widthMeasureSpec),
-                resolveSize(dh, heightMeasureSpec));
+        setMeasuredDimension(resolveSizeAndState(dw, widthMeasureSpec, 0),
+                resolveSizeAndState(dh, heightMeasureSpec, 0));
     }
     
     @Override
     protected void drawableStateChanged() {
         super.drawableStateChanged();
+        updateDrawableState();
+    }
         
+    private void updateDrawableState() {
         int[] state = getDrawableState();
         
         if (mProgressDrawable != null && mProgressDrawable.isStateful()) {
@@ -960,9 +1004,11 @@ public class ProgressBar extends View {
 
     @Override
     protected void onDetachedFromWindow() {
-        super.onDetachedFromWindow();
         if (mIndeterminate) {
             stopAnimation();
         }
+        // This should come after stopAnimation(), otherwise an invalidate message remains in the
+        // queue, which can prevent the entire view hierarchy from being GC'ed during a rotation
+        super.onDetachedFromWindow();
     }
 }

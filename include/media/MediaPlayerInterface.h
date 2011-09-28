@@ -33,13 +33,16 @@ namespace android {
 
 class Parcel;
 class ISurface;
+class Surface;
+class ISurfaceTexture;
 
 template<typename T> class SortedVector;
 
 enum player_type {
     PV_PLAYER = 1,
     SONIVOX_PLAYER = 2,
-    STAGEFRIGHT_PLAYER = 4,
+    STAGEFRIGHT_PLAYER = 3,
+    NU_PLAYER = 4,
     // Test players are available only in the 'test' and 'eng' builds.
     // The shared library with the test player is passed passed as an
     // argument to the 'test:' url in the setDataSource call.
@@ -105,7 +108,18 @@ public:
             const KeyedVector<String8, String8> *headers = NULL) = 0;
 
     virtual status_t    setDataSource(int fd, int64_t offset, int64_t length) = 0;
-    virtual status_t    setVideoSurface(const sp<ISurface>& surface) = 0;
+
+    virtual status_t    setDataSource(const sp<IStreamSource> &source) {
+        return INVALID_OPERATION;
+    }
+
+    // pass the buffered Surface to the media player service
+    virtual status_t    setVideoSurface(const sp<Surface>& surface) = 0;
+
+    // pass the buffered ISurfaceTexture to the media player service
+    virtual status_t    setVideoSurfaceTexture(
+                                const sp<ISurfaceTexture>& surfaceTexture) = 0;
+
     virtual status_t    prepare() = 0;
     virtual status_t    prepareAsync() = 0;
     virtual status_t    start() = 0;
@@ -118,11 +132,7 @@ public:
     virtual status_t    reset() = 0;
     virtual status_t    setLooping(int loop) = 0;
     virtual player_type playerType() = 0;
-    virtual status_t    suspend() { return INVALID_OPERATION; }
-    virtual status_t    resume() { return INVALID_OPERATION; }
 
-    virtual void        setNotifyCallback(void* cookie, notify_callback_f notifyFunc) {
-                            mCookie = cookie; mNotify = notifyFunc; }
     // Invoke a generic method on the player by using opaque parcels
     // for the request and reply.
     //
@@ -144,9 +154,21 @@ public:
         return INVALID_OPERATION;
     };
 
-    virtual void        sendEvent(int msg, int ext1=0, int ext2=0) { if (mNotify) mNotify(mCookie, msg, ext1, ext2); }
+    void        setNotifyCallback(
+            void* cookie, notify_callback_f notifyFunc) {
+        Mutex::Autolock autoLock(mNotifyLock);
+        mCookie = cookie; mNotify = notifyFunc;
+    }
 
-protected:
+    void        sendEvent(int msg, int ext1=0, int ext2=0) {
+        Mutex::Autolock autoLock(mNotifyLock);
+        if (mNotify) mNotify(mCookie, msg, ext1, ext2);
+    }
+
+private:
+    friend class MediaPlayerService;
+
+    Mutex               mNotifyLock;
     void*               mCookie;
     notify_callback_f   mNotify;
 };
@@ -162,7 +184,7 @@ protected:
     sp<AudioSink>       mAudioSink;
 };
 
-// Implement this class for media players that output directo to hardware
+// Implement this class for media players that output audio directly to hardware
 class MediaPlayerHWInterface : public MediaPlayerBase
 {
 public:

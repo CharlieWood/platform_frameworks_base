@@ -19,23 +19,29 @@
 
 <resources xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
-    <string name="app_label" msgid="4489004083283879149">"狀態列"</string>
+    <string name="app_label" msgid="7164937344850004466">"系統 UI"</string>
     <string name="status_bar_clear_all_button" msgid="7774721344716731603">"清除"</string>
+    <string name="status_bar_do_not_disturb_button" msgid="5812628897510997853">"勿干擾"</string>
+    <string name="status_bar_please_disturb_button" msgid="3345398298841572813">"顯示通知"</string>
     <string name="status_bar_no_notifications_title" msgid="4755261167193833213">"沒有通知"</string>
     <string name="status_bar_ongoing_events_title" msgid="1682504513316879202">"進行中"</string>
     <string name="status_bar_latest_events_title" msgid="6594767438577593172">"通知"</string>
     <string name="battery_low_title" msgid="7923774589611311406">"請連接充電器"</string>
-    <string name="battery_low_subtitle" msgid="7388781709819722764">"電池電量即將不足："</string>
-    <string name="battery_low_percent_format" msgid="696154104579022959">"還剩 <xliff:g id="NUMBER">%d%%</xliff:g> 以下。"</string>
+    <string name="battery_low_subtitle" msgid="1752040062087829196">"電池電量即將不足。"</string>
+    <string name="battery_low_percent_format" msgid="1077244949318261761">"還剩 <xliff:g id="NUMBER">%d%%</xliff:g>"</string>
+    <string name="invalid_charger" msgid="4549105996740522523">"不支援 USB 充電。"\n"僅能使用隨附的充電器。"</string>
     <string name="battery_low_why" msgid="7279169609518386372">"電池使用狀況"</string>
-    <!-- no translation found for usb_accessory_permission_prompt (3969745913539898765) -->
-    <skip />
-    <!-- no translation found for usb_device_confirm_prompt (2727793581411868504) -->
-    <skip />
-    <!-- no translation found for usb_accessory_confirm_prompt (3947430407252730383) -->
-    <skip />
-    <string name="usb_accessory_uri_prompt" msgid="6332150684964235705">"已安裝的應用程式均無法存取這類 USB 配件，如要進一步瞭解這個配件，請造訪 <xliff:g id="URL">%1$s</xliff:g>"</string>
-    <string name="title_usb_accessory" msgid="4966265263465181372">"USB 配件"</string>
-    <string name="label_view" msgid="6304565553218192990">"查看"</string>
-    <string name="always_use_accessory" msgid="1210954576979621596">"預設用於這個 USB 配件"</string>
+    <string name="status_bar_settings_settings_button" msgid="3023889916699270224">"設定"</string>
+    <string name="status_bar_settings_wifi_button" msgid="1733928151698311923">"Wi-Fi"</string>
+    <string name="status_bar_settings_airplane" msgid="4879879698500955300">"飛行模式"</string>
+    <string name="status_bar_settings_rotation_lock" msgid="8361452930058000609">"鎖定螢幕瀏覽模式"</string>
+    <string name="status_bar_settings_mute_label" msgid="554682549917429396">"關閉"</string>
+    <string name="status_bar_settings_auto_brightness_label" msgid="511453614962324674">"自動"</string>
+    <string name="status_bar_settings_notifications" msgid="397146176280905137">"通知"</string>
+    <string name="recent_tasks_title" msgid="3691764623638127888">"最新的"</string>
+    <string name="recent_tasks_empty" msgid="1905484479067697884">"沒有最近用過的應用程式。"</string>
+    <string name="recent_tasks_app_label" msgid="3796483981246752469">"應用程式"</string>
+    <string name="bluetooth_tethered" msgid="7094101612161133267">"已透過藍牙進行網際網路共用"</string>
+    <string name="status_bar_input_method_settings_configure_input_methods" msgid="737483394044014246">"設定輸入方式"</string>
+    <string name="status_bar_use_physical_keyboard" msgid="3695516942412442936">"使用實體鍵盤"</string>
 </resources>

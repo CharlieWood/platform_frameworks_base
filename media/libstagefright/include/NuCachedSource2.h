@@ -32,18 +32,20 @@ struct NuCachedSource2 : public DataSource {
 
     virtual status_t initCheck() const;
 
-    virtual ssize_t readAt(off_t offset, void *data, size_t size);
+    virtual ssize_t readAt(off64_t offset, void *data, size_t size);
 
-    virtual status_t getSize(off_t *size);
+    virtual status_t getSize(off64_t *size);
     virtual uint32_t flags();
 
+    virtual DecryptHandle* DrmInitialization();
+    virtual void getDrmInfo(DecryptHandle **handle, DrmManagerClient **client);
+    virtual String8 getUri();
     ////////////////////////////////////////////////////////////////////////////
 
     size_t cachedSize();
-    size_t approxDataRemaining(bool *eos);
+    size_t approxDataRemaining(status_t *finalStatus);
 
-    void suspend();
-    void clearCacheAndResume();
+    void resumeFetchingIfNecessary();
 
 protected:
     virtual ~NuCachedSource2();
@@ -53,8 +55,8 @@ private:
 
     enum {
         kPageSize            = 65536,
-        kHighWaterThreshold  = 5 * 1024 * 1024,
-        kLowWaterThreshold   = 512 * 1024,
+        kHighWaterThreshold  = 20 * 1024 * 1024,
+        kLowWaterThreshold   = 4 * 1024 * 1024,
 
         // Read data after a 15 sec timeout whether we're actively
         // fetching or not.
@@ -64,7 +66,6 @@ private:
     enum {
         kWhatFetchMore  = 'fetc',
         kWhatRead       = 'read',
-        kWhatSuspend    = 'susp',
     };
 
     sp<DataSource> mSource;
@@ -76,25 +77,23 @@ private:
     Condition mCondition;
 
     PageCache *mCache;
-    off_t mCacheOffset;
+    off64_t mCacheOffset;
     status_t mFinalStatus;
-    off_t mLastAccessPos;
+    off64_t mLastAccessPos;
     sp<AMessage> mAsyncResult;
     bool mFetching;
     int64_t mLastFetchTimeUs;
-    bool mSuspended;
 
     void onMessageReceived(const sp<AMessage> &msg);
     void onFetch();
     void onRead(const sp<AMessage> &msg);
-    void onSuspend();
 
     void fetchInternal();
-    ssize_t readInternal(off_t offset, void *data, size_t size);
-    status_t seekInternal_l(off_t offset);
+    ssize_t readInternal(off64_t offset, void *data, size_t size);
+    status_t seekInternal_l(off64_t offset);
 
-    size_t approxDataRemaining_l(bool *eos);
-    void restartPrefetcherIfNecessary_l(bool force = false);
+    size_t approxDataRemaining_l(status_t *finalStatus);
+    void restartPrefetcherIfNecessary_l(bool ignoreLowWaterThreshold = false);
 
     DISALLOW_EVIL_CONSTRUCTORS(NuCachedSource2);
 };

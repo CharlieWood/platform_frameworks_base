@@ -21,15 +21,17 @@ import android.content.ComponentCallbacks;
 import android.content.Context;
 import android.content.res.AssetManager;
 import android.content.res.Configuration;
-import android.database.Cursor;
+import android.content.res.Resources;
+import android.content.res.Resources.NotFoundException;
 import android.graphics.Bitmap;
 import android.net.ParseException;
 import android.net.Uri;
 import android.net.WebAddress;
+import android.net.http.ErrorStrings;
 import android.net.http.SslCertificate;
+import android.net.http.SslError;
 import android.os.Handler;
 import android.os.Message;
-import android.provider.OpenableColumns;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.Surface;
@@ -38,13 +40,18 @@ import android.view.WindowManager;
 
 import junit.framework.Assert;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.lang.ref.WeakReference;
 import java.net.URLEncoder;
+import java.security.cert.X509Certificate;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Iterator;
+
+import org.apache.harmony.security.provider.cert.X509CertImpl;
 
 class BrowserFrame extends Handler {
 
@@ -78,6 +85,9 @@ class BrowserFrame extends Handler {
 
     // Attached Javascript interfaces
     private Map<String, Object> mJSInterfaceMap;
+
+    // Key store handler when Chromium HTTP stack is used.
+    private KeyStoreHandler mKeyStoreHandler = null;
 
     // message ids
     // a message posted when a frame loading is completed
@@ -208,7 +218,7 @@ class BrowserFrame extends Handler {
 
         if (sConfigCallback == null) {
             sConfigCallback = new ConfigCallback(
-                    (WindowManager) context.getSystemService(
+                    (WindowManager) appContext.getSystemService(
                             Context.WINDOW_SERVICE));
             ViewRoot.addConfigCallback(sConfigCallback);
         }
@@ -295,6 +305,18 @@ class BrowserFrame extends Handler {
     }
 
     /**
+     * Saves the contents of the frame as a web archive.
+     *
+     * @param basename The filename where the archive should be placed.
+     * @param autoname If false, takes filename to be a file. If true, filename
+     *                 is assumed to be a directory in which a filename will be
+     *                 chosen according to the url of the current page.
+     */
+    /* package */ String saveWebArchive(String basename, boolean autoname) {
+        return nativeSaveWebArchive(basename, autoname);
+    }
+
+    /**
      * Go back or forward the number of steps given.
      * @param steps A negative or positive number indicating the direction
      *              and number of steps to move.
@@ -309,16 +331,20 @@ class BrowserFrame extends Handler {
      * native callback
      * Report an error to an activity.
      * @param errorCode The HTTP error code.
-     * @param description A String description.
+     * @param description Optional human-readable description. If no description
+     *     is given, we'll use a standard localized error message.
+     * @param failingUrl The URL that was being loaded when the error occurred.
      * TODO: Report all errors including resource errors but include some kind
      * of domain identifier. Change errorCode to an enum for a cleaner
      * interface.
      */
-    private void reportError(final int errorCode, final String description,
-            final String failingUrl) {
+    private void reportError(int errorCode, String description, String failingUrl) {
         // As this is called for the main resource and loading will be stopped
         // after, reset the state variables.
         resetLoadingStates();
+        if (description == null || description.isEmpty()) {
+            description = ErrorStrings.getString(errorCode, mContext);
+        }
         mCallbackProxy.onReceivedError(errorCode, description, failingUrl);
     }
 
@@ -371,20 +397,31 @@ class BrowserFrame extends Handler {
                 // set to true in didFirstLayout()
                 mWebViewCore.removeMessages(WebViewCore.EventHub.WEBKIT_DRAW);
             }
+        }
+    }
 
-            // Note: only saves committed form data in standard load
-            if (loadType == FRAME_LOADTYPE_STANDARD
-                    && mSettings.getSaveFormData()) {
-                final WebHistoryItem h = mCallbackProxy.getBackForwardList()
-                        .getCurrentItem();
-                if (h != null) {
-                    String currentUrl = h.getUrl();
-                    if (currentUrl != null) {
-                        mDatabase.setFormData(currentUrl, getFormTextData());
-                    }
+    @SuppressWarnings("unused")
+    private void saveFormData(HashMap<String, String> data) {
+        if (mSettings.getSaveFormData()) {
+            final WebHistoryItem h = mCallbackProxy.getBackForwardList()
+                    .getCurrentItem();
+            if (h != null) {
+                String currentUrl = h.getUrl();
+                if (currentUrl != null) {
+                    mDatabase.setFormData(currentUrl, data);
                 }
             }
         }
+    }
+
+    @SuppressWarnings("unused")
+    private boolean shouldSaveFormData() {
+        if (mSettings.getSaveFormData()) {
+            final WebHistoryItem h = mCallbackProxy.getBackForwardList()
+                    .getCurrentItem();
+            return h != null && h.getUrl() != null;
+        }
+        return false;
     }
 
     /**
@@ -455,7 +492,7 @@ class BrowserFrame extends Handler {
                             .getCurrentItem();
                     if (item != null) {
                         WebAddress uri = new WebAddress(item.getUrl());
-                        String schemePlusHost = uri.mScheme + uri.mHost;
+                        String schemePlusHost = uri.getScheme() + uri.getHost();
                         String[] up =
                                 mDatabase.getUsernamePassword(schemePlusHost);
                         if (up != null && up[0] != null) {
@@ -463,8 +500,10 @@ class BrowserFrame extends Handler {
                         }
                     }
                 }
-                WebViewWorker.getHandler().sendEmptyMessage(
-                        WebViewWorker.MSG_TRIM_CACHE);
+                if (!JniUtil.useChromiumHttpStack()) {
+                    WebViewWorker.getHandler().sendEmptyMessage(
+                            WebViewWorker.MSG_TRIM_CACHE);
+                }
                 break;
             }
 
@@ -514,12 +553,21 @@ class BrowserFrame extends Handler {
     private native String externalRepresentation();
 
     /**
-     * Retrieves the visual text of the current frame, puts it as the object for
+     * Retrieves the visual text of the frames, puts it as the object for
      * the message and sends the message.
      * @param callback the message to use to send the visual text
      */
     public void documentAsText(Message callback) {
-        callback.obj = documentAsText();;
+        StringBuilder text = new StringBuilder();
+        if (callback.arg1 != 0) {
+            // Dump top frame as text.
+            text.append(documentAsText());
+        }
+        if (callback.arg2 != 0) {
+            // Dump child frames as text.
+            text.append(childFramesAsText());
+        }
+        callback.obj = text.toString();
         callback.sendToTarget();
     }
 
@@ -527,6 +575,11 @@ class BrowserFrame extends Handler {
      * Return the text drawn on the screen as a string
      */
     private native String documentAsText();
+
+    /**
+     * Return the text drawn on the child frames as a string
+     */
+    private native String childFramesAsText();
 
     /*
      * This method is called by WebCore to inform the frame that
@@ -538,8 +591,11 @@ class BrowserFrame extends Handler {
             Iterator iter = mJSInterfaceMap.keySet().iterator();
             while (iter.hasNext())  {
                 String interfaceName = (String) iter.next();
-                nativeAddJavascriptInterface(nativeFramePointer,
-                        mJSInterfaceMap.get(interfaceName), interfaceName);
+                Object object = mJSInterfaceMap.get(interfaceName);
+                if (object != null) {
+                    nativeAddJavascriptInterface(nativeFramePointer,
+                            mJSInterfaceMap.get(interfaceName), interfaceName);
+                }
             }
         }
     }
@@ -562,13 +618,21 @@ class BrowserFrame extends Handler {
     }
 
     public void addJavascriptInterface(Object obj, String interfaceName) {
+        assert obj != null;
+        removeJavascriptInterface(interfaceName);
         if (mJSInterfaceMap == null) {
             mJSInterfaceMap = new HashMap<String, Object>();
+        }
+        mJSInterfaceMap.put(interfaceName, obj);
+    }
+
+    public void removeJavascriptInterface(String interfaceName) {
+        if (mJSInterfaceMap == null) {
+            return;
         }
         if (mJSInterfaceMap.containsKey(interfaceName)) {
             mJSInterfaceMap.remove(interfaceName);
         }
-        mJSInterfaceMap.put(interfaceName, obj);
     }
 
     /**
@@ -621,6 +685,94 @@ class BrowserFrame extends Handler {
     }
 
     /**
+     * Get the InputStream for an Android resource
+     * There are three different kinds of android resources:
+     * - file:///android_res
+     * - file:///android_asset
+     * - content://
+     * @param url The url to load.
+     * @return An InputStream to the android resource
+     */
+    private InputStream inputStreamForAndroidResource(String url) {
+        // This list needs to be kept in sync with the list in
+        // external/webkit/WebKit/android/WebCoreSupport/WebUrlLoaderClient.cpp
+        final String ANDROID_ASSET = "file:///android_asset/";
+        final String ANDROID_RESOURCE = "file:///android_res/";
+        final String ANDROID_CONTENT = "content:";
+
+        // file:///android_res
+        if (url.startsWith(ANDROID_RESOURCE)) {
+            url = url.replaceFirst(ANDROID_RESOURCE, "");
+            if (url == null || url.length() == 0) {
+                Log.e(LOGTAG, "url has length 0 " + url);
+                return null;
+            }
+            int slash = url.indexOf('/');
+            int dot = url.indexOf('.', slash);
+            if (slash == -1 || dot == -1) {
+                Log.e(LOGTAG, "Incorrect res path: " + url);
+                return null;
+            }
+            String subClassName = url.substring(0, slash);
+            String fieldName = url.substring(slash + 1, dot);
+            String errorMsg = null;
+            try {
+                final Class<?> d = mContext.getApplicationContext()
+                        .getClassLoader().loadClass(
+                                mContext.getPackageName() + ".R$"
+                                        + subClassName);
+                final java.lang.reflect.Field field = d.getField(fieldName);
+                final int id = field.getInt(null);
+                TypedValue value = new TypedValue();
+                mContext.getResources().getValue(id, value, true);
+                if (value.type == TypedValue.TYPE_STRING) {
+                    return mContext.getAssets().openNonAsset(
+                            value.assetCookie, value.string.toString(),
+                            AssetManager.ACCESS_STREAMING);
+                } else {
+                    // Old stack only supports TYPE_STRING for res files
+                    Log.e(LOGTAG, "not of type string: " + url);
+                    return null;
+                }
+            } catch (Exception e) {
+                Log.e(LOGTAG, "Exception: " + url);
+                return null;
+            }
+
+        // file:///android_asset
+        } else if (url.startsWith(ANDROID_ASSET)) {
+            url = url.replaceFirst(ANDROID_ASSET, "");
+            try {
+                AssetManager assets = mContext.getAssets();
+                return assets.open(url, AssetManager.ACCESS_STREAMING);
+            } catch (IOException e) {
+                return null;
+            }
+
+        // content://
+        } else if (mSettings.getAllowContentAccess() &&
+                   url.startsWith(ANDROID_CONTENT)) {
+            try {
+                // Strip off mimetype, for compatibility with ContentLoader.java
+                // If we don't do this, we can fail to load Gmail attachments,
+                // because the URL being loaded doesn't exactly match the URL we
+                // have permission to read.
+                int mimeIndex = url.lastIndexOf('?');
+                if (mimeIndex != -1) {
+                    url = url.substring(0, mimeIndex);
+                }
+                Uri uri = Uri.parse(url);
+                return mContext.getContentResolver().openInputStream(uri);
+            } catch (Exception e) {
+                Log.e(LOGTAG, "Exception: " + url);
+                return null;
+            }
+        } else {
+            return null;
+        }
+    }
+
+    /**
      * Start loading a resource.
      * @param loaderHandle The native ResourceLoader that is the target of the
      *                     data.
@@ -660,50 +812,11 @@ class BrowserFrame extends Handler {
             if (cacheMode == WebSettings.LOAD_NORMAL) {
                 cacheMode = WebSettings.LOAD_NO_CACHE;
             }
-            if (mSettings.getSavePassword() && hasPasswordField()) {
-                try {
-                    if (DebugFlags.BROWSER_FRAME) {
-                        Assert.assertNotNull(mCallbackProxy.getBackForwardList()
-                                .getCurrentItem());
-                    }
-                    WebAddress uri = new WebAddress(mCallbackProxy
-                            .getBackForwardList().getCurrentItem().getUrl());
-                    String schemePlusHost = uri.mScheme + uri.mHost;
-                    String[] ret = getUsernamePassword();
-                    // Has the user entered a username/password pair and is
-                    // there some POST data
-                    if (ret != null && postData != null && 
-                            ret[0].length() > 0 && ret[1].length() > 0) {
-                        // Check to see if the username & password appear in
-                        // the post data (there could be another form on the
-                        // page and that was posted instead.
-                        String postString = new String(postData);
-                        if (postString.contains(URLEncoder.encode(ret[0])) &&
-                                postString.contains(URLEncoder.encode(ret[1]))) {
-                            String[] saved = mDatabase.getUsernamePassword(
-                                    schemePlusHost);
-                            if (saved != null) {
-                                // null username implies that user has chosen not to
-                                // save password
-                                if (saved[0] != null) {
-                                    // non-null username implies that user has
-                                    // chosen to save password, so update the 
-                                    // recorded password
-                                    mDatabase.setUsernamePassword(
-                                            schemePlusHost, ret[0], ret[1]);
-                                }
-                            } else {
-                                // CallbackProxy will handle creating the resume
-                                // message
-                                mCallbackProxy.onSavePassword(schemePlusHost, ret[0], 
-                                        ret[1], null);
-                            }
-                        }
-                    }
-                } catch (ParseException ex) {
-                    // if it is bad uri, don't save its password
-                }
-                
+            String[] ret = getUsernamePassword();
+            if (ret != null) {
+                String domUsername = ret[0];
+                String domPassword = ret[1];
+                maybeSavePassword(postData, domUsername, domPassword);
             }
         }
 
@@ -722,8 +835,6 @@ class BrowserFrame extends Handler {
                 this, url, loaderHandle, synchronous, isMainFramePage,
                 mainResource, userGesture, postDataIdentifier, username, password);
 
-        mCallbackProxy.onLoadResource(url);
-
         if (LoadListener.getNativeLoaderCount() > MAX_OUTSTANDING_REQUESTS) {
             // send an error message, so that loadListener can be deleted
             // after this is returned. This is important as LoadListener's 
@@ -735,7 +846,11 @@ class BrowserFrame extends Handler {
             return loadListener;
         }
 
-        FrameLoader loader = new FrameLoader(loadListener, mSettings, method);
+        // Note that we are intentionally skipping
+        // inputStreamForAndroidResource.  This is so that FrameLoader will use
+        // the various StreamLoader classes to handle assets.
+        FrameLoader loader = new FrameLoader(loadListener, mSettings, method,
+                mCallbackProxy.shouldInterceptRequest(url));
         loader.setHeaders(headers);
         loader.setPostData(postData);
         // Set the load mode to the mode used for the current page.
@@ -750,6 +865,89 @@ class BrowserFrame extends Handler {
         checker.responseAlert("startLoadingResource succeed");
 
         return !synchronous ? loadListener : null;
+    }
+
+    /**
+     * If this looks like a POST request (form submission) containing a username
+     * and password, give the user the option of saving them. Will either do
+     * nothing, or block until the UI interaction is complete.
+     *
+     * Called by startLoadingResource when using the Apache HTTP stack.
+     * Called directly by WebKit when using the Chrome HTTP stack.
+     *
+     * @param postData The data about to be sent as the body of a POST request.
+     * @param username The username entered by the user (sniffed from the DOM).
+     * @param password The password entered by the user (sniffed from the DOM).
+     */
+    private void maybeSavePassword(
+            byte[] postData, String username, String password) {
+        if (postData == null
+                || username == null || username.isEmpty()
+                || password == null || password.isEmpty()) {
+            return; // No password to save.
+        }
+
+        if (!mSettings.getSavePassword()) {
+            return; // User doesn't want to save passwords.
+        }
+
+        try {
+            if (DebugFlags.BROWSER_FRAME) {
+                Assert.assertNotNull(mCallbackProxy.getBackForwardList()
+                        .getCurrentItem());
+            }
+            WebAddress uri = new WebAddress(mCallbackProxy
+                    .getBackForwardList().getCurrentItem().getUrl());
+            String schemePlusHost = uri.getScheme() + uri.getHost();
+            // Check to see if the username & password appear in
+            // the post data (there could be another form on the
+            // page and that was posted instead.
+            String postString = new String(postData);
+            if (postString.contains(URLEncoder.encode(username)) &&
+                    postString.contains(URLEncoder.encode(password))) {
+                String[] saved = mDatabase.getUsernamePassword(
+                        schemePlusHost);
+                if (saved != null) {
+                    // null username implies that user has chosen not to
+                    // save password
+                    if (saved[0] != null) {
+                        // non-null username implies that user has
+                        // chosen to save password, so update the
+                        // recorded password
+                        mDatabase.setUsernamePassword(
+                                schemePlusHost, username, password);
+                    }
+                } else {
+                    // CallbackProxy will handle creating the resume
+                    // message
+                    mCallbackProxy.onSavePassword(schemePlusHost, username,
+                            password, null);
+                }
+            }
+        } catch (ParseException ex) {
+            // if it is bad uri, don't save its password
+        }
+    }
+
+    // Called by jni from the chrome network stack.
+    private WebResourceResponse shouldInterceptRequest(String url) {
+        InputStream androidResource = inputStreamForAndroidResource(url);
+        if (androidResource != null) {
+            return new WebResourceResponse(null, null, androidResource);
+        }
+        WebResourceResponse response = mCallbackProxy.shouldInterceptRequest(url);
+        if (response == null && "browser:incognito".equals(url)) {
+            try {
+                Resources res = mContext.getResources();
+                InputStream ins = res.openRawResource(
+                        com.android.internal.R.raw.incognito_mode_start_page);
+                response = new WebResourceResponse("text/html", "utf8", ins);
+            } catch (NotFoundException ex) {
+                // This shouldn't happen, but try and gracefully handle it jic
+                Log.w(LOGTAG, "Failed opening raw.incognito_mode_start_page", ex);
+            }
+        }
+        return response;
     }
 
     /**
@@ -846,6 +1044,7 @@ class BrowserFrame extends Handler {
     private static final int FILE_UPLOAD_LABEL = 4;
     private static final int RESET_LABEL = 5;
     private static final int SUBMIT_LABEL = 6;
+    private static final int FILE_UPLOAD_NO_FILE_CHOSEN = 7;
 
     String getRawResFilename(int id) {
         int resid;
@@ -875,6 +1074,10 @@ class BrowserFrame extends Handler {
                 return mContext.getResources().getString(
                         com.android.internal.R.string.submit);
 
+            case FILE_UPLOAD_NO_FILE_CHOSEN:
+                return mContext.getResources().getString(
+                        com.android.internal.R.string.no_file_chosen);
+
             default:
                 Log.e(LOGTAG, "getRawResFilename got incompatible resource ID");
                 return "";
@@ -895,6 +1098,140 @@ class BrowserFrame extends Handler {
 
     private float density() {
         return mContext.getResources().getDisplayMetrics().density;
+    }
+
+    /**
+     * Called by JNI when the native HTTP stack gets an authentication request.
+     *
+     * We delegate the request to CallbackProxy, and route its response to
+     * {@link #nativeAuthenticationProceed(int, String, String)} or
+     * {@link #nativeAuthenticationCancel(int)}.
+     *
+     * We don't care what thread the callback is invoked on. All threading is
+     * handled on the C++ side, because the WebKit thread may be blocked on a
+     * synchronous call and unable to pump our MessageQueue.
+     */
+    private void didReceiveAuthenticationChallenge(
+            final int handle, String host, String realm, final boolean useCachedCredentials) {
+
+        HttpAuthHandler handler = new HttpAuthHandler() {
+
+            @Override
+            public boolean useHttpAuthUsernamePassword() {
+                return useCachedCredentials;
+            }
+
+            @Override
+            public void proceed(String username, String password) {
+                nativeAuthenticationProceed(handle, username, password);
+            }
+
+            @Override
+            public void cancel() {
+                nativeAuthenticationCancel(handle);
+            }
+        };
+        mCallbackProxy.onReceivedHttpAuthRequest(handler, host, realm);
+    }
+
+    /**
+     * Called by JNI when the native HTTP(S) stack gets an invalid cert chain.
+     *
+     * We delegate the request to CallbackProxy, and route its response to
+     * {@link #nativeSslCertErrorProceed(int)} or
+     * {@link #nativeSslCertErrorCancel(int, int)}.
+     */
+    private void reportSslCertError(final int handle, final int cert_error, byte cert_der[]) {
+        final SslError ssl_error;
+        try {
+            X509Certificate cert = new X509CertImpl(cert_der);
+            ssl_error = new SslError(cert_error, cert);
+        } catch (IOException e) {
+            // Can't get the certificate, not much to do.
+            Log.e(LOGTAG, "Can't get the certificate from WebKit, canceling");
+            nativeSslCertErrorCancel(handle, cert_error);
+            return;
+        }
+
+        SslErrorHandler handler = new SslErrorHandler() {
+
+            @Override
+            public void proceed() {
+                SslCertLookupTable.getInstance().Allow(ssl_error);
+                nativeSslCertErrorProceed(handle);
+            }
+
+            @Override
+            public void cancel() {
+                SslCertLookupTable.getInstance().Deny(ssl_error);
+                nativeSslCertErrorCancel(handle, cert_error);
+            }
+        };
+
+        if (SslCertLookupTable.getInstance().IsAllowed(ssl_error)) {
+            nativeSslCertErrorProceed(handle);
+        } else {
+            mCallbackProxy.onReceivedSslError(handler, ssl_error);
+        }
+    }
+
+    /**
+     * Called by JNI when the native HTTP stack needs to download a file.
+     *
+     * We delegate the request to CallbackProxy, which owns the current app's
+     * DownloadListener.
+     */
+    private void downloadStart(String url, String userAgent,
+            String contentDisposition, String mimeType, long contentLength) {
+        // This will only work if the url ends with the filename
+        if (mimeType.isEmpty()) {
+            try {
+                String extension = url.substring(url.lastIndexOf('.') + 1);
+                mimeType = libcore.net.MimeUtils.guessMimeTypeFromExtension(extension);
+                // MimeUtils might return null, not sure if downloadmanager is happy with that
+                if (mimeType == null)
+                    mimeType = "";
+            } catch(IndexOutOfBoundsException exception) {
+                // mimeType string end with a '.', not much to do
+            }
+        }
+        mimeType = MimeTypeMap.getSingleton().remapGenericMimeType(
+                mimeType, url, contentDisposition);
+
+        if (CertTool.getCertType(mimeType) != null) {
+            mKeyStoreHandler = new KeyStoreHandler(mimeType);
+        } else {
+            mCallbackProxy.onDownloadStart(url, userAgent,
+                contentDisposition, mimeType, contentLength);
+        }
+    }
+
+    /**
+     * Called by JNI for Chrome HTTP stack when the Java side needs to access the data.
+     */
+    private void didReceiveData(byte data[], int size) {
+        if (mKeyStoreHandler != null) mKeyStoreHandler.didReceiveData(data, size);
+    }
+
+    private void didFinishLoading() {
+      if (mKeyStoreHandler != null) {
+          mKeyStoreHandler.installCert(mContext);
+          mKeyStoreHandler = null;
+      }
+    }
+
+    /**
+     * Called by JNI when we load a page over SSL.
+     */
+    private void setCertificate(byte cert_der[]) {
+        try {
+            X509Certificate cert = new X509CertImpl(cert_der);
+            mCallbackProxy.onReceivedCertificate(new SslCertificate(cert));
+        } catch (IOException e) {
+            // Can't get the certificate, not much to do.
+            Log.e(LOGTAG, "Can't get the certificate from WebKit, canceling");
+            return;
+        }
     }
 
     //==========================================================================
@@ -1003,12 +1340,13 @@ class BrowserFrame extends Handler {
      */
     private native void setUsernamePassword(String username, String password);
 
-    /**
-     * Get form's "text" type data associated with the current frame.
-     * @return HashMap If succeed, returns a list of name/value pair. Otherwise
-     *         returns null.
-     */
-    private native HashMap getFormTextData();
+    private native String nativeSaveWebArchive(String basename, boolean autoname);
 
     private native void nativeOrientationChanged(int orientation);
+
+    private native void nativeAuthenticationProceed(int handle, String username, String password);
+    private native void nativeAuthenticationCancel(int handle);
+
+    private native void nativeSslCertErrorProceed(int handle);
+    private native void nativeSslCertErrorCancel(int handle, int cert_error);
 }

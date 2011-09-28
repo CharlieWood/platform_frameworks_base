@@ -19,23 +19,29 @@
 
 <resources xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
-    <string name="app_label" msgid="4489004083283879149">"Statusfelt"</string>
+    <string name="app_label" msgid="7164937344850004466">"Sys.gr.snitt"</string>
     <string name="status_bar_clear_all_button" msgid="7774721344716731603">"Fjern"</string>
+    <string name="status_bar_do_not_disturb_button" msgid="5812628897510997853">"Ikke forstyrr"</string>
+    <string name="status_bar_please_disturb_button" msgid="3345398298841572813">"Vis varslinger"</string>
     <string name="status_bar_no_notifications_title" msgid="4755261167193833213">"Ingen varslinger"</string>
     <string name="status_bar_ongoing_events_title" msgid="1682504513316879202">"Aktiviteter"</string>
     <string name="status_bar_latest_events_title" msgid="6594767438577593172">"Varslinger"</string>
     <string name="battery_low_title" msgid="7923774589611311406">"Koble til en lader"</string>
-    <string name="battery_low_subtitle" msgid="7388781709819722764">"Batteriet er nesten tomt:"</string>
-    <string name="battery_low_percent_format" msgid="696154104579022959">"mindre enn <xliff:g id="NUMBER">%d%%</xliff:g> igjen."</string>
+    <string name="battery_low_subtitle" msgid="1752040062087829196">"Lavt batterinivå."</string>
+    <string name="battery_low_percent_format" msgid="1077244949318261761">"<xliff:g id="NUMBER">%d%%</xliff:g> gjenværende"</string>
+    <string name="invalid_charger" msgid="4549105996740522523">"USB-lading støttes ikke."\n"Bruk kun den medfølgende laderen."</string>
     <string name="battery_low_why" msgid="7279169609518386372">"Batteribruk"</string>
-    <!-- no translation found for usb_accessory_permission_prompt (3969745913539898765) -->
-    <skip />
-    <!-- no translation found for usb_device_confirm_prompt (2727793581411868504) -->
-    <skip />
-    <!-- no translation found for usb_accessory_confirm_prompt (3947430407252730383) -->
-    <skip />
-    <string name="usb_accessory_uri_prompt" msgid="6332150684964235705">"Ingen installerte applikasjoner støtter dette USB-tilbehøret. Les mer om tilbehøret på <xliff:g id="URL">%1$s</xliff:g>"</string>
-    <string name="title_usb_accessory" msgid="4966265263465181372">"USB-enhet"</string>
-    <string name="label_view" msgid="6304565553218192990">"Vis"</string>
-    <string name="always_use_accessory" msgid="1210954576979621596">"Bruk som standard for dette USB-tilbehøret"</string>
+    <string name="status_bar_settings_settings_button" msgid="3023889916699270224">"Innstillinger"</string>
+    <string name="status_bar_settings_wifi_button" msgid="1733928151698311923">"Trådløse nettverk"</string>
+    <string name="status_bar_settings_airplane" msgid="4879879698500955300">"Flymodus"</string>
+    <string name="status_bar_settings_rotation_lock" msgid="8361452930058000609">"Lås skjermretning"</string>
+    <string name="status_bar_settings_mute_label" msgid="554682549917429396">"DEMPET"</string>
+    <string name="status_bar_settings_auto_brightness_label" msgid="511453614962324674">"AUTO"</string>
+    <string name="status_bar_settings_notifications" msgid="397146176280905137">"Varslinger"</string>
+    <string name="recent_tasks_title" msgid="3691764623638127888">"Nylig"</string>
+    <string name="recent_tasks_empty" msgid="1905484479067697884">"Ingen nylig brukte programmer."</string>
+    <string name="recent_tasks_app_label" msgid="3796483981246752469">"Programmer"</string>
+    <string name="bluetooth_tethered" msgid="7094101612161133267">"Bluetooth tilknyttet"</string>
+    <string name="status_bar_input_method_settings_configure_input_methods" msgid="737483394044014246">"Konfigurer inndatametoder"</string>
+    <string name="status_bar_use_physical_keyboard" msgid="3695516942412442936">"Bruk fysisk tastatur"</string>
 </resources>

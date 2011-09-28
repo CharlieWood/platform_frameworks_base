@@ -16,7 +16,6 @@
 
 package android.content.res;
 
-
 import com.android.internal.util.XmlUtils;
 
 import org.xmlpull.v1.XmlPullParser;
@@ -25,6 +24,7 @@ import org.xmlpull.v1.XmlPullParserException;
 import android.graphics.Movie;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.Drawable.ConstantState;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemProperties;
@@ -41,10 +41,32 @@ import java.io.InputStream;
 import java.lang.ref.WeakReference;
 import java.util.Locale;
 
+import libcore.icu.NativePluralRules;
+
 /**
  * Class for accessing an application's resources.  This sits on top of the
- * asset manager of the application (accessible through getAssets()) and
- * provides a higher-level API for getting typed data from the assets.
+ * asset manager of the application (accessible through {@link #getAssets}) and
+ * provides a high-level API for getting typed data from the assets.
+ *
+ * <p>The Android resource system keeps track of all non-code assets associated with an
+ * application. You can use this class to access your application's resources. You can generally
+ * acquire the {@link android.content.res.Resources} instance associated with your application
+ * with {@link android.content.Context#getResources getResources()}.</p>
+ *
+ * <p>The Android SDK tools compile your application's resources into the application binary
+ * at build time.  To use a resource, you must install it correctly in the source tree (inside
+ * your project's {@code res/} directory) and build your application.  As part of the build
+ * process, the SDK tools generate symbols for each resource, which you can use in your application
+ * code to access the resources.</p>
+ *
+ * <p>Using application resources makes it easy to update various characteristics of your
+ * application without modifying code, and&mdash;by providing sets of alternative
+ * resources&mdash;enables you to optimize your application for a variety of device configurations
+ * (such as for different languages and screen sizes). This is an important aspect of developing
+ * Android applications that are compatible on different types of devices.</p>
+ *
+ * <p>For more information about using resources, see the documentation about <a
+ * href="{@docRoot}guide/topics/resources/index.html">Application Resources</a>.</p>
  */
 public class Resources {
     static final String TAG = "Resources";
@@ -52,10 +74,8 @@ public class Resources {
     private static final boolean DEBUG_CONFIG = false;
     private static final boolean TRACE_FOR_PRELOAD = false;
 
-    // Use the current SDK version code.  If we are a development build,
-    // also allow the previous SDK version + 1.
-    private static final int sSdkVersion = Build.VERSION.SDK_INT
-            + ("REL".equals(Build.VERSION.CODENAME) ? 0 : 1);
+    private static final int ID_OTHER = 0x01000004;
+
     private static final Object mSync = new Object();
     private static Resources mSystem = null;
     
@@ -66,6 +86,8 @@ public class Resources {
             = new LongSparseArray<Drawable.ConstantState>();
     private static final SparseArray<ColorStateList> mPreloadedColorStateLists
             = new SparseArray<ColorStateList>();
+    private static final LongSparseArray<Drawable.ConstantState> sPreloadedColorDrawables
+            = new LongSparseArray<Drawable.ConstantState>();
     private static boolean mPreloaded;
 
     /*package*/ final TypedValue mTmpValue = new TypedValue();
@@ -75,6 +97,8 @@ public class Resources {
             = new LongSparseArray<WeakReference<Drawable.ConstantState> >();
     private final SparseArray<WeakReference<ColorStateList> > mColorStateListCache
             = new SparseArray<WeakReference<ColorStateList> >();
+    private final LongSparseArray<WeakReference<Drawable.ConstantState> > mColorDrawableCache
+            = new LongSparseArray<WeakReference<Drawable.ConstantState> >();
     private boolean mPreloading;
 
     /*package*/ TypedArray mCachedStyledAttributes = null;
@@ -86,12 +110,12 @@ public class Resources {
     /*package*/ final AssetManager mAssets;
     private final Configuration mConfiguration = new Configuration();
     /*package*/ final DisplayMetrics mMetrics = new DisplayMetrics();
-    PluralRules mPluralRule;
+    private NativePluralRules mPluralRule;
     
     private CompatibilityInfo mCompatibilityInfo;
     private Display mDefaultDisplay;
 
-    private static final LongSparseArray<Object> EMPTY_ARRAY = new LongSparseArray<Object>() {
+    private static final LongSparseArray<Object> EMPTY_ARRAY = new LongSparseArray<Object>(0) {
         @Override
         public void put(long k, Object o) {
             throw new UnsupportedOperationException();
@@ -107,6 +131,23 @@ public class Resources {
         return (LongSparseArray<T>) EMPTY_ARRAY;
     }
 
+    /** @hide */
+    public static int selectDefaultTheme(int curTheme, int targetSdkVersion) {
+        return selectSystemTheme(curTheme, targetSdkVersion,
+                com.android.internal.R.style.Theme, com.android.internal.R.style.Theme_Holo);
+    }
+    
+    /** @hide */
+    public static int selectSystemTheme(int curTheme, int targetSdkVersion, int orig, int holo) {
+        if (curTheme != 0) {
+            return curTheme;
+        }
+        if (targetSdkVersion < Build.VERSION_CODES.HONEYCOMB) {
+            return orig;
+        }
+        return holo;
+    }
+    
     /**
      * This exception is thrown by the resource APIs when a requested resource
      * can not be found.
@@ -203,9 +244,17 @@ public class Resources {
     }
 
     /**
+     * Return the character sequence associated with a particular resource ID for a particular
+     * numerical quantity.
+     *
+     * <p>See <a href="{@docRoot}guide/topics/resources/string-resource.html#Plurals">String
+     * Resources</a> for more on quantity strings.
+     *
      * @param id The desired resource identifier, as generated by the aapt
      *           tool. This integer encodes the package, type, and resource
      *           entry. The value 0 is an invalid identifier.
+     * @param quantity The number used to get the correct string for the current language's
+     *           plural rules.
      *
      * @throws NotFoundException Throws NotFoundException if the given ID does not exist.
      *
@@ -213,26 +262,49 @@ public class Resources {
      *         possibly styled text information.
      */
     public CharSequence getQuantityText(int id, int quantity) throws NotFoundException {
-        PluralRules rule = getPluralRule();
-        CharSequence res = mAssets.getResourceBagText(id, rule.attrForNumber(quantity));
+        NativePluralRules rule = getPluralRule();
+        CharSequence res = mAssets.getResourceBagText(id,
+                attrForQuantityCode(rule.quantityForInt(quantity)));
         if (res != null) {
             return res;
         }
-        res = mAssets.getResourceBagText(id, PluralRules.ID_OTHER);
+        res = mAssets.getResourceBagText(id, ID_OTHER);
         if (res != null) {
             return res;
         }
         throw new NotFoundException("Plural resource ID #0x" + Integer.toHexString(id)
                 + " quantity=" + quantity
-                + " item=" + PluralRules.stringForQuantity(rule.quantityForNumber(quantity)));
+                + " item=" + stringForQuantityCode(rule.quantityForInt(quantity)));
     }
 
-    private PluralRules getPluralRule() {
+    private NativePluralRules getPluralRule() {
         synchronized (mSync) {
             if (mPluralRule == null) {
-                mPluralRule = PluralRules.ruleForLocale(mConfiguration.locale);
+                mPluralRule = NativePluralRules.forLocale(mConfiguration.locale);
             }
             return mPluralRule;
+        }
+    }
+
+    private static int attrForQuantityCode(int quantityCode) {
+        switch (quantityCode) {
+            case NativePluralRules.ZERO: return 0x01000005;
+            case NativePluralRules.ONE:  return 0x01000006;
+            case NativePluralRules.TWO:  return 0x01000007;
+            case NativePluralRules.FEW:  return 0x01000008;
+            case NativePluralRules.MANY: return 0x01000009;
+            default:                     return ID_OTHER;
+        }
+    }
+
+    private static String stringForQuantityCode(int quantityCode) {
+        switch (quantityCode) {
+            case NativePluralRules.ZERO: return "zero";
+            case NativePluralRules.ONE:  return "one";
+            case NativePluralRules.TWO:  return "two";
+            case NativePluralRules.FEW:  return "few";
+            case NativePluralRules.MANY: return "many";
+            default:                     return "other";
         }
     }
 
@@ -290,6 +362,9 @@ public class Resources {
      * stripped of any styled text information.
      * {@more}
      *
+     * <p>See <a href="{@docRoot}guide/topics/resources/string-resource.html#Plurals">String
+     * Resources</a> for more on quantity strings.
+     *
      * @param id The desired resource identifier, as generated by the aapt
      *           tool. This integer encodes the package, type, and resource
      *           entry. The value 0 is an invalid identifier.
@@ -311,6 +386,9 @@ public class Resources {
     /**
      * Return the string value associated with a particular resource ID for a particular
      * numerical quantity.
+     *
+     * <p>See <a href="{@docRoot}guide/topics/resources/string-resource.html#Plurals">String
+     * Resources</a> for more on quantity strings.
      *
      * @param id The desired resource identifier, as generated by the aapt
      *           tool. This integer encodes the package, type, and resource
@@ -578,6 +656,50 @@ public class Resources {
         synchronized (mTmpValue) {
             TypedValue value = mTmpValue;
             getValue(id, value, true);
+            return loadDrawable(value, id);
+        }
+    }
+
+    /**
+     * Return a drawable object associated with a particular resource ID for the
+     * given screen density in DPI. This will set the drawable's density to be
+     * the device's density multiplied by the ratio of actual drawable density
+     * to requested density. This allows the drawable to be scaled up to the
+     * correct size if needed. Various types of objects will be returned
+     * depending on the underlying resource -- for example, a solid color, PNG
+     * image, scalable image, etc. The Drawable API hides these implementation
+     * details.
+     * 
+     * @param id The desired resource identifier, as generated by the aapt tool.
+     *            This integer encodes the package, type, and resource entry.
+     *            The value 0 is an invalid identifier.
+     * @param density the desired screen density indicated by the resource as
+     *            found in {@link DisplayMetrics}.
+     * @throws NotFoundException Throws NotFoundException if the given ID does
+     *             not exist.
+     * @return Drawable An object that can be used to draw this resource.
+     * @hide
+     */
+    public Drawable getDrawableForDensity(int id, int density) throws NotFoundException {
+        synchronized (mTmpValue) {
+            TypedValue value = mTmpValue;
+            getValueForDensity(id, density, value, true);
+
+            /*
+             * Pretend the requested density is actually the display density. If
+             * the drawable returned is not the requested density, then force it
+             * to be scaled later by dividing its density by the ratio of
+             * requested density to actual device density. Drawables that have
+             * undefined density or no density don't need to be handled here.
+             */
+            if (value.density > 0 && value.density != TypedValue.DENSITY_NONE) {
+                if (value.density == density) {
+                    value.density = DisplayMetrics.DENSITY_DEVICE;
+                } else {
+                    value.density = (value.density * DisplayMetrics.DENSITY_DEVICE) / density;
+                }
+            }
+
             return loadDrawable(value, id);
         }
     }
@@ -885,12 +1007,35 @@ public class Resources {
      */
     public void getValue(int id, TypedValue outValue, boolean resolveRefs)
             throws NotFoundException {
-        boolean found = mAssets.getResourceValue(id, outValue, resolveRefs);
+        boolean found = mAssets.getResourceValue(id, 0, outValue, resolveRefs);
         if (found) {
             return;
         }
         throw new NotFoundException("Resource ID #0x"
                                     + Integer.toHexString(id));
+    }
+
+    /**
+     * Get the raw value associated with a resource with associated density.
+     * 
+     * @param id resource identifier
+     * @param density density in DPI
+     * @param resolveRefs If true, a resource that is a reference to another
+     *            resource will be followed so that you receive the actual final
+     *            resource data. If false, the TypedValue will be filled in with
+     *            the reference itself.
+     * @throws NotFoundException Throws NotFoundException if the given ID does
+     *             not exist.
+     * @see #getValue(String, TypedValue, boolean)
+     * @hide
+     */
+    public void getValueForDensity(int id, int density, TypedValue outValue, boolean resolveRefs)
+            throws NotFoundException {
+        boolean found = mAssets.getResourceValue(id, density, outValue, resolveRefs);
+        if (found) {
+            return;
+        }
+        throw new NotFoundException("Resource ID #0x" + Integer.toHexString(id));
     }
 
     /**
@@ -1298,43 +1443,53 @@ public class Resources {
                     mConfiguration.touchscreen,
                     (int)(mMetrics.density*160), mConfiguration.keyboard,
                     keyboardHidden, mConfiguration.navigation, width, height,
-                    mConfiguration.screenLayout, mConfiguration.uiMode, sSdkVersion);
-            int N = mDrawableCache.size();
-            if (DEBUG_CONFIG) {
-                Log.d(TAG, "Cleaning up drawables config changes: 0x"
-                        + Integer.toHexString(configChanges));
-            }
-            for (int i=0; i<N; i++) {
-                WeakReference<Drawable.ConstantState> ref = mDrawableCache.valueAt(i);
-                if (ref != null) {
-                    Drawable.ConstantState cs = ref.get();
-                    if (cs != null) {
-                        if (Configuration.needNewResources(
-                                configChanges, cs.getChangingConfigurations())) {
-                            if (DEBUG_CONFIG) {
-                                Log.d(TAG, "FLUSHING #0x"
-                                        + Long.toHexString(mDrawableCache.keyAt(i))
-                                        + " / " + cs + " with changes: 0x"
-                                        + Integer.toHexString(cs.getChangingConfigurations()));
-                            }
-                            mDrawableCache.setValueAt(i, null);
-                        } else if (DEBUG_CONFIG) {
-                            Log.d(TAG, "(Keeping #0x"
-                                    + Long.toHexString(mDrawableCache.keyAt(i))
-                                    + " / " + cs + " with changes: 0x"
-                                    + Integer.toHexString(cs.getChangingConfigurations())
-                                    + ")");
-                        }
-                    }
-                }
-            }
-            mDrawableCache.clear();
+                    mConfiguration.screenLayout, mConfiguration.uiMode,
+                    Build.VERSION.RESOURCES_SDK_INT);
+
+            clearDrawableCache(mDrawableCache, configChanges);
+            clearDrawableCache(mColorDrawableCache, configChanges);
+
             mColorStateListCache.clear();
+
             flushLayoutCache();
         }
         synchronized (mSync) {
             if (mPluralRule != null) {
-                mPluralRule = PluralRules.ruleForLocale(config.locale);
+                mPluralRule = NativePluralRules.forLocale(config.locale);
+            }
+        }
+    }
+
+    private void clearDrawableCache(
+            LongSparseArray<WeakReference<ConstantState>> cache,
+            int configChanges) {
+        int N = cache.size();
+        if (DEBUG_CONFIG) {
+            Log.d(TAG, "Cleaning up drawables config changes: 0x"
+                    + Integer.toHexString(configChanges));
+        }
+        for (int i=0; i<N; i++) {
+            WeakReference<Drawable.ConstantState> ref = cache.valueAt(i);
+            if (ref != null) {
+                Drawable.ConstantState cs = ref.get();
+                if (cs != null) {
+                    if (Configuration.needNewResources(
+                            configChanges, cs.getChangingConfigurations())) {
+                        if (DEBUG_CONFIG) {
+                            Log.d(TAG, "FLUSHING #0x"
+                                    + Long.toHexString(mDrawableCache.keyAt(i))
+                                    + " / " + cs + " with changes: 0x"
+                                    + Integer.toHexString(cs.getChangingConfigurations()));
+                        }
+                        cache.setValueAt(i, null);
+                    } else if (DEBUG_CONFIG) {
+                        Log.d(TAG, "(Keeping #0x"
+                                + Long.toHexString(cache.keyAt(i))
+                                + " / " + cs + " with changes: 0x"
+                                + Integer.toHexString(cs.getChangingConfigurations())
+                                + ")");
+                    }
+                }
             }
         }
     }
@@ -1503,7 +1658,7 @@ public class Resources {
     /**
      * Parse a series of {@link android.R.styleable#Extra &lt;extra&gt;} tags from
      * an XML file.  You call this when you are at the parent tag of the
-     * extra tags, and it return once all of the child tags have been parsed.
+     * extra tags, and it will return once all of the child tags have been parsed.
      * This will call {@link #parseBundleExtra} for each extra tag encountered.
      * 
      * @param parser The parser from which to retrieve the extras.
@@ -1661,13 +1816,18 @@ public class Resources {
         }
 
         final long key = (((long) value.assetCookie) << 32) | value.data;
-        Drawable dr = getCachedDrawable(key);
+        boolean isColorDrawable = false;
+        if (value.type >= TypedValue.TYPE_FIRST_COLOR_INT &&
+                value.type <= TypedValue.TYPE_LAST_COLOR_INT) {
+            isColorDrawable = true;
+        }
+        Drawable dr = getCachedDrawable(isColorDrawable ? mColorDrawableCache : mDrawableCache, key);
 
         if (dr != null) {
             return dr;
         }
 
-        Drawable.ConstantState cs = sPreloadedDrawables.get(key);
+        Drawable.ConstantState cs = isColorDrawable ? sPreloadedColorDrawables.get(key) : sPreloadedDrawables.get(key);
         if (cs != null) {
             dr = cs.newDrawable(this);
         } else {
@@ -1726,13 +1886,21 @@ public class Resources {
             cs = dr.getConstantState();
             if (cs != null) {
                 if (mPreloading) {
-                    sPreloadedDrawables.put(key, cs);
+                    if (isColorDrawable) {
+                        sPreloadedColorDrawables.put(key, cs);
+                    } else {
+                        sPreloadedDrawables.put(key, cs);
+                    }
                 } else {
                     synchronized (mTmpValue) {
                         //Log.i(TAG, "Saving cached drawable @ #" +
                         //        Integer.toHexString(key.intValue())
                         //        + " in " + this + ": " + cs);
-                        mDrawableCache.put(key, new WeakReference<Drawable.ConstantState>(cs));
+                        if (isColorDrawable) {
+                            mColorDrawableCache.put(key, new WeakReference<Drawable.ConstantState>(cs));
+                        } else {
+                            mDrawableCache.put(key, new WeakReference<Drawable.ConstantState>(cs));
+                        }
                     }
                 }
             }
@@ -1741,9 +1909,11 @@ public class Resources {
         return dr;
     }
 
-    private Drawable getCachedDrawable(long key) {
+    private Drawable getCachedDrawable(
+            LongSparseArray<WeakReference<ConstantState>> drawableCache,
+            long key) {
         synchronized (mTmpValue) {
-            WeakReference<Drawable.ConstantState> wr = mDrawableCache.get(key);
+            WeakReference<Drawable.ConstantState> wr = drawableCache.get(key);
             if (wr != null) {   // we have the key
                 Drawable.ConstantState entry = wr.get();
                 if (entry != null) {
@@ -1753,7 +1923,7 @@ public class Resources {
                     return entry.newDrawable(this);
                 }
                 else {  // our entry has been purged
-                    mDrawableCache.delete(key);
+                    drawableCache.delete(key);
                 }
             }
         }

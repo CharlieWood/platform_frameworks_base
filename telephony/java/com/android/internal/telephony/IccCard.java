@@ -28,6 +28,7 @@ import android.util.Log;
 
 import com.android.internal.telephony.PhoneBase;
 import com.android.internal.telephony.CommandsInterface.RadioState;
+import android.os.SystemProperties;
 
 /**
  * {@hide}
@@ -84,6 +85,11 @@ public abstract class IccCard {
     private static final int EVENT_CHANGE_ICC_PASSWORD_DONE = 9;
     private static final int EVENT_QUERY_FACILITY_FDN_DONE = 10;
     private static final int EVENT_CHANGE_FACILITY_FDN_DONE = 11;
+    protected static final int EVENT_SIM_STATUS_CHANGED = 12;
+
+    // FIXME: remove mot from property
+    static final boolean LTE_AVAILABLE_ON_CDMA =
+        SystemProperties.getBoolean("ro.mot.lte_on_cdma", false);
 
     /*
       UNKNOWN is a transient state, for example, after uesr inputs ICC pin under
@@ -426,6 +432,9 @@ public abstract class IccCard {
             broadcastIccStateChangedIntent(INTENT_VALUE_ICC_LOCKED,
                   INTENT_VALUE_LOCKED_NETWORK);
         }
+        if (oldState != State.READY && newState == State.READY && LTE_AVAILABLE_ON_CDMA) {
+            mPhone.mSIMRecords.onSimReady();
+        }
     }
 
     /**
@@ -486,6 +495,12 @@ public abstract class IccCard {
             serviceClassX = CommandsInterface.SERVICE_CLASS_VOICE +
                             CommandsInterface.SERVICE_CLASS_DATA +
                             CommandsInterface.SERVICE_CLASS_FAX;
+
+            if (!mPhone.mIsTheCurrentActivePhone) {
+                Log.e(mLogTag, "Received message " + msg + "[" + msg.what
+                        + "] while being destroyed. Ignoring.");
+                return;
+            }
 
             switch (msg.what) {
                 case EVENT_RADIO_OFF_OR_NOT_AVAILABLE:
@@ -582,6 +597,10 @@ public abstract class IccCard {
                                                         = ar.exception;
                     ((Message)ar.userObj).sendToTarget();
                     break;
+                case EVENT_SIM_STATUS_CHANGED:
+                    Log.d(mLogTag, "Received Event EVENT_SIM_STATUS_CHANGED");
+                    mPhone.mCM.getIccCardStatus(obtainMessage(EVENT_GET_ICC_STATUS_DONE));
+                    break;
                 default:
                     Log.e(mLogTag, "[IccCard] Unknown Event " + msg.what);
             }
@@ -606,14 +625,16 @@ public abstract class IccCard {
             currentRadioState == RadioState.SIM_NOT_READY     ||
             currentRadioState == RadioState.RUIM_NOT_READY    ||
             currentRadioState == RadioState.NV_NOT_READY      ||
-            currentRadioState == RadioState.NV_READY) {
+            (currentRadioState == RadioState.NV_READY && !LTE_AVAILABLE_ON_CDMA)) {
             return IccCard.State.NOT_READY;
         }
 
         if( currentRadioState == RadioState.SIM_LOCKED_OR_ABSENT  ||
             currentRadioState == RadioState.SIM_READY             ||
             currentRadioState == RadioState.RUIM_LOCKED_OR_ABSENT ||
-            currentRadioState == RadioState.RUIM_READY) {
+            currentRadioState == RadioState.RUIM_READY ||
+            (currentRadioState == RadioState.NV_READY && LTE_AVAILABLE_ON_CDMA)) {
+
 
             int index;
 
@@ -626,7 +647,13 @@ public abstract class IccCard {
                 index = mIccCardStatus.getGsmUmtsSubscriptionAppIndex();
             }
 
-            IccCardApplication app = mIccCardStatus.getApplication(index);
+            IccCardApplication app;
+            if (index >= 0 && index < IccCardStatus.CARD_MAX_APPS) {
+                app = mIccCardStatus.getApplication(index);
+            } else {
+                Log.e(mLogTag, "[IccCard] Invalid Subscription Application index:" + index);
+                return IccCard.State.ABSENT;
+            }
 
             if (app == null) {
                 Log.e(mLogTag, "[IccCard] Subscription Application in not present");
@@ -672,12 +699,11 @@ public abstract class IccCard {
      * @return true if a ICC card is present
      */
     public boolean hasIccCard() {
-        boolean isIccPresent;
-        if (mPhone.getPhoneName().equals("GSM")) {
-            return mIccCardStatus.getCardState().isCardPresent();
-        } else {
-            // TODO: Make work with a CDMA device with a RUIM card.
+        if (mIccCardStatus == null) {
             return false;
+        } else {
+            // Returns ICC card status for both GSM and CDMA mode
+            return mIccCardStatus.getCardState().isCardPresent();
         }
     }
 

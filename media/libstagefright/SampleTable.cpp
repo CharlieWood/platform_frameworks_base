@@ -53,6 +53,8 @@ SampleTable::SampleTable(const sp<DataSource> &source)
       mNumSampleSizes(0),
       mTimeToSampleCount(0),
       mTimeToSample(NULL),
+      mCompositionTimeDeltaEntries(NULL),
+      mNumCompositionTimeDeltaEntries(0),
       mSyncSampleOffset(-1),
       mNumSyncSamples(0),
       mSyncSamples(NULL),
@@ -68,6 +70,9 @@ SampleTable::~SampleTable() {
     delete[] mSyncSamples;
     mSyncSamples = NULL;
 
+    delete[] mCompositionTimeDeltaEntries;
+    mCompositionTimeDeltaEntries = NULL;
+
     delete[] mTimeToSample;
     mTimeToSample = NULL;
 
@@ -76,7 +81,7 @@ SampleTable::~SampleTable() {
 }
 
 status_t SampleTable::setChunkOffsetParams(
-        uint32_t type, off_t data_offset, size_t data_size) {
+        uint32_t type, off64_t data_offset, size_t data_size) {
     if (mChunkOffsetOffset >= 0) {
         return ERROR_MALFORMED;
     }
@@ -117,7 +122,7 @@ status_t SampleTable::setChunkOffsetParams(
 }
 
 status_t SampleTable::setSampleToChunkParams(
-        off_t data_offset, size_t data_size) {
+        off64_t data_offset, size_t data_size) {
     if (mSampleToChunkOffset >= 0) {
         return ERROR_MALFORMED;
     }
@@ -168,7 +173,7 @@ status_t SampleTable::setSampleToChunkParams(
 }
 
 status_t SampleTable::setSampleSizeParams(
-        uint32_t type, off_t data_offset, size_t data_size) {
+        uint32_t type, off64_t data_offset, size_t data_size) {
     if (mSampleSizeOffset >= 0) {
         return ERROR_MALFORMED;
     }
@@ -228,7 +233,7 @@ status_t SampleTable::setSampleSizeParams(
 }
 
 status_t SampleTable::setTimeToSampleParams(
-        off_t data_offset, size_t data_size) {
+        off64_t data_offset, size_t data_size) {
     if (mTimeToSample != NULL || data_size < 8) {
         return ERROR_MALFORMED;
     }
@@ -260,7 +265,52 @@ status_t SampleTable::setTimeToSampleParams(
     return OK;
 }
 
-status_t SampleTable::setSyncSampleParams(off_t data_offset, size_t data_size) {
+status_t SampleTable::setCompositionTimeToSampleParams(
+        off64_t data_offset, size_t data_size) {
+    LOGI("There are reordered frames present.");
+
+    if (mCompositionTimeDeltaEntries != NULL || data_size < 8) {
+        return ERROR_MALFORMED;
+    }
+
+    uint8_t header[8];
+    if (mDataSource->readAt(
+                data_offset, header, sizeof(header))
+            < (ssize_t)sizeof(header)) {
+        return ERROR_IO;
+    }
+
+    if (U32_AT(header) != 0) {
+        // Expected version = 0, flags = 0.
+        return ERROR_MALFORMED;
+    }
+
+    size_t numEntries = U32_AT(&header[4]);
+
+    if (data_size != (numEntries + 1) * 8) {
+        return ERROR_MALFORMED;
+    }
+
+    mNumCompositionTimeDeltaEntries = numEntries;
+    mCompositionTimeDeltaEntries = new uint32_t[2 * numEntries];
+
+    if (mDataSource->readAt(
+                data_offset + 8, mCompositionTimeDeltaEntries, numEntries * 8)
+            < (ssize_t)numEntries * 8) {
+        delete[] mCompositionTimeDeltaEntries;
+        mCompositionTimeDeltaEntries = NULL;
+
+        return ERROR_IO;
+    }
+
+    for (size_t i = 0; i < 2 * numEntries; ++i) {
+        mCompositionTimeDeltaEntries[i] = ntohl(mCompositionTimeDeltaEntries[i]);
+    }
+
+    return OK;
+}
+
+status_t SampleTable::setSyncSampleParams(off64_t data_offset, size_t data_size) {
     if (mSyncSampleOffset >= 0 || data_size < 8) {
         return ERROR_MALFORMED;
     }
@@ -281,7 +331,7 @@ status_t SampleTable::setSyncSampleParams(off_t data_offset, size_t data_size) {
     mNumSyncSamples = U32_AT(&header[4]);
 
     if (mNumSyncSamples < 2) {
-        LOGW("Table of sync samples is empty or has only a single entry!");
+        LOGV("Table of sync samples is empty or has only a single entry!");
     }
 
     mSyncSamples = new uint32_t[mNumSyncSamples];
@@ -333,6 +383,8 @@ uint32_t abs_difference(uint32_t time1, uint32_t time2) {
 
 status_t SampleTable::findSampleAtTime(
         uint32_t req_time, uint32_t *sample_index, uint32_t flags) {
+    // XXX this currently uses decoding time, instead of composition time.
+
     *sample_index = 0;
 
     Mutex::Autolock autoLock(mLock);
@@ -419,8 +471,10 @@ status_t SampleTable::findSyncSampleNear(
 
         ++left;
     }
+    if (left > 0) {
+        --left;
+    }
 
-    --left;
     uint32_t x;
     if (mDataSource->readAt(
                 mSyncSampleOffset + 8 + left * 4, &x, 4) != 4) {
@@ -557,7 +611,7 @@ status_t SampleTable::getSampleSize_l(
 
 status_t SampleTable::getMetaDataForSample(
         uint32_t sampleIndex,
-        off_t *offset,
+        off64_t *offset,
         size_t *size,
         uint32_t *decodingTime,
         bool *isSyncSample) {
@@ -603,6 +657,27 @@ status_t SampleTable::getMetaDataForSample(
     }
 
     return OK;
+}
+
+uint32_t SampleTable::getCompositionTimeOffset(uint32_t sampleIndex) const {
+    if (mCompositionTimeDeltaEntries == NULL) {
+        return 0;
+    }
+
+    uint32_t curSample = 0;
+    for (size_t i = 0; i < mNumCompositionTimeDeltaEntries; ++i) {
+        uint32_t sampleCount = mCompositionTimeDeltaEntries[2 * i];
+
+        if (sampleIndex < curSample + sampleCount) {
+            uint32_t sampleDelta = mCompositionTimeDeltaEntries[2 * i + 1];
+
+            return sampleDelta;
+        }
+
+        curSample += sampleCount;
+    }
+
+    return 0;
 }
 
 }  // namespace android

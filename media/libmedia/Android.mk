@@ -15,6 +15,7 @@ LOCAL_SRC_FILES:= \
     IMediaRecorderClient.cpp \
     IMediaPlayer.cpp \
     IMediaRecorder.cpp \
+    IStreamSource.cpp \
     Metadata.cpp \
     mediarecorder.cpp \
     IMediaMetadataRetriever.cpp \
@@ -35,7 +36,9 @@ LOCAL_SRC_FILES:= \
     fixedfft.cpp.arm
 
 LOCAL_SHARED_LIBRARIES := \
-	libui libcutils libutils libbinder libsonivox libicuuc libexpat libsurfaceflinger_client libcamera_client
+	libui libcutils libutils libbinder libsonivox libicuuc libexpat \
+        libsurfaceflinger_client libcamera_client libstagefright_foundation \
+        libgui
 
 LOCAL_MODULE:= libmedia
 

@@ -28,6 +28,16 @@
         <span class="zh-CN" style="display:none">Android 是什么？</span>
         <span class="zh-TW" style="display:none">什麼是 Android？</span>
           </a></li>
+      <li><a href="<?cs var:toroot ?>guide/topics/fundamentals.html">
+        <span class="en">Application Fundamentals</span>
+        <span class="de" style="display:none">Anwendungsgrundlagen</span>
+        <span class="es" style="display:none">Fundamentos de las aplicaciones</span>
+        <span class="fr" style="display:none">Principes de base des applications</span>
+        <span class="it" style="display:none">Concetti fondamentali sulle applicazioni</span>
+        <span class="ja" style="display:none">開発の基礎</span>
+        <span class="zh-CN" style="display:none">应用程序基础</span>
+        <span class="zh-TW" style="display:none">應用程式基本原理</span>
+      </a></li>
 
   <!--  <li><a style="color:gray;">The Android SDK</a></li> -->
   <!--  <li><a style="color:gray;">Walkthrough for Developers</a></li> -->
@@ -47,23 +57,49 @@
       <span class="zh-TW" style="display:none">架構主題</span>
     </h2>
     <ul>
-      <li><a href="<?cs var:toroot ?>guide/topics/fundamentals.html">
-            <span class="en">Application Fundamentals</span>
-            <span class="de" style="display:none">Anwendungsgrundlagen</span>
-            <span class="es" style="display:none">Fundamentos de las aplicaciones</span>
-            <span class="fr" style="display:none">Principes de base des applications</span>
-            <span class="it" style="display:none">Concetti fondamentali sulle applicazioni</span>
-            <span class="ja" style="display:none">開発の基礎</span>
-            <span class="zh-CN" style="display:none">应用程序基础</span>
-            <span class="zh-TW" style="display:none">應用程式基本原理</span>
-
+      <li class="toggle-list">
+        <div><a href="<?cs var:toroot ?>guide/topics/fundamentals/activities.html">
+          <span class="en">Activities</span>
+        </a> <span class="new-child">new!</span></div>
+        <ul>
+          <li><a href="<?cs var:toroot ?>guide/topics/fundamentals/fragments.html">
+            <span class="en">Fragments</span>
+          </a> <span class="new">new!</span></li>
+          <li><a href="<?cs var:toroot ?>guide/topics/fundamentals/loaders.html">
+            <span class="en">Loaders</span>
+          </a> <span class="new">new!</span></li>
+          <li><a href="<?cs var:toroot ?>guide/topics/fundamentals/tasks-and-back-stack.html">
+            <span class="en">Tasks and Back Stack</span></a></li>
+        </ul>
+      </li>
+      <li class="toggle-list">
+        <div><a href="<?cs var:toroot ?>guide/topics/fundamentals/services.html">
+          <span class="en">Services</span>
+        </a></div>
+        <ul>
+          <li><a href="<?cs var:toroot ?>guide/topics/fundamentals/bound-services.html">
+            <span class="en">Bound Services</span>
+          </a></li>
+        </ul>
+      </li>
+      <li><a href="<?cs var:toroot ?>guide/topics/providers/content-providers.html">
+            <span class="en">Content Providers</span>
+          </a></li>
+      <li><a href="<?cs var:toroot ?>guide/topics/intents/intents-filters.html">
+            <span class="en">Intents and Intent Filters</span>
+          </a></li>
+      <li><a href="<?cs var:toroot ?>guide/topics/fundamentals/processes-and-threads.html">
+            <span class="en">Processes and Threads</span>
           </a></li>
     </ul>
+
+
     <ul>
       <li class="toggle-list">
         <div><a href="<?cs var:toroot ?>guide/topics/ui/index.html">
-               <span class="en">User Interface</span>
-             </a></div>
+            <span class="en">User Interface</span>
+          </a>
+          <span class="new-child">new!</span></div>
         <ul>
           <li><a href="<?cs var:toroot ?>guide/topics/ui/declaring-layout.html">
                <span class="en">Declaring Layout</span>
@@ -71,6 +107,9 @@
           <li><a href="<?cs var:toroot ?>guide/topics/ui/menus.html">
                <span class="en">Creating Menus</span>
               </a></li>
+          <li><a href="<?cs var:toroot ?>guide/topics/ui/actionbar.html">
+               <span class="en">Using the Action Bar</span>
+              </a> <span class="new">new!</span></li>
           <li><a href="<?cs var:toroot ?>guide/topics/ui/dialogs.html">
                 <span class="en">Creating Dialogs</span>
               </a></li>
@@ -90,6 +129,10 @@
               </a></li>
             </ul>
           </li>
+          <li><a href="<?cs var:toroot ?>guide/topics/ui/drag-drop.html">
+                <span class="en">Dragging and Dropping</span>
+              </a> <span class="new">new!</span>
+          </li>
           <li><a href="<?cs var:toroot ?>guide/topics/ui/themes.html">
                 <span class="en">Applying Styles and Themes</span>
               </a></li>
@@ -106,7 +149,8 @@
                 <span class="en">How Android Draws Views</span>
               </a></li>
         </ul>
-      </li>
+      </li><!-- end of User Interface -->
+      
       <li class="toggle-list">
         <div><a href="<?cs var:toroot ?>guide/topics/resources/index.html">
                <span class="en">Application Resources</span>
@@ -138,12 +182,9 @@
               <li><a href="<?cs var:toroot ?>guide/topics/resources/style-resource.html">Style</a></li>
               <li><a href="<?cs var:toroot ?>guide/topics/resources/more-resources.html">More Types</a></li>
             </ul>
-          </li>
+          </li><!-- end of resource types -->
         </ul>
-      </li>
-      <li><a href="<?cs var:toroot ?>guide/topics/intents/intents-filters.html">
-            <span class="en">Intents and Intent Filters</span>
-          </a></li>
+      </li><!-- end of app resources -->
       <li class="toggle-list">
         <div><a href="<?cs var:toroot ?>guide/topics/data/data-storage.html">
             <span class="en">Data Storage</span>
@@ -155,24 +196,20 @@
             </li>
           </ul>
       </li>
-      <li><a href="<?cs var:toroot ?>guide/topics/providers/content-providers.html">
-            <span class="en">Content Providers</span>
-          </a></li>
       <li><a href="<?cs var:toroot ?>guide/topics/security/security.html">
             <span class="en">Security and Permissions</span>
           </a></li>
-  <!--  <li><a style="color:gray;">Processes and Threads</a></li> -->
-  <!--  <li><a style="color:gray;">Interprocess Communication</a></li> -->
       <li class="toggle-list">
         <div><a href="<?cs var:toroot ?>guide/topics/manifest/manifest-intro.html">
-               <span class="en">The AndroidManifest.xml File</span>
-             </a></div>
+          <span class="en">The AndroidManifest.xml File</span>
+        </a></div>
         <ul>
           <li><a href="<?cs var:toroot ?>guide/topics/manifest/action-element.html">&lt;action&gt;</a></li>
           <li><a href="<?cs var:toroot ?>guide/topics/manifest/activity-element.html">&lt;activity&gt;</a></li>
           <li><a href="<?cs var:toroot ?>guide/topics/manifest/activity-alias-element.html">&lt;activity-alias&gt;</a></li>
           <li><a href="<?cs var:toroot ?>guide/topics/manifest/application-element.html">&lt;application&gt;</a></li>
           <li><a href="<?cs var:toroot ?>guide/topics/manifest/category-element.html">&lt;category&gt;</a></li>
+          <li><a href="<?cs var:toroot ?>guide/topics/manifest/compatible-screens-element.html">&lt;compatible-screens&gt;</a></li>
           <li><a href="<?cs var:toroot ?>guide/topics/manifest/data-element.html">&lt;data&gt;</a></li>
           <li><a href="<?cs var:toroot ?>guide/topics/manifest/grant-uri-permission-element.html">&lt;grant-uri-permission&gt;</a></li>
           <li><a href="<?cs var:toroot ?>guide/topics/manifest/instrumentation-element.html">&lt;instrumentation&gt;</a></li>
@@ -186,6 +223,7 @@
           <li><a href="<?cs var:toroot ?>guide/topics/manifest/provider-element.html">&lt;provider&gt;</a></li>
           <li><a href="<?cs var:toroot ?>guide/topics/manifest/receiver-element.html">&lt;receiver&gt;</a></li>
           <li><a href="<?cs var:toroot ?>guide/topics/manifest/service-element.html">&lt;service&gt;</a></li>
+          <li><a href="<?cs var:toroot ?>guide/topics/manifest/supports-gl-texture-element.html">&lt;supports-gl-texture&gt;</a></li> 
           <li><a href="<?cs var:toroot ?>guide/topics/manifest/supports-screens-element.html">&lt;supports-screens&gt;</a></li>  <!-- ##api level 4## -->
           <li><a href="<?cs var:toroot ?>guide/topics/manifest/uses-configuration-element.html">&lt;uses-configuration&gt;</a></li>
           <li><a href="<?cs var:toroot ?>guide/topics/manifest/uses-feature-element.html">&lt;uses-feature&gt;</a></li> <!-- ##api level 4## -->
@@ -193,13 +231,15 @@
           <li><a href="<?cs var:toroot ?>guide/topics/manifest/uses-permission-element.html">&lt;uses-permission&gt;</a></li>
           <li><a href="<?cs var:toroot ?>guide/topics/manifest/uses-sdk-element.html">&lt;uses-sdk&gt;</a></li>
         </ul>
-      </li>
-    </ul>
+      </li><!-- end of the manifest file -->
+    </ul>  
+      
     <ul>
       <li class="toggle-list">
         <div><a href="<?cs var:toroot ?>guide/topics/graphics/index.html">
-               <span class="en">Graphics</span>
-             </a></div>
+            <span class="en">Graphics</span>
+          </a>
+          <span class="new-child">new!</span></div>
         <ul>
           <li><a href="<?cs var:toroot ?>guide/topics/graphics/2d-graphics.html">
                 <span class="en">2D Graphics</span>
@@ -207,11 +247,26 @@
           <li><a href="<?cs var:toroot ?>guide/topics/graphics/opengl.html">
                 <span class="en">3D with OpenGL</span>
               </a></li>
+          <li><a href="<?cs var:toroot ?>guide/topics/graphics/renderscript.html">
+                <span class="en">3D with Renderscript</span>
+              </a> <span class="new">new!</span></li>
+          <li><a href="<?cs var:toroot ?>guide/topics/graphics/animation.html">
+                <span class="en">Property Animation</span>
+              </a> <span class="new">new!</span></li>
+          <li><a href="<?cs var:toroot ?>guide/topics/graphics/view-animation.html">
+                <span class="en">View Animation</span>
+              </a></li>
         </ul>
       </li>
       <li><a href="<?cs var:toroot ?>guide/topics/media/index.html">
             <span class="en">Audio and Video</span>
           </a></li>
+      <li>
+        <a href="<?cs var:toroot ?>guide/topics/clipboard/copy-paste.html">
+            <span class="en">Copy and Paste</span>
+        </a>
+        <span class="new">new!</span>
+      </li>
   <!--<li class="toggle-list">
         <div><a style="color:gray;">Sensors</a></div>
           <ul>
@@ -275,27 +330,22 @@
               <li>
                 <a href="<?cs var:toroot?>guide/topics/testing/testing_android.html">
                 <span class="en">Testing Fundamentals</span></a>
-                <span class="new">new!</span>
               </li>
               <li>
                 <a href="<?cs var:toroot?>guide/topics/testing/activity_testing.html">
                 <span class="en">Activity Testing</span></a>
-                <span class="new">new!</span>
               </li>
               <li>
                 <a href="<?cs var:toroot?>guide/topics/testing/contentprovider_testing.html">
                 <span class="en">Content Provider Testing</span></a>
-                <span class="new">new!</span>
               </li>
               <li>
                 <a href="<?cs var:toroot?>guide/topics/testing/service_testing.html">
                 <span class="en">Service Testing</span></a>
-                <span class="new">new!</span>
               </li>
               <li>
                 <a href="<?cs var:toroot ?>guide/topics/testing/what_to_test.html">
                 <span class="en">What To Test</span></a>
-                <span class="new">new!</span>
               </li>
 
            </ul>
@@ -360,32 +410,121 @@
     <ul>
   <!--<li><a href="">Developing for Android</a></li>
       signing, upgrading, selecting a package name, select device profile, touch, trackball, dpad available, etc. -->
-      <li><a href="<?cs var:toroot ?>guide/developing/eclipse-adt.html">
-            <span class="en">In Eclipse, with ADT</span>
-            <span class="de" style="display:none">In Eclipse, mit ADT</span>
-            <span class="es" style="display:none">En Eclipse, con ADT</span>
-            <span class="fr" style="display:none">Sous Eclipse, à l'aide du plugin ADT</span>
-            <span class="it" style="display:none">In Eclipse, con ADT</span>
-            <span class="ja" style="display:none">Eclipse 内で ADT を使用</span>
-            <span class="zh-CN" style="display:none">利用 ADT 在 Eclipse 中开发</span>
-            <span class="zh-TW" style="display:none">在加裝 ADT 工具的 Eclipse 環境中</span>
+      <li>
+        <a href="<?cs var:toroot ?>guide/developing/index.html">
+        <span class="en">Introduction</span></a>
+      </li>
+
+      <li class="toggle-list">
+        <div>
+           <a href="<?cs var:toroot ?>guide/developing/devices/index.html">
+                <span class="en">Managing Virtual Devices</span>
+            </a>
+        </div>
+        <ul>
+          <li>
+            <a href="<?cs var:toroot ?>guide/developing/devices/managing-avds.html">
+              <span class="en">With AVD Manager</span>
+            </a>
+          </li>
+          <li>
+            <a href="<?cs var:toroot ?>guide/developing/devices/managing-avds-cmdline.html">
+              <span class="en">From the Command Line</span>
+            </a>
+          </li>
+          <li>
+           <a href="<?cs var:toroot ?>guide/developing/devices/emulator.html">
+                <span class="en">Using the Android Emulator</span>
+            </a>
+          </li>
+        </ul>
+      </li>
+      <li>
+        <a href="<?cs var:toroot ?>guide/developing/device.html">
+          <span class="en">Using Hardware Devices</span>
+        </a>
+      </li>
+
+      <li class="toggle-list">
+        <div>
+          <a href="<?cs var:toroot ?>guide/developing/projects/index.html">
+            <span class="en">Managing Projects</span>
+          </a>
+        </div>
+        <ul>
+          <li>
+            <a href="<?cs var:toroot ?>guide/developing/projects/projects-eclipse.html">
+              <span class="en">From Eclipse with ADT</span>
+            </a>
+          </li>
+          <li>
+            <a href="<?cs var:toroot ?>guide/developing/projects/projects-cmdline.html">
+                <span class="en">From the Command Line</span>
+            </a>
+          </li>
+        </ul>
+      </li>
+
+      <li class="toggle-list">
+        <div>
+          <a href="<?cs var:toroot ?>guide/developing/building/index.html">
+            <span class="en">Building and Running</span>
+          </a>
+        </div>
+        <ul>
+          <li><a href="<?cs var:toroot ?>guide/developing/building/building-eclipse.html">
+            <span class="en">From Eclipse with ADT</span>
           </a></li>
-      <li><a href="<?cs var:toroot ?>guide/developing/other-ide.html">
-            <span class="en">In Other IDEs</span>
-            <span class="de" style="display:none">In anderen IDEs</span>
-            <span class="es" style="display:none">En otros entornos</span>
-            <span class="fr" style="display:none">Sous d'autres environnements</span>
-            <span class="it" style="display:none">In altri IDE</span>
-            <span class="ja" style="display:none">その他の統合開発環境</span>
-            <span class="zh-CN" style="display:none">在其他 IDE 中开发</span>
-            <span class="zh-TW" style="display:none">在其他開發環境中</span>
-          </a></li>
-      <li><a href="<?cs var:toroot ?>guide/developing/device.html">
-            <span class="en">On a Device</span>
-          </a></li>
-      <li><a href="<?cs var:toroot ?>guide/developing/debug-tasks.html">
-            <span class="en">Debugging Tasks</span>
-          </a></li>
+          <li><a href="<?cs var:toroot ?>guide/developing/building/building-cmdline.html">
+            <span class="en">From the Command Line</span></a></li>
+        </ul>
+      </li>
+
+      <li class="toggle-list">
+        <div>
+          <a href="<?cs var:toroot ?>guide/developing/debugging/index.html">
+            <span class="en">Debugging</span>
+          </a>
+        </div>
+        <ul>
+          <li>
+            <a href="<?cs var:toroot ?>guide/developing/debugging/debugging-projects.html">
+                <span class="en">From Eclipse with ADT</span>
+            </a>
+          </li>
+          <li>
+            <a href="<?cs var:toroot ?>guide/developing/debugging/debugging-projects-cmdline.html">
+                <span class="en">From Other IDEs</span>
+            </a>
+          </li>
+          <li>
+            <a href="<?cs var:toroot ?>guide/developing/debugging/ddms.html">
+              <span class="en">Using DDMS</span>
+            </a>
+          </li>
+          <li>
+            <a href="<?cs var:toroot ?>guide/developing/debugging/debugging-log.html">
+                <span class="en">Reading and Writing Logs</span>
+            </a>
+          </li>
+          <li>
+            <a href="<?cs var:toroot ?>guide/developing/debugging/debugging-ui.html">
+                <span class="en">Debugging and Profiling UIs</span>
+            </a>
+          </li>
+          <li>
+            <a href="<?cs var:toroot ?>guide/developing/debugging/debugging-tracing.html">
+                <span class="en">Profiling with Traceview and dmtracedump</span>
+            </a>
+          </li>
+          <li>
+            <a href="<?cs var:toroot ?>guide/developing/debugging/debugging-devtools.html">
+                <span class="en">Using the Dev Tools App</span>
+            </a>
+          </li>
+        </ul>
+      </li>
+
       <li class="toggle-list">
            <div>
                 <a href="<?cs var:toroot ?>guide/developing/testing/index.html">
@@ -395,71 +534,57 @@
            <ul>
               <li>
                 <a href="<?cs var:toroot ?>guide/developing/testing/testing_eclipse.html">
-                  <span class="en">Testing in Eclipse, with ADT</span>
+                  <span class="en">From Eclipse with ADT</span>
                 </a>
               </li>
 
               <li>
                 <a href="<?cs var:toroot ?>guide/developing/testing/testing_otheride.html">
-                  <span class="en">Testing in Other IDEs</span>
+                  <span class="en">From Other IDEs</span>
                 </a>
               </li>
            </ul>
          </li>
-      <li class="toggle-list">
+
+         <li class="toggle-list">
         <div><a href="<?cs var:toroot ?>guide/developing/tools/index.html">
             <span class="en">Tools</span>
           </a></div>
         <ul>
-              <li><a href="<?cs var:toroot ?>guide/developing/tools/aapt.html">aapt</a></li>
-              <li><a href="<?cs var:toroot ?>guide/developing/tools/adb.html">adb</a></li>
-              <li><a href="<?cs var:toroot ?>guide/developing/tools/othertools.html#android">android</a></li>
-      <!--<li><a href="<?cs var:toroot ?>guide/developing/tools/adt.html">ADT Plugin</a></li>-->
-              <li><a href="<?cs var:toroot ?>guide/developing/tools/aidl.html">aidl</a></li>
-              <li><a href="<?cs var:toroot ?>guide/developing/tools/avd.html">AVDs</a></li>
-              <li><a href="<?cs var:toroot ?>guide/developing/tools/bmgr.html">bmgr</a></li>
-              <li><a href="<?cs var:toroot ?>guide/developing/tools/ddms.html">ddms</a></li>
-              <li><a href="<?cs var:toroot ?>guide/developing/tools/othertools.html#dx">dx</a></li>
-              <li><a href="<?cs var:toroot ?>guide/developing/tools/draw9patch.html">Draw 9-Patch</a></li>
-              <li><a href="<?cs var:toroot ?>guide/developing/tools/emulator.html">Emulator</a></li>
-              <li><a href="<?cs var:toroot ?>guide/developing/tools/hierarchy-viewer.html">Hierarchy Viewer</a></li>
-              <li><a href="<?cs var:toroot ?>guide/developing/tools/layoutopt.html">layoutopt</a></li>
-              <li><a href="<?cs var:toroot ?>guide/developing/tools/othertools.html#mksdcard">mksdcard</a></li>
-              <li><a href="<?cs var:toroot ?>guide/developing/tools/monkey.html">Monkey</a></li>
-              <li class="toggle-list">
-                 <div>
-                     <a href="<?cs var:toroot?>guide/developing/tools/monkeyrunner_concepts.html">
-                     <span class="en">monkeyrunner</span>
-                  </a>
-                      <span class="new">new!</span>
-                  </div>
-                  <ul>
-                      <li>
-                          <a href="<?cs var:toroot?>guide/developing/tools/MonkeyDevice.html">
-                                <span class="en">MonkeyDevice</span>
-                        </a>
-                        <span class="new">new!</span>
-                    </li>
-                    <li>
-                        <a href="<?cs var:toroot?>guide/developing/tools/MonkeyImage.html">
-                            <span class="en">MonkeyImage</span>
-                        </a>
-                        <span class="new">new!</span>
-                    </li>
-                    <li>
-                        <a href="<?cs var:toroot?>guide/developing/tools/MonkeyRunner.html">
-                            <span class="en">MonkeyRunner</span>
-                        </a>
-                        <span class="new">new!</span>
-                    </li>
-                  </ul>
-              </li>
-              <li><a href="<?cs var:toroot ?>guide/developing/tools/proguard.html">ProGuard</a> <span class="new">new!</span></li>
-              <li><a href="<?cs var:toroot ?>guide/developing/tools/adb.html#sqlite">sqlite3</a></li>
-              <li><a href="<?cs var:toroot ?>guide/developing/tools/traceview.html" >Traceview</a></li>
-              <li><a href="<?cs var:toroot ?>guide/developing/tools/zipalign.html" >zipalign</a></li>
-          </ul>
-        </li>
+          <li><a href="<?cs var:toroot ?>guide/developing/tools/adb.html">adb</a></li>
+          <li><a href="<?cs var:toroot ?>guide/developing/tools/android.html">android</a></li>
+          <li><a href="<?cs var:toroot ?>guide/developing/tools/bmgr.html">bmgr</a>
+          <li><a href="<?cs var:toroot ?>guide/developing/tools/dmtracedump.html">dmtracedump</a></li>
+          <li><a href="<?cs var:toroot ?>guide/developing/tools/draw9patch.html" >Draw 9-Patch</a></li>
+          <li><a href="<?cs var:toroot ?>guide/developing/tools/emulator.html">Emulator</a></li>
+          <li><a href="<?cs var:toroot ?>guide/developing/tools/hierarchy-viewer.html">Hierarchy Viewer</a></li>
+          <li><a href="<?cs var:toroot ?>guide/developing/tools/hprof-conv.html">hprof-conv</a></li>
+          <li><a href="<?cs var:toroot ?>guide/developing/tools/layoutopt.html">layoutopt</a></li>
+          <li><a href="<?cs var:toroot ?>guide/developing/tools/logcat.html">logcat</a></li>
+          <li><a href="<?cs var:toroot ?>guide/developing/tools/mksdcard.html">mksdcard</a></li>
+          <li><a href="<?cs var:toroot ?>guide/developing/tools/monkey.html">Monkey</a></li>
+          <li class="toggle-list">
+            <div><a href="<?cs var:toroot ?>guide/developing/tools/monkeyrunner_concepts.html">
+              <span class="en">monkeyrunner</span>
+            </a></div>
+            <ul>
+              <li><a href="<?cs var:toroot ?>guide/developing/tools/MonkeyDevice.html">
+                <span class="en">MonkeyDevice</span>
+                </a></li>
+              <li><a href="<?cs var:toroot ?>guide/developing/tools/MonkeyImage.html">
+                <span class="en">MonkeyImage</span>
+                </a></li>
+              <li><a href="<?cs var:toroot ?>guide/developing/tools/MonkeyRunner.html">
+                <span class="en">MonkeyRunner</span>
+                </a></li>
+            </ul>
+          </li>
+          <li><a href="<?cs var:toroot ?>guide/developing/tools/proguard.html">ProGuard</a></li>
+          <li><a href="<?cs var:toroot ?>guide/developing/tools/adb.html#sqlite">sqlite3</a></li>
+          <li><a href="<?cs var:toroot ?>guide/developing/tools/traceview.html">Traceview</a></li>
+          <li><a href="<?cs var:toroot ?>guide/developing/tools/zipalign.html">zipalign</a></li>
+        </ul>
+      </li>
     </ul>
   </li>
 
@@ -527,6 +652,9 @@
       <li><a href="<?cs var:toroot ?>guide/practices/screens_support.html">
             <span class="en">Supporting Multiple Screens</span>
           </a></li>
+      <li><a href="<?cs var:toroot ?>guide/practices/optimizing-for-3.0.html">
+            <span class="en">Optimizing Apps for Android 3.0</span>
+          </a> <span class="new">new!</span></li>
       <li class="toggle-list">
         <div><a href="<?cs var:toroot ?>guide/practices/ui_guidelines/index.html">
                <span class="en">UI Guidelines</span>
@@ -588,19 +716,19 @@
     <ul>
       <li><a href="<?cs var:toroot ?>guide/webapps/index.html">
             <span class="en">Web Apps Overview</span>
-          </a> <span class="new">new!</span><!-- 11/1/10 --></li>
+          </a></li>
       <li><a href="<?cs var:toroot ?>guide/webapps/targeting.html">
             <span class="en">Targeting Screens from Web Apps</span>
-          </a> <span class="new">new!</span><!-- 11/1/10 --></li>
+          </a></li>
       <li><a href="<?cs var:toroot ?>guide/webapps/webview.html">
             <span class="en">Building Web Apps in WebView</span>
-          </a> <span class="new">new!</span><!-- 11/1/10 --></li>
+          </a></li>
       <li><a href="<?cs var:toroot ?>guide/webapps/debugging.html">
             <span class="en">Debugging Web Apps</span>
-          </a> <span class="new">new!</span><!-- 11/1/10 --></li>
+          </a></li>
       <li><a href="<?cs var:toroot ?>guide/webapps/best-practices.html">
             <span class="en">Best Practices for Web Apps</span>
-          </a> <span class="new">new!</span><!-- 11/1/10 --></li>
+          </a></li>
     </ul>
   </li>
 
@@ -623,10 +751,11 @@
           </a></li>
       <li><a href="<?cs var:toroot ?>guide/appendix/media-formats.html">
             <span class="en">Supported Media Formats</span>
-          </a></li>
+          </a> <span class="new">updated</span></li>
       <li><a href="<?cs var:toroot ?>guide/appendix/g-app-intents.html">
             <span class="en">Intents List: Google Apps</span>
           </a></li>
+      <li><a href="<?cs var:toroot ?>guide/developing/tools/aidl.html">AIDL</a></li>
       <li><a href="<?cs var:toroot ?>guide/appendix/glossary.html">
             <span class="en">Glossary</span>
           </a></li>

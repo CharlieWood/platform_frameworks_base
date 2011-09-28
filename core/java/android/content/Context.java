@@ -21,10 +21,12 @@ import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
 import android.content.res.Resources;
 import android.content.res.TypedArray;
+import android.database.DatabaseErrorHandler;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteDatabase.CursorFactory;
 import android.graphics.Bitmap;
 import android.graphics.drawable.Drawable;
+import android.media.MediaScannerConnection.OnScanCompletedListener;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -76,6 +78,25 @@ public abstract class Context {
      * @see #openFileOutput
      */
     public static final int MODE_APPEND = 0x8000;
+
+    /**
+     * SharedPreference loading flag: when set, the file on disk will
+     * be checked for modification even if the shared preferences
+     * instance is already loaded in this process.  This behavior is
+     * sometimes desired in cases where the application has multiple
+     * processes, all writing to the same SharedPreferences file.
+     * Generally there are better forms of communication between
+     * processes, though.
+     *
+     * <p>This was the legacy (but undocumented) behavior in and
+     * before Gingerbread (Android 2.3) and this flag is implied when
+     * targetting such releases.  For applications targetting SDK
+     * versions <em>greater than</em> Android 2.3, this flag must be
+     * explicitly set if desired.
+     *
+     * @see #getSharedPreferences
+     */
+    public static final int MODE_MULTI_PROCESS = 0x0004;
 
     /**
      * Flag for {@link #bindService}: automatically create the service as long
@@ -206,6 +227,12 @@ public abstract class Context {
      */
     public abstract void setTheme(int resid);
 
+    /** @hide Needed for some internal implementation...  not public because
+     * you can't assume this actually means anything. */
+    public int getThemeResId() {
+        return 0;
+    }
+
     /**
      * Return the Theme object associated with this Context.
      */
@@ -316,7 +343,11 @@ public abstract class Context {
      * editor (SharedPreferences.edit()) and then commit changes (Editor.commit()).
      * @param mode Operating mode.  Use 0 or {@link #MODE_PRIVATE} for the
      * default operation, {@link #MODE_WORLD_READABLE}
-     * and {@link #MODE_WORLD_WRITEABLE} to control permissions.
+     * and {@link #MODE_WORLD_WRITEABLE} to control permissions.  The bit
+     * {@link #MODE_MULTI_PROCESS} can also be used if multiple processes
+     * are mutating the same SharedPreferences file.  {@link #MODE_MULTI_PROCESS}
+     * is always on in apps targetting Gingerbread (Android 2.3) and below, and
+     * off by default in later versions.
      *
      * @return Returns the single SharedPreferences instance that can be used
      *         to retrieve and modify the preference values.
@@ -324,6 +355,7 @@ public abstract class Context {
      * @see #MODE_PRIVATE
      * @see #MODE_WORLD_READABLE
      * @see #MODE_WORLD_WRITEABLE
+     * @see #MODE_MULTI_PROCESS
      */
     public abstract SharedPreferences getSharedPreferences(String name,
             int mode);
@@ -484,6 +516,13 @@ public abstract class Context {
     public abstract File getExternalFilesDir(String type);
 
     /**
+     * Return the directory where this application's OBB files (if there
+     * are any) can be found.  Note if the application does not have any OBB
+     * files, this directory may not exist.
+     */
+    public abstract File getObbDir();
+
+    /**
      * Returns the absolute path to the application specific cache directory
      * on the filesystem. These files will be ones that get deleted first when the
      * device runs low on storage.
@@ -587,6 +626,32 @@ public abstract class Context {
      */
     public abstract SQLiteDatabase openOrCreateDatabase(String name,
             int mode, CursorFactory factory);
+
+    /**
+     * Open a new private SQLiteDatabase associated with this Context's
+     * application package.  Creates the database file if it doesn't exist.
+     *
+     * <p>Accepts input param: a concrete instance of {@link DatabaseErrorHandler} to be
+     * used to handle corruption when sqlite reports database corruption.</p>
+     *
+     * @param name The name (unique in the application package) of the database.
+     * @param mode Operating mode.  Use 0 or {@link #MODE_PRIVATE} for the
+     *     default operation, {@link #MODE_WORLD_READABLE}
+     *     and {@link #MODE_WORLD_WRITEABLE} to control permissions.
+     * @param factory An optional factory class that is called to instantiate a
+     *     cursor when query is called.
+     * @param errorHandler the {@link DatabaseErrorHandler} to be used when sqlite reports database
+     * corruption. if null, {@link android.database.DefaultDatabaseErrorHandler} is assumed.
+     * @return The contents of a newly created database with the given name.
+     * @throws android.database.sqlite.SQLiteException if the database file could not be opened.
+     *
+     * @see #MODE_PRIVATE
+     * @see #MODE_WORLD_READABLE
+     * @see #MODE_WORLD_WRITEABLE
+     * @see #deleteDatabase
+     */
+    public abstract SQLiteDatabase openOrCreateDatabase(String name,
+            int mode, CursorFactory factory, DatabaseErrorHandler errorHandler);
 
     /**
      * Delete an existing private SQLiteDatabase associated with this Context's
@@ -697,6 +762,28 @@ public abstract class Context {
     public abstract void startActivity(Intent intent);
 
     /**
+     * Launch multiple new activities.  This is generally the same as calling
+     * {@link #startActivity(Intent)} for the first Intent in the array,
+     * that activity during its creation calling {@link #startActivity(Intent)}
+     * for the second entry, etc.  Note that unlike that approach, generally
+     * none of the activities except the last in the array will be created
+     * at this point, but rather will be created when the user first visits
+     * them (due to pressing back from the activity on top).
+     *
+     * <p>This method throws {@link ActivityNotFoundException}
+     * if there was no Activity found for <em>any</em> given Intent.  In this
+     * case the state of the activity stack is undefined (some Intents in the
+     * list may be on it, some not), so you probably want to avoid such situations.
+     *
+     * @param intents An array of Intents to be started.
+     *
+     * @throws ActivityNotFoundException
+     *
+     * @see PackageManager#resolveActivity
+     */
+    public abstract void startActivities(Intent[] intents);
+
+    /**
      * Like {@link #startActivity(Intent)}, but taking a IntentSender
      * to start.  If the IntentSender is for an activity, that activity will be started
      * as if you had called the regular {@link #startActivity(Intent)}
@@ -753,7 +840,7 @@ public abstract class Context {
      *
      * @param intent The Intent to broadcast; all receivers matching this
      *               Intent will receive the broadcast.
-     * @param receiverPermission (optional) String naming a permissions that
+     * @param receiverPermission (optional) String naming a permission that
      *               a receiver must hold in order to receive your broadcast.
      *               If null, no permission is required.
      *
@@ -1362,6 +1449,15 @@ public abstract class Context {
     public static final String LOCATION_SERVICE = "location";
 
     /**
+     * Use with {@link #getSystemService} to retrieve a
+     * {@link android.location.CountryDetector} for detecting the country that
+     * the user is in.
+     *
+     * @hide
+     */
+    public static final String COUNTRY_DETECTOR = "country_detector";
+
+    /**
      * Use with {@link #getSystemService} to retrieve a {@link
      * android.app.SearchManager} for handling searches.
      *
@@ -1568,12 +1664,11 @@ public abstract class Context {
 
     /**
      * Use with {@link #getSystemService} to retrieve a {@link
-     * android.hardware.usb.UsbManager} for access to USB devices (as a USB host)
+     * android.hardware.UsbManager} for access to USB devices (as a USB host)
      * and for controlling this device's behavior as a USB device.
      *
      * @see #getSystemService
-     * @see android.harware.usb.UsbManager
-     * @hide
+     * @see android.harware.UsbManager
      */
     public static final String USB_SERVICE = "usb";
 

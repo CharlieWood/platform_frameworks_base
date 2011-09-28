@@ -25,15 +25,12 @@ namespace renderscript {
 
 class Program;
 
-class Allocation : public ObjectBase
-{
+class Allocation : public ObjectBase {
     // The graphics equilivent of malloc.  The allocation contains a structure of elements.
 
 public:
-    // By policy this allocation will hold a pointer to the type
-    // but will not destroy it on destruction.
-    Allocation(Context *rsc, const Type *);
-    Allocation(Context *rsc, const Type *, void *bmp, void *callbackData, RsBitmapCallback_t callback);
+    Allocation(Context *rsc, const Type *, uint32_t usages,
+               RsAllocationMipmapControl mc = RS_ALLOCATION_MIPMAP_NONE);
 
     virtual ~Allocation();
 
@@ -47,21 +44,33 @@ public:
     void * getPtr() const {return mPtr;}
     const Type * getType() const {return mType.get();}
 
-    void deferedUploadToTexture(const Context *rsc, bool genMipmap, uint32_t lodOffset);
+    void syncAll(Context *rsc, RsAllocationUsageType src);
+
+    void deferedUploadToTexture(const Context *rsc);
     void uploadToTexture(const Context *rsc);
     uint32_t getTextureID() const {return mTextureID;}
+
+    uint32_t getGLTarget() const;
 
     void deferedUploadToBufferObject(const Context *rsc);
     void uploadToBufferObject(const Context *rsc);
     uint32_t getBufferObjectID() const {return mBufferID;}
 
+    void copyRange1D(Context *rsc, const Allocation *src, int32_t srcOff, int32_t destOff, int32_t len);
 
-    void data(const void *data, uint32_t sizeBytes);
-    void subData(uint32_t xoff, uint32_t count, const void *data, uint32_t sizeBytes);
-    void subData(uint32_t xoff, uint32_t yoff,
+    void resize1D(Context *rsc, uint32_t dimX);
+    void resize2D(Context *rsc, uint32_t dimX, uint32_t dimY);
+
+    void data(Context *rsc, uint32_t xoff, uint32_t lod, uint32_t count, const void *data, uint32_t sizeBytes);
+    void data(Context *rsc, uint32_t xoff, uint32_t yoff, uint32_t lod, RsAllocationCubemapFace face,
                  uint32_t w, uint32_t h, const void *data, uint32_t sizeBytes);
-    void subData(uint32_t xoff, uint32_t yoff, uint32_t zoff,
+    void data(Context *rsc, uint32_t xoff, uint32_t yoff, uint32_t zoff, uint32_t lod, RsAllocationCubemapFace face,
                  uint32_t w, uint32_t h, uint32_t d, const void *data, uint32_t sizeBytes);
+
+    void elementData(Context *rsc, uint32_t x,
+                        const void *data, uint32_t elementOff, uint32_t sizeBytes);
+    void elementData(Context *rsc, uint32_t x, uint32_t y,
+                        const void *data, uint32_t elementOff, uint32_t sizeBytes);
 
     void read(void *data);
 
@@ -72,12 +81,32 @@ public:
     void removeProgramToDirty(const Program *);
 
     virtual void dumpLOGV(const char *prefix) const;
+    virtual void serialize(OStream *stream) const;
+    virtual RsA3DClassID getClassId() const { return RS_A3D_CLASS_ID_ALLOCATION; }
+    static Allocation *createFromStream(Context *rsc, IStream *stream);
 
-    virtual void uploadCheck(const Context *rsc);
+    virtual void uploadCheck(Context *rsc);
+
+    bool getIsScript() const {
+        return (mUsageFlags & RS_ALLOCATION_USAGE_SCRIPT) != 0;
+    }
+    bool getIsTexture() const {
+        return (mUsageFlags & RS_ALLOCATION_USAGE_GRAPHICS_TEXTURE) != 0;
+    }
+    bool getIsBufferObject() const {
+        return (mUsageFlags & RS_ALLOCATION_USAGE_GRAPHICS_VERTEX) != 0;
+    }
+
+    void incRefs(const void *ptr, size_t ct, size_t startOff = 0) const;
+    void decRefs(const void *ptr, size_t ct, size_t startOff = 0) const;
+
+    void sendDirty() const;
+    bool getHasGraphicsMipmaps() const {
+        return mMipmapControl != RS_ALLOCATION_MIPMAP_NONE;
+    }
+
 
 protected:
-    void sendDirty() const;
-
     ObjectBaseRef<const Type> mType;
     void * mPtr;
 
@@ -94,6 +123,9 @@ protected:
     bool mGpuWrite;
     bool mGpuRead;
 
+    uint32_t mUsageFlags;
+    RsAllocationMipmapControl mMipmapControl;
+
     // more usage hint data from the application
     // which can be used by a driver to pick the best memory type.
     // Likely ignored for now
@@ -103,21 +135,23 @@ protected:
 
     // Is this a legal structure to be used as a texture source.
     // Initially this will require 1D or 2D and color data
-    bool mIsTexture;
-    bool mTextureGenMipmap;
-    uint32_t mTextureLOD;
     uint32_t mTextureID;
 
     // Is this a legal structure to be used as a vertex source.
     // Initially this will require 1D and x(yzw).  Additional per element data
     // is allowed.
-    bool mIsVertexBuffer;
     uint32_t mBufferID;
 
     bool mUploadDefered;
 
 private:
     void init(Context *rsc, const Type *);
+    void upload2DTexture(bool isFirstUpload);
+    void update2DTexture(const void *ptr, uint32_t xoff, uint32_t yoff,
+                         uint32_t lod, RsAllocationCubemapFace face, uint32_t w, uint32_t h);
+
+    void allocScriptMemory();
+    void freeScriptMemory();
 
 };
 

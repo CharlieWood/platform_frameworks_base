@@ -28,6 +28,7 @@
 #include <ui/PixelFormat.h>
 
 #include <surfaceflinger/ISurfaceComposerClient.h>
+#include <surfaceflinger/IGraphicBufferAlloc.h>
 
 namespace android {
 // ----------------------------------------------------------------------------
@@ -42,7 +43,9 @@ public:
         eDestroyBackbuffer  = 0x00000020,
         eSecure             = 0x00000080,
         eNonPremultiplied   = 0x00000100,
-        ePushBuffers        = 0x00000200,
+        eOpaque             = 0x00000400,
+        eProtectedByApp     = 0x00000800,
+        eProtectedByDRM     = 0x00001000,
 
         eFXSurfaceNormal    = 0x00000000,
         eFXSurfaceBlur      = 0x00010000,
@@ -96,6 +99,10 @@ public:
      */
     virtual sp<ISurfaceComposerClient> createClientConnection() = 0;
 
+    /* create a graphic buffer allocator
+     */
+    virtual sp<IGraphicBufferAlloc> createGraphicBufferAlloc() = 0;
+
     /* retrieve the control block */
     virtual sp<IMemoryHeap> getCblk() const = 0;
 
@@ -121,7 +128,8 @@ public:
     virtual status_t captureScreen(DisplayID dpy,
             sp<IMemoryHeap>* heap,
             uint32_t* width, uint32_t* height, PixelFormat* format,
-            uint32_t reqWidth, uint32_t reqHeight) = 0;
+            uint32_t reqWidth, uint32_t reqHeight,
+            uint32_t minLayerZ, uint32_t maxLayerZ) = 0;
 
     virtual status_t turnElectronBeamOff(int32_t mode) = 0;
     virtual status_t turnElectronBeamOn(int32_t mode) = 0;
@@ -143,6 +151,7 @@ public:
         BOOT_FINISHED = IBinder::FIRST_CALL_TRANSACTION,
         CREATE_CONNECTION,
         CREATE_CLIENT_CONNECTION,
+        CREATE_GRAPHIC_BUFFER_ALLOC,
         GET_CBLK,
         OPEN_GLOBAL_TRANSACTION,
         CLOSE_GLOBAL_TRANSACTION,

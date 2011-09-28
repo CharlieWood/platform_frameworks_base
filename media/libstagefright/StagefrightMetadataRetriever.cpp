@@ -144,7 +144,10 @@ static VideoFrame *extractVideoFrameWithCodecFlags(
             static_cast<MediaSource::ReadOptions::SeekMode>(seekMode);
 
     int64_t thumbNailTime;
-    if (frameTimeUs < 0 && trackMeta->findInt64(kKeyThumbnailTime, &thumbNailTime)) {
+    if (frameTimeUs < 0) {
+        if (!trackMeta->findInt64(kKeyThumbnailTime, &thumbNailTime)) {
+            thumbNailTime = 0;
+        }
         options.setSeekTo(thumbNailTime, mode);
     } else {
         thumbNailTime = -1;
@@ -205,17 +208,26 @@ static VideoFrame *extractVideoFrameWithCodecFlags(
     CHECK(meta->findInt32(kKeyWidth, &width));
     CHECK(meta->findInt32(kKeyHeight, &height));
 
+    int32_t crop_left, crop_top, crop_right, crop_bottom;
+    if (!meta->findRect(
+                kKeyCropRect,
+                &crop_left, &crop_top, &crop_right, &crop_bottom)) {
+        crop_left = crop_top = 0;
+        crop_right = width - 1;
+        crop_bottom = height - 1;
+    }
+
     int32_t rotationAngle;
     if (!trackMeta->findInt32(kKeyRotation, &rotationAngle)) {
         rotationAngle = 0;  // By default, no rotation
     }
 
     VideoFrame *frame = new VideoFrame;
-    frame->mWidth = width;
-    frame->mHeight = height;
-    frame->mDisplayWidth = width;
-    frame->mDisplayHeight = height;
-    frame->mSize = width * height * 2;
+    frame->mWidth = crop_right - crop_left + 1;
+    frame->mHeight = crop_bottom - crop_top + 1;
+    frame->mDisplayWidth = frame->mWidth;
+    frame->mDisplayHeight = frame->mHeight;
+    frame->mSize = frame->mWidth * frame->mHeight * 2;
     frame->mData = new uint8_t[frame->mSize];
     frame->mRotationAngle = rotationAngle;
 
@@ -226,16 +238,26 @@ static VideoFrame *extractVideoFrameWithCodecFlags(
             (OMX_COLOR_FORMATTYPE)srcFormat, OMX_COLOR_Format16bitRGB565);
     CHECK(converter.isValid());
 
-    converter.convert(
-            width, height,
+    err = converter.convert(
             (const uint8_t *)buffer->data() + buffer->range_offset(),
-            0,
-            frame->mData, width * 2);
+            width, height,
+            crop_left, crop_top, crop_right, crop_bottom,
+            frame->mData,
+            frame->mWidth,
+            frame->mHeight,
+            0, 0, frame->mWidth - 1, frame->mHeight - 1);
 
     buffer->release();
     buffer = NULL;
 
     decoder->stop();
+
+    if (err != OK) {
+        LOGE("Colorconverter failed to convert frame.");
+
+        delete frame;
+        frame = NULL;
+    }
 
     return frame;
 }
@@ -418,6 +440,5 @@ void StagefrightMetadataRetriever::parseMetaData() {
         }
     }
 }
-
 
 }  // namespace android

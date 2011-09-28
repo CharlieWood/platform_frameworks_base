@@ -75,8 +75,7 @@
          header in the Action Bar. The primary differences between an icon
          and a logo are that logos are often wider and more detailed, and are
          used without an accompanying text caption. This must be a reference
-         to a Drawable resource containing the image definition.
-         @hide -->
+         to a Drawable resource containing the image definition. -->
     <attr name="logo" format="reference" />
 
     <!-- Name of the activity to be launched to manage application's space on
@@ -234,6 +233,22 @@
     <!-- Flag indicating whether the application requests the VM to operate in
          the safe mode.  -->
     <attr name="vmSafeMode" format="boolean" />
+
+    <!-- <p>Flag indicating whether the application's rendering should be hardware
+         accelerated if possible. This flag is turned off by default, both for
+         applications and activities.</p>
+         <p>This flag can be set on the application and any activity declared
+         in the manifest. When enabled for the application, each activity is
+         automatically assumed to be hardware accelerated. This flag can be
+         overriden in the activity tags, either turning it off (if on for the
+         application) or on (if off for the application.)</p>
+         <p>When this flag is turned on for an activity (either directly or via
+         the application tag), every window created from the activity, including
+         the activity's own window, will be hardware accelerated, if possible.</p>
+         <p>Please refer to the documentation of
+         {@link android.view.WindowManager.LayoutParams#FLAG_HARDWARE_ACCELERATED}
+         for more information on how to control this flag programmatically.</p> -->
+    <attr name="hardwareAccelerated" format="boolean" />
 
     <!-- Flag indicating whether the given application component is available
          to other applications.  If false, it can only be accessed by
@@ -399,8 +414,7 @@
     <attr name="syncable" format="boolean" />
     
     <!-- Flag declaring this activity to be 'immersive'; immersive activities
-         should not be interrupted with other activities or notifications.
-         @hide -->
+         should not be interrupted with other activities or notifications. -->
     <attr name="immersive" format="boolean" />
 
     <!-- Specify the order in which content providers hosted by a process
@@ -427,8 +441,8 @@
     <attr name="priority" format="integer" />
     
     <!-- Specify how an activity should be launched.  See the
-         <a href="{@docRoot}guide/topics/fundamentals.html#acttask">Application Fundamentals</a>
-         documentation for important information on how these options impact
+         <a href="{@docRoot}guide/topics/fundamentals/tasks-and-back-stack.html">Tasks and Back
+         Stack</a> document for important information on how these options impact
          the behavior of your application.
          
          <p>If this attribute is not specified, <code>standard</code> launch
@@ -464,8 +478,8 @@
             of the activity being started at the top of the stack, it will
             receive the Intent as described there (without the
             FLAG_ACTIVITY_BROUGHT_TO_FRONT flag set).  See the
-            <a href="{@docRoot}guide/topics/fundamentals.html#acttask">Application Fundamentals</a>
-            documentation for more details on tasks.-->
+            <a href="{@docRoot}guide/topics/fundamentals/tasks-and-back-stack.html">Tasks and Back
+            Stack</a> document for more details about tasks.-->
         <enum name="singleTask" value="2" />
         <!-- Only allow one instance of this activity to ever be 
             running.  This activity gets a unique task with only itself running 
@@ -475,8 +489,8 @@
             method called.  If this 
             activity tries to start a new activity, that new activity will be 
             launched in a separate task.  See the
-            <a href="{@docRoot}guide/topics/fundamentals.html#acttask">Application Fundamentals</a>
-            documentation for more details on tasks. -->
+            <a href="{@docRoot}guide/topics/fundamentals/tasks-and-back-stack.html">Tasks and Back
+            Stack</a> document for more details about tasks.-->
         <enum name="singleInstance" value="3" />
     </attr>
     
@@ -734,6 +748,7 @@
         <attr name="theme" />
         <attr name="label" />
         <attr name="icon" />
+        <attr name="logo" />
         <attr name="description" />
         <attr name="permission" />
         <attr name="process" />
@@ -752,6 +767,7 @@
         <attr name="enabled" />
         <attr name="debuggable" />
         <attr name="vmSafeMode" />
+        <attr name="hardwareAccelerated" />
         <!-- Name of activity to be launched for managing the application's space on the device. -->
         <attr name="manageSpaceActivity" />
         <attr name="allowClearUserData" />
@@ -762,6 +778,13 @@
         <attr name="restoreNeedsApplication" />
         <attr name="restoreAnyVersion" />
         <attr name="neverEncrypt" />
+        <!-- Request that your application's processes be created with
+             a large Dalvik heap.  This applies to <em>all</em> processes
+             created for the application.  It only applies to the first
+             application loaded into a process; if using a sharedUserId
+             to allow multiple applications to use a process, they all must
+             use this option consistently or will get unpredictable results. -->
+        <attr name="largeHeap" format="boolean" />
         <!-- Declare that this applicationn can't participate in the normal
              state save/restore mechanism.  Since it is not able to save and
              restore its state on demand,
@@ -792,6 +815,7 @@
         <attr name="name" />
         <attr name="label" />
         <attr name="icon" />
+        <attr name="logo" />
         <attr name="permissionGroup" />
         <attr name="description" />
         <attr name="protectionLevel" />
@@ -816,6 +840,7 @@
         <attr name="name" />
         <attr name="label" />
         <attr name="icon" />
+        <attr name="logo" />
         <attr name="description" />
     </declare-styleable>
     
@@ -845,6 +870,7 @@
         <attr name="name" />
         <attr name="label" />
         <attr name="icon" />
+        <attr name="logo" />
     </declare-styleable>
     
     <!-- The <code>uses-permission</code> tag requests a
@@ -1049,6 +1075,7 @@
         <attr name="label" />
         <attr name="description" />
         <attr name="icon" />
+        <attr name="logo" />
         <attr name="process" />
         <attr name="authorities" />
         <attr name="syncable" />
@@ -1128,6 +1155,7 @@
         <attr name="label" />
         <attr name="description" />
         <attr name="icon" />
+        <attr name="logo" />
         <attr name="permission" />
         <attr name="process" />
         <!-- Specify whether the service is enabled or not (that is, can be instantiated by the system).
@@ -1160,6 +1188,7 @@
         <attr name="label" />
         <attr name="description" />
         <attr name="icon" />
+        <attr name="logo" />
         <attr name="permission" />
         <attr name="process" />
         <!-- Specify whether the receiver is enabled or not (that is, can be instantiated by the system).
@@ -1192,6 +1221,7 @@
         <attr name="label" />
         <attr name="description" />
         <attr name="icon" />
+        <attr name="logo" />
         <attr name="launchMode" />
         <attr name="screenOrientation" />
         <attr name="configChanges" />
@@ -1217,6 +1247,8 @@
              this activity.  A value besides "unspecified" here overrides
              any value in the theme. -->
         <attr name="windowSoftInputMode" />
+        <attr name="immersive" />
+        <attr name="hardwareAccelerated" />
     </declare-styleable>
     
     <!-- The <code>activity-alias</code> tag declares a new
@@ -1245,6 +1277,7 @@
         <attr name="label" />
         <attr name="description" />
         <attr name="icon" />
+        <attr name="logo" />
         <attr name="permission" />
         <!-- Specify whether the activity-alias is enabled or not (that is, can be instantiated by the system).
              It can also be specified for an application as a whole, in which case a value of "false"
@@ -1314,6 +1347,7 @@
          parent="AndroidManifestActivity AndroidManifestReceiver AndroidManifestService">
         <attr name="label" />
         <attr name="icon" />
+        <attr name="logo" />
         <attr name="priority" />
     </declare-styleable>
     
@@ -1420,6 +1454,7 @@
         <attr name="targetPackage" />
         <attr name="label" />
         <attr name="icon" />
+        <attr name="logo" />
         <attr name="handleProfiling" />
         <attr name="functionalTest" />
     </declare-styleable>

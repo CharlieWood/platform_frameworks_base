@@ -239,9 +239,11 @@ interface ITelephony {
     String getCdmaEriText();
 
     /**
-     * Returns true if CDMA provisioning needs to run.
+     * Returns true if OTA service provisioning needs to run.
+     * Only relevant on some technologies, others will always
+     * return false.
      */
-    boolean getCdmaNeedsProvisioning();
+    boolean needsOtaServiceProvisioning();
 
     /**
       * Returns the unread count of voicemails
@@ -257,5 +259,13 @@ interface ITelephony {
      * Return true if an ICC card is present
      */
     boolean hasIccCard();
+
+    /**
+     * Set an APN type (for ex: "default") is enabled or disabled
+     * @param apnType specifies APN type the request pertains to
+     * @param enabled if true, enable the APN type
+     *                otherwise, disable the APN type
+     */
+    void apnDependenciesMet(String apnType, boolean enabled);
 }
 

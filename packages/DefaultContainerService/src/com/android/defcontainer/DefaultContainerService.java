@@ -163,6 +163,16 @@ public class DefaultContainerService extends IntentService {
                 return null;
             }
         }
+
+        @Override
+        public long calculateDirectorySize(String path) throws RemoteException {
+            final File directory = new File(path);
+            if (directory.exists() && directory.isDirectory()) {
+                return MeasurementUtils.measureDirectory(path);
+            } else {
+                return 0L;
+            }
+        }
     };
 
     public DefaultContainerService() {
@@ -180,6 +190,7 @@ public class DefaultContainerService extends IntentService {
                 while ((pkg=pm.nextPackageToClean(pkg)) != null) {
                     eraseFiles(Environment.getExternalStorageAppDataDirectory(pkg));
                     eraseFiles(Environment.getExternalStorageAppMediaDirectory(pkg));
+                    eraseFiles(Environment.getExternalStorageAppObbDirectory(pkg));
                 }
             } catch (RemoteException e) {
             }
@@ -440,7 +451,7 @@ public class DefaultContainerService extends IntentService {
         String status = Environment.getExternalStorageState();
         long availSDSize = -1;
         boolean mediaAvailable = false;
-        if (status.equals(Environment.MEDIA_MOUNTED)) {
+        if (!Environment.isExternalStorageEmulated() && status.equals(Environment.MEDIA_MOUNTED)) {
             StatFs sdStats = new StatFs(
                     Environment.getExternalStorageDirectory().getPath());
             availSDSize = (long)sdStats.getAvailableBlocks() *

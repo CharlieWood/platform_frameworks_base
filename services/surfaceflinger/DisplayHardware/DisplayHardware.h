@@ -33,13 +33,10 @@
 
 #include "DisplayHardware/DisplayHardwareBase.h"
 
-struct overlay_control_device_t;
-struct framebuffer_device_t;
-struct copybit_image_t;
-
 namespace android {
 
 class FramebufferNativeWindow;
+class HWComposer;
 
 class DisplayHardware : public DisplayHardwareBase
 {
@@ -64,7 +61,6 @@ public:
     // Flip the front and back buffers if the back buffer is "dirty".  Might
     // be instantaneous, might involve copying the frame buffer around.
     void flip(const Region& dirty) const;
-    status_t postBypassBuffer(const native_handle_t* handle) const;
 
     float       getDpiX() const;
     float       getDpiY() const;
@@ -80,7 +76,11 @@ public:
 
     uint32_t getPageFlipCount() const;
     EGLDisplay getEGLDisplay() const { return mDisplay; }
-    overlay_control_device_t* getOverlayEngine() const { return mOverlayEngine; }
+
+    void dump(String8& res) const;
+
+    // Hardware Composer
+    HWComposer& getHwComposer() const;
     
     status_t compositionComplete() const;
     
@@ -111,8 +111,9 @@ private:
     GLint           mMaxViewportDims;
     GLint           mMaxTextureSize;
     
+    HWComposer*     mHwc;
+
     sp<FramebufferNativeWindow> mNativeWindow;
-    overlay_control_device_t* mOverlayEngine;
 };
 
 }; // namespace android

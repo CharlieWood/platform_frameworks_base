@@ -33,6 +33,7 @@ import android.telephony.CellLocation;
 import android.telephony.PhoneNumberUtils;
 import android.telephony.ServiceState;
 import android.telephony.SignalStrength;
+import com.android.internal.telephony.CallTracker;
 import android.text.TextUtils;
 import android.util.Log;
 
@@ -49,6 +50,7 @@ import static com.android.internal.telephony.CommandsInterface.CF_REASON_UNCONDI
 import static com.android.internal.telephony.CommandsInterface.SERVICE_CLASS_VOICE;
 import static com.android.internal.telephony.TelephonyProperties.PROPERTY_BASEBAND_VERSION;
 
+import com.android.internal.telephony.cat.CatService;
 import com.android.internal.telephony.Call;
 import com.android.internal.telephony.CallForwardInfo;
 import com.android.internal.telephony.CallStateException;
@@ -61,6 +63,7 @@ import com.android.internal.telephony.IccFileHandler;
 import com.android.internal.telephony.IccPhoneBookInterfaceManager;
 import com.android.internal.telephony.IccSmsInterfaceManager;
 import com.android.internal.telephony.MmiCode;
+import com.android.internal.telephony.OperatorInfo;
 import com.android.internal.telephony.Phone;
 import com.android.internal.telephony.PhoneBase;
 import com.android.internal.telephony.PhoneNotifier;
@@ -68,9 +71,9 @@ import com.android.internal.telephony.PhoneProxy;
 import com.android.internal.telephony.PhoneSubInfo;
 import com.android.internal.telephony.TelephonyProperties;
 import com.android.internal.telephony.UUSInfo;
-import com.android.internal.telephony.gsm.stk.StkService;
 import com.android.internal.telephony.test.SimulatedRadioControl;
 import com.android.internal.telephony.IccVmNotSupportedException;
+import com.android.internal.telephony.ServiceStateTracker;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -99,10 +102,7 @@ public class GSMPhone extends PhoneBase {
     // Instance Variables
     GsmCallTracker mCT;
     GsmServiceStateTracker mSST;
-    GsmSMSDispatcher mSMS;
-    SIMRecords mSIMRecords;
-    SimCard mSimCard;
-    StkService mStkService;
+    CatService mStkService;
     ArrayList <GsmMmiCode> mPendingMMIs = new ArrayList<GsmMmiCode>();
     SimPhoneBookInterfaceManager mSimPhoneBookIntManager;
     SimSmsInterfaceManager mSimSmsIntManager;
@@ -150,7 +150,7 @@ public class GSMPhone extends PhoneBase {
             mSimSmsIntManager = new SimSmsInterfaceManager(this, mSMS);
             mSubInfo = new PhoneSubInfo(this);
         }
-        mStkService = StkService.getInstance(mCM, mSIMRecords, mContext,
+        mStkService = CatService.getInstance(mCM, mSIMRecords, mContext,
                 (SIMFileHandler)mIccFileHandler, mSimCard);
 
         mCM.registerForAvailable(this, EVENT_RADIO_AVAILABLE, null);
@@ -282,12 +282,20 @@ public class GSMPhone extends PhoneBase {
         return mSIMRecords.getVoiceCallForwardingFlag();
     }
 
+    public CallTracker getCallTracker() {
+        return mCT;
+    }
+
+    public ServiceStateTracker getServiceStateTracker() {
+        return mSST;
+    }
+
     public List<? extends MmiCode>
     getPendingMmiCodes() {
         return mPendingMMIs;
     }
 
-    public DataState getDataConnectionState() {
+    public DataState getDataConnectionState(String apnType) {
         DataState ret = DataState.DISCONNECTED;
 
         if (mSST == null) {
@@ -300,6 +308,9 @@ public class GSMPhone extends PhoneBase {
             // If we're out of service, open TCP sockets may still work
             // but no data will flow
             ret = DataState.DISCONNECTED;
+        } else if (mDataConnection.isApnTypeEnabled(apnType) == false ||
+                mDataConnection.isApnTypeActive(apnType) == false) {
+            ret = DataState.DISCONNECTED;
         } else { /* mSST.gprsState == ServiceState.STATE_IN_SERVICE */
             switch (mDataConnection.getState()) {
                 case FAILED:
@@ -310,7 +321,7 @@ public class GSMPhone extends PhoneBase {
                 case CONNECTED:
                 case DISCONNECTING:
                     if ( mCT.state != Phone.State.IDLE
-                            && !mSST.isConcurrentVoiceAndData()) {
+                            && !mSST.isConcurrentVoiceAndDataAllowed()) {
                         ret = DataState.SUSPENDED;
                     } else {
                         ret = DataState.CONNECTED;
@@ -400,9 +411,9 @@ public class GSMPhone extends PhoneBase {
         mNotifier.notifySignalStrength(this);
     }
 
-    /*package*/ void
-    notifyDataConnectionFailed(String reason) {
-        mNotifier.notifyDataConnectionFailed(this, reason);
+    public void
+    notifyDataConnectionFailed(String reason, String apnType) {
+        mNotifier.notifyDataConnectionFailed(this, reason, apnType);
     }
 
     /*package*/ void
@@ -968,7 +979,9 @@ public class GSMPhone extends PhoneBase {
     }
 
     public void getCallWaiting(Message onComplete) {
-        mCM.queryCallWaiting(CommandsInterface.SERVICE_CLASS_VOICE, onComplete);
+        //As per 3GPP TS 24.083, section 1.6 UE doesn't need to send service
+        //class parameter in call waiting interrogation  to network
+        mCM.queryCallWaiting(CommandsInterface.SERVICE_CLASS_NONE, onComplete);
     }
 
     public void setCallWaiting(boolean enable, Message onComplete) {
@@ -1020,19 +1033,19 @@ public class GSMPhone extends PhoneBase {
     }
 
     public void
-    selectNetworkManually(com.android.internal.telephony.gsm.NetworkInfo network,
+    selectNetworkManually(OperatorInfo network,
             Message response) {
         // wrap the response message in our own message along with
         // the operator's id.
         NetworkSelectMessage nsm = new NetworkSelectMessage();
         nsm.message = response;
-        nsm.operatorNumeric = network.operatorNumeric;
-        nsm.operatorAlphaLong = network.operatorAlphaLong;
+        nsm.operatorNumeric = network.getOperatorNumeric();
+        nsm.operatorAlphaLong = network.getOperatorAlphaLong();
 
         // get the message
         Message msg = obtainMessage(EVENT_SET_NETWORK_MANUAL_COMPLETE, nsm);
 
-        mCM.setNetworkSelectionModeManual(network.operatorNumeric, msg);
+        mCM.setNetworkSelectionModeManual(network.getOperatorNumeric(), msg);
     }
 
     public void
@@ -1078,35 +1091,6 @@ public class GSMPhone extends PhoneBase {
 
     public void setDataRoamingEnabled(boolean enable) {
         mDataConnection.setDataOnRoamingEnabled(enable);
-    }
-
-    public boolean enableDataConnectivity() {
-        return mDataConnection.setDataEnabled(true);
-    }
-
-    public boolean disableDataConnectivity() {
-        return mDataConnection.setDataEnabled(false);
-    }
-
-    /**
-     * The only circumstances under which we report that data connectivity is not
-     * possible are
-     * <ul>
-     * <li>Data roaming is disallowed and we are roaming.</li>
-     * <li>The current data state is {@code DISCONNECTED} for a reason other than
-     * having explicitly disabled connectivity. In other words, data is not available
-     * because the phone is out of coverage or some like reason.</li>
-     * </ul>
-     * @return {@code true} if data connectivity is possible, {@code false} otherwise.
-     */
-    public boolean isDataConnectivityPossible() {
-        // TODO: Currently checks if any GPRS connection is active. Should it only
-        // check for "default"?
-        boolean noData = mDataConnection.getDataEnabled() &&
-            getDataConnectionState() == DataState.DISCONNECTED;
-        return !noData && getIccCard().getState() == SimCard.State.READY &&
-                getServiceState().getState() == ServiceState.STATE_IN_SERVICE &&
-            (mDataConnection.getDataOnRoamingEnabled() || !getServiceState().getRoaming());
     }
 
     /**
@@ -1221,7 +1205,8 @@ public class GSMPhone extends PhoneBase {
                 // Check if this is a different SIM than the previous one. If so unset the
                 // voice mail number.
                 String imsi = getVmSimImsi();
-                if (imsi != null && !getSubscriberId().equals(imsi)) {
+                String imsiFromSIM = getSubscriberId();
+                if (imsi != null && imsiFromSIM != null && !imsiFromSIM.equals(imsi)) {
                     storeVoiceMailNumber(null);
                     setVmSimImsi(null);
                 }
@@ -1468,34 +1453,19 @@ public class GSMPhone extends PhoneBase {
         return this.mIccFileHandler;
     }
 
-    /**
-     * Activate or deactivate cell broadcast SMS.
-     *
-     * @param activate 0 = activate, 1 = deactivate
-     * @param response Callback message is empty on completion
-     */
     public void activateCellBroadcastSms(int activate, Message response) {
-        Log.e(LOG_TAG, "[GSMPhone] activateCellBroadcastSms() is obsolete; use SmsManager");
-        response.sendToTarget();
+        Log.e(LOG_TAG, "Error! This functionality is not implemented for GSM.");
     }
 
-    /**
-     * Query the current configuration of cdma cell broadcast SMS.
-     *
-     * @param response Callback message is empty on completion
-     */
     public void getCellBroadcastSmsConfig(Message response) {
-        Log.e(LOG_TAG, "[GSMPhone] getCellBroadcastSmsConfig() is obsolete; use SmsManager");
-        response.sendToTarget();
+        Log.e(LOG_TAG, "Error! This functionality is not implemented for GSM.");
     }
 
-    /**
-     * Configure cdma cell broadcast SMS.
-     *
-     * @param response Callback message is empty on completion
-     */
-    public void setCellBroadcastSmsConfig(int[] configValuesArray, Message response) {
-        Log.e(LOG_TAG, "[GSMPhone] setCellBroadcastSmsConfig() is obsolete; use SmsManager");
-        response.sendToTarget();
+    public void setCellBroadcastSmsConfig(int[] configValuesArray, Message response){
+        Log.e(LOG_TAG, "Error! This functionality is not implemented for GSM.");
+    }
+
+    public boolean isCspPlmnEnabled() {
+        return mSIMRecords.isCspPlmnEnabled();
     }
 }

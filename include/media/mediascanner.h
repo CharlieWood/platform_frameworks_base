@@ -38,8 +38,7 @@ struct MediaScanner {
 
     typedef bool (*ExceptionCheck)(void* env);
     virtual status_t processDirectory(
-            const char *path, const char *extensions,
-            MediaScannerClient &client,
+            const char *path, MediaScannerClient &client,
             ExceptionCheck exceptionCheck, void *exceptionEnv);
 
     void setLocale(const char *locale);
@@ -55,9 +54,8 @@ private:
     char *mLocale;
 
     status_t doProcessDirectory(
-            char *path, int pathRemaining, const char *extensions,
-            MediaScannerClient &client, ExceptionCheck exceptionCheck,
-            void *exceptionEnv);
+            char *path, int pathRemaining, MediaScannerClient &client,
+            ExceptionCheck exceptionCheck, void *exceptionEnv);
 
     MediaScanner(const MediaScanner &);
     MediaScanner &operator=(const MediaScanner &);
@@ -73,7 +71,8 @@ public:
     bool addStringTag(const char* name, const char* value);
     void endFile();
 
-    virtual bool scanFile(const char* path, long long lastModified, long long fileSize) = 0;
+    virtual bool scanFile(const char* path, long long lastModified,
+            long long fileSize, bool isDirectory) = 0;
     virtual bool handleStringTag(const char* name, const char* value) = 0;
     virtual bool setMimeType(const char* mimeType) = 0;
     virtual bool addNoMediaFolder(const char* path) = 0;

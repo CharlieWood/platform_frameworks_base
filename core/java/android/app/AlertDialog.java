@@ -16,21 +16,24 @@
 
 package android.app;
 
+import com.android.internal.app.AlertController;
+
 import android.content.Context;
 import android.content.DialogInterface;
 import android.database.Cursor;
 import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.os.Message;
+import android.util.TypedValue;
+import android.view.ContextThemeWrapper;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.AdapterView;
 import android.widget.Button;
 import android.widget.ListAdapter;
 import android.widget.ListView;
-
-import com.android.internal.app.AlertController;
 
 /**
  * A subclass of Dialog that can display one, two or three buttons. If you only want to
@@ -55,20 +58,69 @@ import com.android.internal.app.AlertController;
 public class AlertDialog extends Dialog implements DialogInterface {
     private AlertController mAlert;
 
+    /**
+     * Special theme constant for {@link #AlertDialog(Context, int)}: use
+     * the traditional (pre-Holo) alert dialog theme.
+     */
+    public static final int THEME_TRADITIONAL = 1;
+    
+    /**
+     * Special theme constant for {@link #AlertDialog(Context, int)}: use
+     * the holographic alert theme with a dark background.
+     */
+    public static final int THEME_HOLO_DARK = 2;
+    
+    /**
+     * Special theme constant for {@link #AlertDialog(Context, int)}: use
+     * the holographic alert theme with a light background.
+     */
+    public static final int THEME_HOLO_LIGHT = 3;
+    
     protected AlertDialog(Context context) {
-        this(context, com.android.internal.R.style.Theme_Dialog_Alert);
+        this(context, resolveDialogTheme(context, 0), true);
     }
 
+    /**
+     * Construct an AlertDialog that uses an explicit theme.  The actual style
+     * that an AlertDialog uses is a private implementation, however you can
+     * here supply either the name of an attribute in the theme from which
+     * to get the dialog's style (such as {@link android.R.attr#alertDialogTheme}
+     * or one of the constants {@link #THEME_TRADITIONAL},
+     * {@link #THEME_HOLO_DARK}, or {@link #THEME_HOLO_LIGHT}.
+     */
     protected AlertDialog(Context context, int theme) {
-        super(context, theme);
-        mAlert = new AlertController(context, this, getWindow());
+        this(context, theme, true);
+    }
+
+    AlertDialog(Context context, int theme, boolean createContextWrapper) {
+        super(context, resolveDialogTheme(context, theme), createContextWrapper);
+        mWindow.alwaysReadCloseOnTouchAttr();
+        mAlert = new AlertController(getContext(), this, getWindow());
     }
 
     protected AlertDialog(Context context, boolean cancelable, OnCancelListener cancelListener) {
-        super(context, com.android.internal.R.style.Theme_Dialog_Alert);
+        super(context, resolveDialogTheme(context, 0));
+        mWindow.alwaysReadCloseOnTouchAttr();
         setCancelable(cancelable);
         setOnCancelListener(cancelListener);
         mAlert = new AlertController(context, this, getWindow());
+    }
+
+    static int resolveDialogTheme(Context context, int resid) {
+        if (resid == THEME_TRADITIONAL) {
+            return com.android.internal.R.style.Theme_Dialog_Alert;
+        } else if (resid == THEME_HOLO_DARK) {
+            return com.android.internal.R.style.Theme_Holo_Dialog_Alert;
+        } else if (resid == THEME_HOLO_LIGHT) {
+            return com.android.internal.R.style.Theme_Holo_Light_Dialog_Alert;
+        } else if (resid >= 0x01000000) {   // start of real resource IDs.
+            return resid;
+        } else {
+            TypedValue outValue = new TypedValue();
+            context.getTheme().resolveAttribute(com.android.internal.R.attr.alertDialogTheme,
+                    outValue, true);
+            return outValue.resourceId;
+        }
     }
 
     /**
@@ -241,6 +293,17 @@ public class AlertDialog extends Dialog implements DialogInterface {
         mAlert.setIcon(icon);
     }
 
+    /**
+     * Set an icon as supplied by a theme attribute. e.g. android.R.attr.alertDialogIcon
+     *
+     * @param attrId ID of a theme attribute that points to a drawable resource.
+     */
+    public void setIconAttribute(int attrId) {
+        TypedValue out = new TypedValue();
+        mContext.getTheme().resolveAttribute(attrId, out, true);
+        mAlert.setIcon(out.resourceId);
+    }
+
     public void setInverseBackgroundForced(boolean forceInverseBackground) {
         mAlert.setInverseBackgroundForced(forceInverseBackground);
     }
@@ -265,14 +328,44 @@ public class AlertDialog extends Dialog implements DialogInterface {
     
     public static class Builder {
         private final AlertController.AlertParams P;
+        private int mTheme;
         
         /**
          * Constructor using a context for this builder and the {@link AlertDialog} it creates.
          */
         public Builder(Context context) {
-            P = new AlertController.AlertParams(context);
+            this(context, resolveDialogTheme(context, 0));
+        }
+
+        /**
+         * Constructor using a context and theme for this builder and
+         * the {@link AlertDialog} it creates.  The actual theme
+         * that an AlertDialog uses is a private implementation, however you can
+         * here supply either the name of an attribute in the theme from which
+         * to get the dialog's style (such as {@link android.R.attr#alertDialogTheme}
+         * or one of the constants
+         * {@link AlertDialog#THEME_TRADITIONAL AlertDialog.THEME_TRADITIONAL},
+         * {@link AlertDialog#THEME_HOLO_DARK AlertDialog.THEME_HOLO_DARK}, or
+         * {@link AlertDialog#THEME_HOLO_LIGHT AlertDialog.THEME_HOLO_LIGHT}.
+         */
+        public Builder(Context context, int theme) {
+            P = new AlertController.AlertParams(new ContextThemeWrapper(
+                    context, resolveDialogTheme(context, theme)));
+            mTheme = theme;
         }
         
+        /**
+         * Returns a {@link Context} with the appropriate theme for dialogs created by this Builder.
+         * Applications should use this Context for obtaining LayoutInflaters for inflating views
+         * that will be used in the resulting dialogs, as it will cause views to be inflated with
+         * the correct theme.
+         *
+         * @return A Context for built Dialogs.
+         */
+        public Context getContext() {
+            return P.mContext;
+        }
+
         /**
          * Set the title using the given resource id.
          *
@@ -348,7 +441,19 @@ public class AlertDialog extends Dialog implements DialogInterface {
             P.mIcon = icon;
             return this;
         }
-        
+
+        /**
+         * Set an icon as supplied by a theme attribute. e.g. android.R.attr.alertDialogIcon
+         *
+         * @param attrId ID of a theme attribute that points to a drawable resource.
+         */
+        public Builder setIconAttribute(int attrId) {
+            TypedValue out = new TypedValue();
+            P.mContext.getTheme().resolveAttribute(attrId, out, true);
+            P.mIconId = out.resourceId;
+            return this;
+        }
+
         /**
          * Set a listener to be invoked when the positive button of the dialog is pressed.
          * @param textId The resource id of the text to display in the positive button
@@ -783,7 +888,7 @@ public class AlertDialog extends Dialog implements DialogInterface {
          * to do and want this to be created and displayed.
          */
         public AlertDialog create() {
-            final AlertDialog dialog = new AlertDialog(P.mContext);
+            final AlertDialog dialog = new AlertDialog(P.mContext, mTheme, false);
             P.apply(dialog.mAlert);
             dialog.setCancelable(P.mCancelable);
             dialog.setOnCancelListener(P.mOnCancelListener);

@@ -46,6 +46,8 @@ import android.widget.VideoView;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.net.MalformedURLException;
+import java.net.URL;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Timer;
@@ -75,6 +77,7 @@ class HTML5VideoViewProxy extends Handler
     private static final int PAUSED            = 203;
 
     private static final String COOKIE = "Cookie";
+    private static final String HIDE_URL_LOGS = "x-hide-urls-from-log";
 
     // Timer thread -> UI thread
     private static final int TIMEUPDATE = 300;
@@ -182,10 +185,12 @@ class HTML5VideoViewProxy extends Handler
             mVideoView.setMediaController(new MediaController(proxy.getContext()));
 
             String cookieValue = CookieManager.getInstance().getCookie(url);
-            Map<String, String> headers = null;
+            Map<String, String> headers = new HashMap<String, String>();
             if (cookieValue != null) {
-                headers = new HashMap<String, String>();
                 headers.put(COOKIE, cookieValue);
+            }
+            if (mCurrentProxy.getWebView().isPrivateBrowsingEnabled()) {
+                headers.put(HIDE_URL_LOGS, "true");
             }
 
             mVideoView.setVideoURI(Uri.parse(url), headers);
@@ -344,7 +349,7 @@ class HTML5VideoViewProxy extends Handler
         private static RequestQueue mRequestQueue;
         private static int mQueueRefCount = 0;
         // The poster URL
-        private String mUrl;
+        private URL mUrl;
         // The proxy we're doing this for.
         private final HTML5VideoViewProxy mProxy;
         // The poster bytes. We only touch this on the network thread.
@@ -359,14 +364,30 @@ class HTML5VideoViewProxy extends Handler
         private Handler mHandler;
 
         public PosterDownloader(String url, HTML5VideoViewProxy proxy) {
-            mUrl = url;
+            try {
+                mUrl = new URL(url);
+            } catch (MalformedURLException e) {
+                mUrl = null;
+            }
             mProxy = proxy;
             mHandler = new Handler();
         }
         // Start the download. Called on WebCore thread.
         public void start() {
             retainQueue();
-            mRequestHandle = mRequestQueue.queueRequest(mUrl, "GET", null, this, null, 0);
+
+            if (mUrl == null) {
+                return;
+            }
+
+            // Only support downloading posters over http/https.
+            // FIXME: Add support for other schemes. WebKit seems able to load
+            // posters over other schemes e.g. file://, but gets the dimensions wrong.
+            String protocol = mUrl.getProtocol();
+            if ("http".equals(protocol) || "https".equals(protocol)) {
+                mRequestHandle = mRequestQueue.queueRequest(mUrl.toString(), "GET", null,
+                        this, null, 0);
+            }
         }
         // Cancel the download if active and release the queue. Called on WebCore thread.
         public void cancelAndReleaseQueue() {
@@ -405,12 +426,16 @@ class HTML5VideoViewProxy extends Handler
                 cleanup();
             } else if (mStatusCode >= 300 && mStatusCode < 400) {
                 // We have a redirect.
-                mUrl = mHeaders.getLocation();
+                try {
+                    mUrl = new URL(mHeaders.getLocation());
+                } catch (MalformedURLException e) {
+                    mUrl = null;
+                }
                 if (mUrl != null) {
                     mHandler.post(new Runnable() {
                        public void run() {
                            if (mRequestHandle != null) {
-                               mRequestHandle.setupRedirect(mUrl, mStatusCode,
+                               mRequestHandle.setupRedirect(mUrl.toString(), mStatusCode,
                                        new HashMap<String, String>());
                            }
                        }
@@ -495,6 +520,7 @@ class HTML5VideoViewProxy extends Handler
                         break;
                     }
                     case ENDED:
+                        mSeekPosition = 0;
                         nativeOnEnded(mNativePointer);
                         break;
                     case PAUSED:
@@ -538,10 +564,15 @@ class HTML5VideoViewProxy extends Handler
      * Play a video stream.
      * @param url is the URL of the video stream.
      */
-    public void play(String url) {
+    public void play(String url, int position) {
         if (url == null) {
             return;
         }
+
+        if (position > 0) {
+            seek(position);
+        }
+
         Message message = obtainMessage(PLAY);
         message.obj = url;
         sendMessage(message);

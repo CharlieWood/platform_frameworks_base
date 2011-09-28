@@ -34,18 +34,27 @@
 
 #include <media/stagefright/foundation/ADebug.h>
 
+#include <openssl/ssl.h>
+
 namespace android {
 
 // static
-const char *HTTPStream::kStatusKey = ":status:";
+const char *HTTPStream::kStatusKey = ":status:";  // MUST be lowercase.
 
 HTTPStream::HTTPStream()
     : mState(READY),
-      mSocket(-1) {
+      mSocket(-1),
+      mSSLContext(NULL),
+      mSSL(NULL) {
 }
 
 HTTPStream::~HTTPStream() {
     disconnect();
+
+    if (mSSLContext != NULL) {
+        SSL_CTX_free((SSL_CTX *)mSSLContext);
+        mSSLContext = NULL;
+    }
 }
 
 static bool MakeSocketBlocking(int s, bool blocking) {
@@ -124,15 +133,12 @@ static status_t MyConnect(
     return result;
 }
 
-// Apparently under our linux closing a socket descriptor from one thread
+// Apparently under out linux closing a socket descriptor from one thread
 // will not unblock a pending send/recv on that socket on another thread.
 static ssize_t MySendReceive(
         int s, void *data, size_t size, int flags, bool sendData) {
     ssize_t result = 0;
 
-    if (s < 0) {
-        return -1;
-    }
     while (size > 0) {
         fd_set rs, ws, es;
         FD_ZERO(&rs);
@@ -201,7 +207,11 @@ static ssize_t MyReceive(int s, void *data, size_t size, int flags) {
     return MySendReceive(s, data, size, flags, false /* sendData */);
 }
 
-status_t HTTPStream::connect(const char *server, int port) {
+status_t HTTPStream::connect(const char *server, int port, bool https) {
+    if (port < 0) {
+        port = https ? 443 : 80;
+    }
+
     Mutex::Autolock autoLock(mLock);
 
     status_t err = OK;
@@ -210,57 +220,39 @@ status_t HTTPStream::connect(const char *server, int port) {
         return ERROR_ALREADY_CONNECTED;
     }
 
-    if (port < 0 || port > (int) USHRT_MAX) {
-        return UNKNOWN_ERROR;
-    }
-
-    char service[sizeof("65536")];
-    sprintf(service, "%d", port);
-    struct addrinfo hints, *ai;
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_flags = AI_ADDRCONFIG | AI_NUMERICSERV;
-    hints.ai_socktype = SOCK_STREAM;
-
-    int ret = getaddrinfo(server, service, &hints, &ai);
-    if (ret) {
+    struct hostent *ent = gethostbyname(server);
+    if (ent == NULL) {
         return ERROR_UNKNOWN_HOST;
     }
 
     CHECK_EQ(mSocket, -1);
+    mSocket = socket(AF_INET, SOCK_STREAM, 0);
 
-    mState = CONNECTING;
-    status_t res = -1;
-    struct addrinfo *tmp;
-    for (tmp = ai; tmp; tmp = tmp->ai_next) {
-        mSocket = socket(tmp->ai_family, tmp->ai_socktype, tmp->ai_protocol);
-        if (mSocket < 0) {
-            continue;
-        }
-
-        setReceiveTimeout(30);  // Time out reads after 30 secs by default.
-
-        int s = mSocket;
-
-        mLock.unlock();
-
-        res = MyConnect(s, tmp->ai_addr, tmp->ai_addrlen);
-
-        mLock.lock();
-
-        if (mState != CONNECTING) {
-            close(s);
-            freeaddrinfo(ai);
-            return UNKNOWN_ERROR;
-        }
-
-        if (res == OK) {
-            break;
-        }
-
-        close(s);
+    if (mSocket < 0) {
+        return UNKNOWN_ERROR;
     }
 
-    freeaddrinfo(ai);
+    setReceiveTimeout(30);  // Time out reads after 30 secs by default
+
+    mState = CONNECTING;
+
+    int s = mSocket;
+
+    mLock.unlock();
+
+    struct sockaddr_in addr;
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = *(in_addr_t *)ent->h_addr;
+    memset(addr.sin_zero, 0, sizeof(addr.sin_zero));
+
+    status_t res = MyConnect(s, (const struct sockaddr *)&addr, sizeof(addr));
+
+    mLock.lock();
+
+    if (mState != CONNECTING) {
+        return UNKNOWN_ERROR;
+    }
 
     if (res != OK) {
         close(mSocket);
@@ -268,6 +260,47 @@ status_t HTTPStream::connect(const char *server, int port) {
 
         mState = READY;
         return res;
+    }
+
+    if (https) {
+        CHECK(mSSL == NULL);
+
+        if (mSSLContext == NULL) {
+            SSL_library_init();
+
+            mSSLContext = SSL_CTX_new(TLSv1_client_method());
+
+            if (mSSLContext == NULL) {
+                LOGE("failed to create SSL context");
+                mState = READY;
+                return ERROR_IO;
+            }
+        }
+
+        mSSL = SSL_new((SSL_CTX *)mSSLContext);
+
+        if (mSSL == NULL) {
+            LOGE("failed to create SSL session");
+
+            mState = READY;
+            return ERROR_IO;
+        }
+
+        int res = SSL_set_fd((SSL *)mSSL, mSocket);
+
+        if (res == 1) {
+            res = SSL_connect((SSL *)mSSL);
+        }
+
+        if (res != 1) {
+            SSL_free((SSL *)mSSL);
+            mSSL = NULL;
+
+            LOGE("failed to connect over SSL");
+            mState = READY;
+
+            return ERROR_IO;
+        }
     }
 
     mState = CONNECTED;
@@ -280,6 +313,13 @@ status_t HTTPStream::disconnect() {
 
     if (mState != CONNECTED && mState != CONNECTING) {
         return ERROR_NOT_CONNECTED;
+    }
+
+    if (mSSL != NULL) {
+        SSL_shutdown((SSL *)mSSL);
+
+        SSL_free((SSL *)mSSL);
+        mSSL = NULL;
     }
 
     CHECK(mSocket >= 0);
@@ -297,7 +337,16 @@ status_t HTTPStream::send(const char *data, size_t size) {
     }
 
     while (size > 0) {
-        ssize_t n = MySend(mSocket, data, size, 0);
+        ssize_t n;
+        if (mSSL != NULL) {
+            n = SSL_write((SSL *)mSSL, data, size);
+
+            if (n < 0) {
+                n = -SSL_get_error((SSL *)mSSL, n);
+            }
+        } else {
+            n = MySend(mSocket, data, size, 0);
+        }
 
         if (n < 0) {
             disconnect();
@@ -338,7 +387,17 @@ status_t HTTPStream::receive_line(char *line, size_t size) {
 
     for (;;) {
         char c;
-        ssize_t n = MyReceive(mSocket, &c, 1, 0);
+        ssize_t n;
+        if (mSSL != NULL) {
+            n = SSL_read((SSL *)mSSL, &c, 1);
+
+            if (n < 0) {
+                n = -SSL_get_error((SSL *)mSSL, n);
+            }
+        } else {
+            n = MyReceive(mSocket, &c, 1, 0);
+        }
+
         if (n < 0) {
             disconnect();
 
@@ -384,7 +443,7 @@ status_t HTTPStream::receive_header(int *http_status) {
         return err;
     }
 
-    mHeaders.add(string(kStatusKey), string(line));
+    mHeaders.add(AString(kStatusKey), AString(line));
 
     char *spacePos = strchr(line, ' ');
     if (spacePos == NULL) {
@@ -428,7 +487,10 @@ status_t HTTPStream::receive_header(int *http_status) {
 
         char *colonPos = strchr(line, ':');
         if (colonPos == NULL) {
-            mHeaders.add(string(line), string());
+            AString key = line;
+            key.tolower();
+
+            mHeaders.add(key, AString());
         } else {
             char *end_of_key = colonPos;
             while (end_of_key > line && isspace(end_of_key[-1])) {
@@ -442,7 +504,10 @@ status_t HTTPStream::receive_header(int *http_status) {
 
             *end_of_key = '\0';
 
-            mHeaders.add(string(line), string(start_of_value));
+            AString key = line;
+            key.tolower();
+
+            mHeaders.add(key, AString(start_of_value));
         }
     }
 
@@ -452,7 +517,16 @@ status_t HTTPStream::receive_header(int *http_status) {
 ssize_t HTTPStream::receive(void *data, size_t size) {
     size_t total = 0;
     while (total < size) {
-        ssize_t n = MyReceive(mSocket, (char *)data + total, size - total, 0);
+        ssize_t n;
+        if (mSSL != NULL) {
+            n = SSL_read((SSL *)mSSL, (char *)data + total, size - total);
+
+            if (n < 0) {
+                n = -SSL_get_error((SSL *)mSSL, n);
+            }
+        } else {
+            n = MyReceive(mSocket, (char *)data + total, size - total, 0);
+        }
 
         if (n < 0) {
             LOGE("recv failed, errno = %d (%s)", (int)n, strerror(-n));
@@ -474,8 +548,11 @@ ssize_t HTTPStream::receive(void *data, size_t size) {
     return (ssize_t)total;
 }
 
-bool HTTPStream::find_header_value(const string &key, string *value) const {
-    ssize_t index = mHeaders.indexOfKey(key);
+bool HTTPStream::find_header_value(const AString &key, AString *value) const {
+    AString key_lower = key;
+    key_lower.tolower();
+
+    ssize_t index = mHeaders.indexOfKey(key_lower);
     if (index < 0) {
         value->clear();
         return false;

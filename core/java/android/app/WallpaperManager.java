@@ -62,7 +62,13 @@ public class WallpaperManager {
      */
     public static final String ACTION_LIVE_WALLPAPER_CHOOSER
             = "android.service.wallpaper.LIVE_WALLPAPER_CHOOSER";
-    
+
+    /**
+     * Manifest entry for activities that respond to {@link Intent#ACTION_SET_WALLPAPER}
+     * which allows them to provide a custom large icon associated with this action.
+     */
+    public static final String WALLPAPER_PREVIEW_META_DATA = "android.wallpaper.preview";
+
     /**
      * Command for {@link #sendWallpaperCommand}: reported by the wallpaper
      * host when the user taps on an empty area (not performing an action
@@ -71,6 +77,14 @@ public class WallpaperManager {
      */
     public static final String COMMAND_TAP = "android.wallpaper.tap";
     
+    /**
+     * Command for {@link #sendWallpaperCommand}: reported by the wallpaper
+     * host when the user releases a secondary pointer on an empty area
+     * (not performing an action in the host).  The x and y arguments are
+     * the location of the secondary tap in screen coordinates.
+     */
+    public static final String COMMAND_SECONDARY_TAP = "android.wallpaper.secondaryTap";
+
     /**
      * Command for {@link #sendWallpaperCommand}: reported by the wallpaper
      * host when the user drops an object into an area of the host.  The x
@@ -235,8 +249,13 @@ public class WallpaperManager {
                     if (width <= 0 || height <= 0) {
                         // Degenerate case: no size requested, just load
                         // bitmap as-is.
-                        Bitmap bm = BitmapFactory.decodeFileDescriptor(
-                                fd.getFileDescriptor(), null, null);
+                        Bitmap bm = null;
+                        try {
+                            bm = BitmapFactory.decodeFileDescriptor(
+                                   fd.getFileDescriptor(), null, null);
+                        } catch (OutOfMemoryError e) {
+                            Log.w(TAG, "Can't decode file", e);
+                        }
                         try {
                             fd.close();
                         } catch (IOException e) {
@@ -277,7 +296,12 @@ public class WallpaperManager {
                     if (width <= 0 || height <= 0) {
                         // Degenerate case: no size requested, just load
                         // bitmap as-is.
-                        Bitmap bm = BitmapFactory.decodeStream(is, null, null);
+                        Bitmap bm = null;
+                        try {
+                            bm = BitmapFactory.decodeStream(is, null, null);
+                        } catch (OutOfMemoryError e) {
+                            Log.w(TAG, "Can't decode stream", e);
+                        }
                         try {
                             is.close();
                         } catch (IOException e) {

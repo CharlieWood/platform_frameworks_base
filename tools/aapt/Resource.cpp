@@ -148,9 +148,10 @@ private:
 
 bool isValidResourceType(const String8& type)
 {
-    return type == "anim" || type == "drawable" || type == "layout"
+    return type == "anim" || type == "animator" || type == "interpolator"
+        || type == "drawable" || type == "layout"
         || type == "values" || type == "xml" || type == "raw"
-        || type == "color" || type == "menu";
+        || type == "color" || type == "menu" || type == "mipmap";
 }
 
 static sp<AaptFile> getResourceFile(const sp<AaptAssets>& assets, bool makeIfNecessary=true)
@@ -284,9 +285,9 @@ static status_t makeFileResources(Bundle* bundle, const sp<AaptAssets>& assets,
 }
 
 static status_t preProcessImages(Bundle* bundle, const sp<AaptAssets>& assets,
-                          const sp<ResourceTypeSet>& set)
+                          const sp<ResourceTypeSet>& set, const char* type)
 {
-    ResourceDirIterator it(set, String8("drawable"));
+    ResourceDirIterator it(set, String8(type));
     Vector<sp<AaptFile> > newNameFiles;
     Vector<String8> newNamePaths;
     bool hasErrors = false;
@@ -542,11 +543,11 @@ static bool applyFileOverlay(Bundle *bundle,
                         DefaultKeyedVector<AaptGroupEntry, sp<AaptFile> > baseFiles =
                                 baseGroup->getFiles();
                         for (size_t i=0; i < baseFiles.size(); i++) {
-                            printf("baseFile %ld has flavor %s\n", i,
+                            printf("baseFile %zd has flavor %s\n", i,
                                     baseFiles.keyAt(i).toString().string());
                         }
                         for (size_t i=0; i < overlayFiles.size(); i++) {
-                            printf("overlayFile %ld has flavor %s\n", i,
+                            printf("overlayFile %zd has flavor %s\n", i,
                                     overlayFiles.keyAt(i).toString().string());
                         }
                     }
@@ -560,7 +561,7 @@ static bool applyFileOverlay(Bundle *bundle,
                                 keyAt(overlayGroupIndex));
                         if(baseFileIndex < UNKNOWN_ERROR) {
                             if (bundle->getVerbose()) {
-                                printf("found a match (%ld) for overlay file %s, for flavor %s\n",
+                                printf("found a match (%zd) for overlay file %s, for flavor %s\n",
                                         baseFileIndex,
                                         overlayGroup->getLeaf().string(),
                                         overlayFiles.keyAt(overlayGroupIndex).toString().string());
@@ -798,18 +799,24 @@ status_t buildResources(Bundle* bundle, const sp<AaptAssets>& assets)
     sp<ResourceTypeSet> drawables;
     sp<ResourceTypeSet> layouts;
     sp<ResourceTypeSet> anims;
+    sp<ResourceTypeSet> animators;
+    sp<ResourceTypeSet> interpolators;
     sp<ResourceTypeSet> xmls;
     sp<ResourceTypeSet> raws;
     sp<ResourceTypeSet> colors;
     sp<ResourceTypeSet> menus;
+    sp<ResourceTypeSet> mipmaps;
 
     ASSIGN_IT(drawable);
     ASSIGN_IT(layout);
     ASSIGN_IT(anim);
+    ASSIGN_IT(animator);
+    ASSIGN_IT(interpolator);
     ASSIGN_IT(xml);
     ASSIGN_IT(raw);
     ASSIGN_IT(color);
     ASSIGN_IT(menu);
+    ASSIGN_IT(mipmap);
 
     assets->setResources(resources);
     // now go through any resource overlays and collect their files
@@ -825,10 +832,13 @@ status_t buildResources(Bundle* bundle, const sp<AaptAssets>& assets)
     if (!applyFileOverlay(bundle, assets, &drawables, "drawable") ||
             !applyFileOverlay(bundle, assets, &layouts, "layout") ||
             !applyFileOverlay(bundle, assets, &anims, "anim") ||
+            !applyFileOverlay(bundle, assets, &animators, "animator") ||
+            !applyFileOverlay(bundle, assets, &interpolators, "interpolator") ||
             !applyFileOverlay(bundle, assets, &xmls, "xml") ||
             !applyFileOverlay(bundle, assets, &raws, "raw") ||
             !applyFileOverlay(bundle, assets, &colors, "color") ||
-            !applyFileOverlay(bundle, assets, &menus, "menu")) {
+            !applyFileOverlay(bundle, assets, &menus, "menu") ||
+            !applyFileOverlay(bundle, assets, &mipmaps, "mipmap")) {
         return UNKNOWN_ERROR;
     }
 
@@ -836,10 +846,24 @@ status_t buildResources(Bundle* bundle, const sp<AaptAssets>& assets)
 
     if (drawables != NULL) {
         if (bundle->getOutputAPKFile() != NULL) {
-            err = preProcessImages(bundle, assets, drawables);
+            err = preProcessImages(bundle, assets, drawables, "drawable");
         }
         if (err == NO_ERROR) {
             err = makeFileResources(bundle, assets, &table, drawables, "drawable");
+            if (err != NO_ERROR) {
+                hasErrors = true;
+            }
+        } else {
+            hasErrors = true;
+        }
+    }
+
+    if (mipmaps != NULL) {
+        if (bundle->getOutputAPKFile() != NULL) {
+            err = preProcessImages(bundle, assets, mipmaps, "mipmap");
+        }
+        if (err == NO_ERROR) {
+            err = makeFileResources(bundle, assets, &table, mipmaps, "mipmap");
             if (err != NO_ERROR) {
                 hasErrors = true;
             }
@@ -857,6 +881,20 @@ status_t buildResources(Bundle* bundle, const sp<AaptAssets>& assets)
 
     if (anims != NULL) {
         err = makeFileResources(bundle, assets, &table, anims, "anim");
+        if (err != NO_ERROR) {
+            hasErrors = true;
+        }
+    }
+
+    if (animators != NULL) {
+        err = makeFileResources(bundle, assets, &table, animators, "animator");
+        if (err != NO_ERROR) {
+            hasErrors = true;
+        }
+    }
+
+    if (interpolators != NULL) {
+        err = makeFileResources(bundle, assets, &table, interpolators, "interpolator");
         if (err != NO_ERROR) {
             hasErrors = true;
         }
@@ -956,6 +994,36 @@ status_t buildResources(Bundle* bundle, const sp<AaptAssets>& assets)
 
     if (anims != NULL) {
         ResourceDirIterator it(anims, String8("anim"));
+        while ((err=it.next()) == NO_ERROR) {
+            err = compileXmlFile(assets, it.getFile(), &table, xmlFlags);
+            if (err != NO_ERROR) {
+                hasErrors = true;
+            }
+        }
+
+        if (err < NO_ERROR) {
+            hasErrors = true;
+        }
+        err = NO_ERROR;
+    }
+
+    if (animators != NULL) {
+        ResourceDirIterator it(animators, String8("animator"));
+        while ((err=it.next()) == NO_ERROR) {
+            err = compileXmlFile(assets, it.getFile(), &table, xmlFlags);
+            if (err != NO_ERROR) {
+                hasErrors = true;
+            }
+        }
+
+        if (err < NO_ERROR) {
+            hasErrors = true;
+        }
+        err = NO_ERROR;
+    }
+
+    if (interpolators != NULL) {
+        ResourceDirIterator it(interpolators, String8("interpolator"));
         while ((err=it.next()) == NO_ERROR) {
             err = compileXmlFile(assets, it.getFile(), &table, xmlFlags);
             if (err != NO_ERROR) {
@@ -2083,12 +2151,13 @@ writeProguardForLayouts(ProguardKeepSet* keep, const sp<AaptAssets>& assets)
     // tag:attribute pairs that should be checked in layout files.
     KeyedVector<String8, NamespaceAttributePair> kLayoutTagAttrPairs;
     addTagAttrPair(&kLayoutTagAttrPairs, "view", NULL, "class");
+    addTagAttrPair(&kLayoutTagAttrPairs, "fragment", NULL, "class");
     addTagAttrPair(&kLayoutTagAttrPairs, "fragment", RESOURCES_ANDROID_NAMESPACE, "name");
 
     // tag:attribute pairs that should be checked in xml files.
     KeyedVector<String8, NamespaceAttributePair> kXmlTagAttrPairs;
     addTagAttrPair(&kXmlTagAttrPairs, "PreferenceScreen", RESOURCES_ANDROID_NAMESPACE, "fragment");
-    addTagAttrPair(&kXmlTagAttrPairs, "Header", RESOURCES_ANDROID_NAMESPACE, "fragment");
+    addTagAttrPair(&kXmlTagAttrPairs, "header", RESOURCES_ANDROID_NAMESPACE, "fragment");
 
     const Vector<sp<AaptDir> >& dirs = assets->resDirs();
     const size_t K = dirs.size();

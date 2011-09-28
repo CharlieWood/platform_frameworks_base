@@ -180,8 +180,7 @@ NuCachedSource2::NuCachedSource2(const sp<DataSource> &source)
       mFinalStatus(OK),
       mLastAccessPos(0),
       mFetching(true),
-      mLastFetchTimeUs(-1),
-      mSuspended(false) {
+      mLastFetchTimeUs(-1) {
     mLooper->setName("NuCachedSource2");
     mLooper->registerHandler(mReflector);
     mLooper->start();
@@ -202,7 +201,7 @@ status_t NuCachedSource2::initCheck() const {
     return mSource->initCheck();
 }
 
-status_t NuCachedSource2::getSize(off_t *size) {
+status_t NuCachedSource2::getSize(off64_t *size) {
     return mSource->getSize(size);
 }
 
@@ -221,12 +220,6 @@ void NuCachedSource2::onMessageReceived(const sp<AMessage> &msg) {
         case kWhatRead:
         {
             onRead(msg);
-            break;
-        }
-
-        case kWhatSuspend:
-        {
-            onSuspend();
             break;
         }
 
@@ -271,7 +264,6 @@ void NuCachedSource2::onFetch() {
 
     bool keepAlive =
         !mFetching
-            && !mSuspended
             && mFinalStatus == OK
             && ALooper::GetNowUs() >= mLastFetchTimeUs + kKeepAliveIntervalUs;
 
@@ -288,7 +280,7 @@ void NuCachedSource2::onFetch() {
             LOGI("Cache full, done prefetching for now");
             mFetching = false;
         }
-    } else if (!mSuspended) {
+    } else {
         Mutex::Autolock autoLock(mLock);
         restartPrefetcherIfNecessary_l();
     }
@@ -326,31 +318,26 @@ void NuCachedSource2::onRead(const sp<AMessage> &msg) {
     mCondition.signal();
 }
 
-void NuCachedSource2::restartPrefetcherIfNecessary_l(bool force) {
-    static const size_t kGrayArea = 256 * 1024;
+void NuCachedSource2::restartPrefetcherIfNecessary_l(
+        bool ignoreLowWaterThreshold) {
+    static const size_t kGrayArea = 1024 * 1024;
 
     if (mFetching || mFinalStatus != OK) {
         return;
     }
 
-    size_t maxBytes;
-
-    if (!force) {
-        if (mCacheOffset + mCache->totalSize() - mLastAccessPos
+    if (!ignoreLowWaterThreshold
+            && mCacheOffset + mCache->totalSize() - mLastAccessPos
                 >= kLowWaterThreshold) {
-            return;
-        }
-
-        maxBytes = mLastAccessPos - mCacheOffset;
-        if (maxBytes < kGrayArea) {
-            return;
-        }
-
-        maxBytes -= kGrayArea;
-    } else {
-        // Empty it all out.
-        maxBytes = mLastAccessPos - mCacheOffset;
+        return;
     }
+
+    size_t maxBytes = mLastAccessPos - mCacheOffset;
+    if (maxBytes < kGrayArea) {
+        return;
+    }
+
+    maxBytes -= kGrayArea;
 
     size_t actualBytes = mCache->releaseFromStart(maxBytes);
     mCacheOffset += actualBytes;
@@ -359,10 +346,10 @@ void NuCachedSource2::restartPrefetcherIfNecessary_l(bool force) {
     mFetching = true;
 }
 
-ssize_t NuCachedSource2::readAt(off_t offset, void *data, size_t size) {
+ssize_t NuCachedSource2::readAt(off64_t offset, void *data, size_t size) {
     Mutex::Autolock autoSerializer(mSerializer);
 
-    LOGV("readAt offset %ld, size %d", offset, size);
+    LOGV("readAt offset %lld, size %d", offset, size);
 
     Mutex::Autolock autoLock(mLock);
 
@@ -407,41 +394,34 @@ size_t NuCachedSource2::cachedSize() {
     return mCacheOffset + mCache->totalSize();
 }
 
-size_t NuCachedSource2::approxDataRemaining(bool *eos) {
+size_t NuCachedSource2::approxDataRemaining(status_t *finalStatus) {
     Mutex::Autolock autoLock(mLock);
-    return approxDataRemaining_l(eos);
+    return approxDataRemaining_l(finalStatus);
 }
 
-size_t NuCachedSource2::approxDataRemaining_l(bool *eos) {
-    *eos = (mFinalStatus != OK);
-    off_t lastBytePosCached = mCacheOffset + mCache->totalSize();
+size_t NuCachedSource2::approxDataRemaining_l(status_t *finalStatus) {
+    *finalStatus = mFinalStatus;
+    off64_t lastBytePosCached = mCacheOffset + mCache->totalSize();
     if (mLastAccessPos < lastBytePosCached) {
         return lastBytePosCached - mLastAccessPos;
     }
     return 0;
 }
 
-ssize_t NuCachedSource2::readInternal(off_t offset, void *data, size_t size) {
-    CHECK(size <= kHighWaterThreshold);
-
-    LOGV("readInternal offset %ld size %d", offset, size);
+ssize_t NuCachedSource2::readInternal(off64_t offset, void *data, size_t size) {
+    LOGV("readInternal offset %lld size %d", offset, size);
 
     Mutex::Autolock autoLock(mLock);
 
-    if (!mFetching) {
-        mLastAccessPos = offset;
-        restartPrefetcherIfNecessary_l(true /* force */);
-    }
-
     if (offset < mCacheOffset
-            || offset >= (off_t)(mCacheOffset + mCache->totalSize())) {
-        static const off_t kPadding = 32768;
+            || offset >= (off64_t)(mCacheOffset + mCache->totalSize())) {
+        static const off64_t kPadding = 256 * 1024;
 
         // In the presence of multiple decoded streams, once of them will
         // trigger this seek request, the other one will request data "nearby"
         // soon, adjust the seek position so that that subsequent request
         // does not trigger another seek.
-        off_t seekOffset = (offset > kPadding) ? offset - kPadding : 0;
+        off64_t seekOffset = (offset > kPadding) ? offset - kPadding : 0;
 
         seekInternal_l(seekOffset);
     }
@@ -470,15 +450,15 @@ ssize_t NuCachedSource2::readInternal(off_t offset, void *data, size_t size) {
     return -EAGAIN;
 }
 
-status_t NuCachedSource2::seekInternal_l(off_t offset) {
+status_t NuCachedSource2::seekInternal_l(off64_t offset) {
     mLastAccessPos = offset;
 
     if (offset >= mCacheOffset
-            && offset <= (off_t)(mCacheOffset + mCache->totalSize())) {
+            && offset <= (off64_t)(mCacheOffset + mCache->totalSize())) {
         return OK;
     }
 
-    LOGI("new range: offset= %ld", offset);
+    LOGI("new range: offset= %lld", offset);
 
     mCacheOffset = offset;
 
@@ -491,39 +471,22 @@ status_t NuCachedSource2::seekInternal_l(off_t offset) {
     return OK;
 }
 
-void NuCachedSource2::clearCacheAndResume() {
-    LOGV("clearCacheAndResume");
-
+void NuCachedSource2::resumeFetchingIfNecessary() {
     Mutex::Autolock autoLock(mLock);
 
-    CHECK(mSuspended);
-
-    mCacheOffset = 0;
-    mFinalStatus = OK;
-    mLastAccessPos = 0;
-    mLastFetchTimeUs = -1;
-
-    size_t totalSize = mCache->totalSize();
-    CHECK_EQ(mCache->releaseFromStart(totalSize), totalSize);
-
-    mFetching = true;
-    mSuspended = false;
+    restartPrefetcherIfNecessary_l(true /* ignore low water threshold */);
 }
 
-void NuCachedSource2::suspend() {
-    (new AMessage(kWhatSuspend, mReflector->id()))->post();
-
-    while (!mSuspended) {
-        usleep(10000);
-    }
+DecryptHandle* NuCachedSource2::DrmInitialization() {
+    return mSource->DrmInitialization();
 }
 
-void NuCachedSource2::onSuspend() {
-    Mutex::Autolock autoLock(mLock);
+void NuCachedSource2::getDrmInfo(DecryptHandle **handle, DrmManagerClient **client) {
+    mSource->getDrmInfo(handle, client);
+}
 
-    mFetching = false;
-    mSuspended = true;
+String8 NuCachedSource2::getUri() {
+    return mSource->getUri();
 }
 
 }  // namespace android
-

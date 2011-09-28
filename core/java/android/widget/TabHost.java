@@ -21,6 +21,7 @@ import com.android.internal.R;
 import android.app.LocalActivityManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.TypedArray;
 import android.graphics.drawable.Drawable;
 import android.os.Build;
 import android.util.AttributeSet;
@@ -63,6 +64,8 @@ public class TabHost extends FrameLayout implements ViewTreeObserver.OnTouchMode
     private OnTabChangeListener mOnTabChangeListener;
     private OnKeyListener mTabKeyListener;
 
+    private int mTabLayoutId;
+
     public TabHost(Context context) {
         super(context);
         initTabHost();
@@ -70,6 +73,20 @@ public class TabHost extends FrameLayout implements ViewTreeObserver.OnTouchMode
 
     public TabHost(Context context, AttributeSet attrs) {
         super(context, attrs);
+
+        TypedArray a = context.obtainStyledAttributes(attrs,
+                com.android.internal.R.styleable.TabWidget,
+                com.android.internal.R.attr.tabWidgetStyle, 0);
+
+        mTabLayoutId = a.getResourceId(R.styleable.TabWidget_tabLayout, 0);
+        a.recycle();
+
+        if (mTabLayoutId == 0) {
+            // In case the tabWidgetStyle does not inherit from Widget.TabWidget and tabLayout is
+            // not defined.
+            mTabLayoutId = R.layout.tab_indicator_holo;
+        }
+
         initTabHost();
     }
 
@@ -144,6 +161,11 @@ mTabHost.addTab(TAB_TAG_1, "Hello, world!", "Tab 1");
         }
     }
 
+    @Override
+    public void sendAccessibilityEvent(int eventType) {
+        /* avoid super class behavior - TabWidget sends the right events */
+    }
+
     /**
      * If you are using {@link TabSpec#setContent(android.content.Intent)}, this
      * must be called since the activityGroup is needed to launch the local activity.
@@ -209,6 +231,7 @@ mTabHost.addTab(TAB_TAG_1, "Hello, world!", "Tab 1");
         if (tabSpec.mIndicatorStrategy instanceof ViewIndicatorStrategy) {
             mTabWidget.setStripEnabled(false);
         }
+
         mTabWidget.addView(tabIndicator);
         mTabSpecs.add(tabSpec);
 
@@ -508,7 +531,7 @@ mTabHost.addTab(TAB_TAG_1, "Hello, world!", "Tab 1");
             final Context context = getContext();
             LayoutInflater inflater =
                     (LayoutInflater) context.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
-            View tabIndicator = inflater.inflate(R.layout.tab_indicator,
+            View tabIndicator = inflater.inflate(mTabLayoutId,
                     mTabWidget, // tab widget is the parent
                     false); // no inflate params
 
@@ -520,7 +543,7 @@ mTabHost.addTab(TAB_TAG_1, "Hello, world!", "Tab 1");
                 tabIndicator.setBackgroundResource(R.drawable.tab_indicator_v4);
                 tv.setTextColor(context.getResources().getColorStateList(R.color.tab_indicator_text_v4));
             }
-            
+
             return tabIndicator;
         }
     }
@@ -542,7 +565,7 @@ mTabHost.addTab(TAB_TAG_1, "Hello, world!", "Tab 1");
             final Context context = getContext();
             LayoutInflater inflater =
                     (LayoutInflater) context.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
-            View tabIndicator = inflater.inflate(R.layout.tab_indicator,
+            View tabIndicator = inflater.inflate(mTabLayoutId,
                     mTabWidget, // tab widget is the parent
                     false); // no inflate params
 
@@ -550,14 +573,17 @@ mTabHost.addTab(TAB_TAG_1, "Hello, world!", "Tab 1");
             tv.setText(mLabel);
 
             final ImageView iconView = (ImageView) tabIndicator.findViewById(R.id.icon);
-            iconView.setImageDrawable(mIcon);
+            if (mIcon != null) {
+                iconView.setImageDrawable(mIcon);
+                iconView.setVisibility(VISIBLE);
+            }
 
             if (context.getApplicationInfo().targetSdkVersion <= Build.VERSION_CODES.DONUT) {
                 // Donut apps get old color scheme
                 tabIndicator.setBackgroundResource(R.drawable.tab_indicator_v4);
                 tv.setTextColor(context.getResources().getColorStateList(R.color.tab_indicator_text_v4));
             }
-            
+
             return tabIndicator;
         }
     }

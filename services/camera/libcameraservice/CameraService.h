@@ -79,6 +79,12 @@ private:
     sp<MediaPlayer>     mSoundPlayer[NUM_SOUNDS];
     int                 mSoundRef;  // reference count (release all MediaPlayer when 0)
 
+    // Used by Client objects to extract the ISurface from a Surface object.
+    // This is used because making Client a friend class of Surface would
+    // require including this header in Surface.h since Client is a nested
+    // class.
+    static sp<ISurface> getISurface(const sp<Surface>& surface);
+
     class Client : public BnCamera
     {
     public:
@@ -87,18 +93,22 @@ private:
         virtual status_t        connect(const sp<ICameraClient>& client);
         virtual status_t        lock();
         virtual status_t        unlock();
-        virtual status_t        setPreviewDisplay(const sp<ISurface>& surface);
+        virtual status_t        setPreviewDisplay(const sp<Surface>& surface);
+        virtual status_t        setPreviewTexture(const sp<ISurfaceTexture>& surfaceTexture);
         virtual void            setPreviewCallbackFlag(int flag);
         virtual status_t        startPreview();
         virtual void            stopPreview();
         virtual bool            previewEnabled();
+        virtual int32_t         getNumberOfVideoBuffers() const;
+        virtual sp<IMemory>     getVideoBuffer(int32_t index) const;
+        virtual status_t        storeMetaDataInBuffers(bool enabled);
         virtual status_t        startRecording();
         virtual void            stopRecording();
         virtual bool            recordingEnabled();
         virtual void            releaseRecordingFrame(const sp<IMemory>& mem);
         virtual status_t        autoFocus();
         virtual status_t        cancelAutoFocus();
-        virtual status_t        takePicture();
+        virtual status_t        takePicture(int msgType);
         virtual status_t        setParameters(const String8& params);
         virtual String8         getParameters() const;
         virtual status_t        sendCommand(int32_t cmd, int32_t arg1, int32_t arg2);
@@ -121,7 +131,6 @@ private:
 
         // these are internal functions used to set up preview buffers
         status_t                registerPreviewBuffers();
-        status_t                setOverlay();
 
         // camera operation mode
         enum camera_mode {
@@ -132,6 +141,9 @@ private:
         status_t                startCameraMode(camera_mode mode);
         status_t                startPreviewMode();
         status_t                startRecordingMode();
+
+        // internal function used by sendCommand to enable/disable shutter sound.
+        status_t                enableShutterSound(bool enable);
 
         // these are static callback functions
         static void             notifyCallback(int32_t msgType, int32_t ext1, int32_t ext2, void* user);
@@ -163,18 +175,15 @@ private:
         int                             mCameraFacing;   // immutable after constructor
         pid_t                           mClientPid;
         sp<CameraHardwareInterface>     mHardware;       // cleared after disconnect()
-        bool                            mUseOverlay;     // immutable after constructor
-        sp<OverlayRef>                  mOverlayRef;
-        int                             mOverlayW;
-        int                             mOverlayH;
         int                             mPreviewCallbackFlag;
         int                             mOrientation;     // Current display orientation
-        // True if display orientation has been changed. This is only used in overlay.
-        int                             mOrientationChanged;
+        bool                            mPlayShutterSound;
 
         // Ensures atomicity among the public methods
         mutable Mutex                   mLock;
-        sp<ISurface>                    mSurface;
+        // This is a binder of Surface or SurfaceTexture.
+        sp<IBinder>                     mSurface;
+        sp<ANativeWindow>               mPreviewWindow;
 
         // If the user want us to return a copy of the preview frame (instead
         // of the original one), we allocate mPreviewBuffer and reuse it if possible.

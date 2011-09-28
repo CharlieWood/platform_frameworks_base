@@ -36,6 +36,7 @@ import android.os.Bundle;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.Message;
+import android.os.Process;
 import android.os.RemoteException;
 import android.util.Log;
 import android.util.LogPrinter;
@@ -206,8 +207,14 @@ public abstract class WallpaperService extends Service {
 
             @Override
             public void setFixedSize(int width, int height) {
-                throw new UnsupportedOperationException(
-                        "Wallpapers currently only support sizing from layout");
+                if (Process.myUid() != Process.SYSTEM_UID) {
+                    // Regular apps can't do this.  It can only work for
+                    // certain designs of window animations, so you can't
+                    // rely on it.
+                    throw new UnsupportedOperationException(
+                            "Wallpapers currently only support sizing from layout");
+                }
+                super.setFixedSize(width, height);
             }
             
             public void setKeepScreenOn(boolean screenOn) {
@@ -219,14 +226,17 @@ public abstract class WallpaperService extends Service {
         
         final InputHandler mInputHandler = new BaseInputHandler() {
             @Override
-            public void handleMotion(MotionEvent event, Runnable finishedCallback) {
+            public void handleMotion(MotionEvent event,
+                    InputQueue.FinishedCallback finishedCallback) {
+                boolean handled = false;
                 try {
                     int source = event.getSource();
                     if ((source & InputDevice.SOURCE_CLASS_POINTER) != 0) {
                         dispatchPointer(event);
+                        handled = true;
                     }
                 } finally {
-                    finishedCallback.run();
+                    finishedCallback.finished(handled);
                 }
             }
         };
@@ -450,16 +460,17 @@ public abstract class WallpaperService extends Service {
         }
         
         private void dispatchPointer(MotionEvent event) {
-            synchronized (mLock) {
-                if (event.getAction() == MotionEvent.ACTION_MOVE) {
-                    mPendingMove = event;
-                } else {
-                    mPendingMove = null;
+            if (event.isTouchEvent()) {
+                synchronized (mLock) {
+                    if (event.getAction() == MotionEvent.ACTION_MOVE) {
+                        mPendingMove = event;
+                    } else {
+                        mPendingMove = null;
+                    }
                 }
+                Message msg = mCaller.obtainMessageO(MSG_TOUCH_EVENT, event);
+                mCaller.sendMessage(msg);
             }
-
-            Message msg = mCaller.obtainMessageO(MSG_TOUCH_EVENT, event);
-            mCaller.sendMessage(msg);
         }
 
         void updateSurface(boolean forceRelayout, boolean forceReport, boolean redrawNeeded) {
@@ -514,8 +525,11 @@ public abstract class WallpaperService extends Service {
                         mLayout.windowAnimations =
                                 com.android.internal.R.style.Animation_Wallpaper;
                         mInputChannel = new InputChannel();
-                        mSession.add(mWindow, mLayout, View.VISIBLE, mContentInsets,
-                                mInputChannel);
+                        if (mSession.add(mWindow, mLayout, View.VISIBLE, mContentInsets,
+                                mInputChannel) < 0) {
+                            Log.w(TAG, "Failed to add window while updating wallpaper surface.");
+                            return;
+                        }
                         mCreated = true;
 
                         InputQueue.registerInputChannel(mInputChannel, mInputHandler,
@@ -543,7 +557,8 @@ public abstract class WallpaperService extends Service {
                         sizeChanged = true;
                         mCurHeight = h;
                     }
-                    
+
+                    mSurfaceHolder.setSurfaceFrameSize(w, h);
                     mSurfaceHolder.mSurfaceLock.unlock();
 
                     if (!mSurfaceHolder.mSurface.isValid()) {
@@ -854,7 +869,14 @@ public abstract class WallpaperService extends Service {
                 mEngine.dispatchPointer(event);
             }
         }
-        
+
+        public void dispatchWallpaperCommand(String action, int x, int y,
+                int z, Bundle extras) {
+            if (mEngine != null) {
+                mEngine.mWindow.dispatchWallpaperCommand(action, x, y, z, extras, false);
+            }
+        }
+
         public void destroy() {
             Message msg = mCaller.obtainMessage(DO_DETACH);
             mCaller.sendMessage(msg);

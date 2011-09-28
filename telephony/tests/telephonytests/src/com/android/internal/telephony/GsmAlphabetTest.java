@@ -16,10 +16,13 @@
 
 package com.android.internal.telephony;
 
+import com.android.internal.telephony.GsmAlphabet;
+
 import junit.framework.TestCase;
 
 import android.test.suitebuilder.annotation.LargeTest;
 import android.test.suitebuilder.annotation.SmallTest;
+import android.test.suitebuilder.annotation.Suppress;
 
 public class GsmAlphabetTest extends TestCase {
 
@@ -37,16 +40,15 @@ public class GsmAlphabetTest extends TestCase {
 
         String message = "aaaaaaaaaabbbbbbbbbbcccccccccc";
         byte[] userData = GsmAlphabet.stringToGsm7BitPackedWithHeader(message,
-                SmsHeader.toByteArray(header), 0, 0);
-        int septetCount = GsmAlphabet.countGsmSeptetsUsingTables(message, true, 0, 0);
+                SmsHeader.toByteArray(header));
+        int septetCount = GsmAlphabet.countGsmSeptets(message, false);
         String parsedMessage = GsmAlphabet.gsm7BitPackedToString(
-                userData, SmsHeader.toByteArray(header).length+2, septetCount, 1, 0, 0);
+                userData, SmsHeader.toByteArray(header).length+2, septetCount, 1);
         assertEquals(message, parsedMessage);
     }
 
     // TODO: This method should *really* be a series of individual test methods.
-    // However, it's a SmallTest because it executes quickly.
-    @SmallTest
+    @LargeTest
     public void testBasic() throws Exception {
         // '@' maps to char 0
         assertEquals(0, GsmAlphabet.charToGsm('@'));
@@ -97,7 +99,7 @@ public class GsmAlphabetTest extends TestCase {
 
         assertEquals('@', GsmAlphabet.gsmToChar(0));
 
-        // `a (a with grave accent) maps to last GSM character
+        // `a (a with grave accent) maps to last GSM charater
         assertEquals('\u00e0', GsmAlphabet.gsmToChar(0x7f));
 
         assertEquals('\uffff',
@@ -116,12 +118,8 @@ public class GsmAlphabetTest extends TestCase {
         assertEquals(' ', GsmAlphabet.gsmExtendedToChar(
                 GsmAlphabet.GSM_EXTENDED_ESCAPE));
 
-        // Reserved for extension to extension table (mapped to space)
-        assertEquals(' ', GsmAlphabet.gsmExtendedToChar(GsmAlphabet.GSM_EXTENDED_ESCAPE));
-
-        // Unmappable (mapped to character in default or national locking shift table)
-        assertEquals('@', GsmAlphabet.gsmExtendedToChar(0));
-        assertEquals('\u00e0', GsmAlphabet.gsmExtendedToChar(0x7f));
+        // Unmappable
+        assertEquals(' ', GsmAlphabet.gsmExtendedToChar(0));
 
         //
         // stringTo7BitPacked, gsm7BitPackedToString
@@ -132,7 +130,7 @@ public class GsmAlphabetTest extends TestCase {
 
         // Check all alignment cases
         for (int i = 0; i < 9; i++, testString.append('@')) {
-            packed = GsmAlphabet.stringToGsm7BitPacked(testString.toString(), 0, 0);
+            packed = GsmAlphabet.stringToGsm7BitPacked(testString.toString());
             assertEquals(testString.toString(),
                     GsmAlphabet.gsm7BitPackedToString(packed, 1, 0xff & packed[0]));
         }
@@ -153,7 +151,7 @@ public class GsmAlphabetTest extends TestCase {
             assertEquals(1, GsmAlphabet.countGsmSeptets(c));
         }
 
-        packed = GsmAlphabet.stringToGsm7BitPacked(testString.toString(), 0, 0);
+        packed = GsmAlphabet.stringToGsm7BitPacked(testString.toString());
         assertEquals(testString.toString(),
                 GsmAlphabet.gsm7BitPackedToString(packed, 1, 0xff & packed[0]));
 
@@ -168,7 +166,7 @@ public class GsmAlphabetTest extends TestCase {
 
         }
 
-        packed = GsmAlphabet.stringToGsm7BitPacked(testString.toString(), 0, 0);
+        packed = GsmAlphabet.stringToGsm7BitPacked(testString.toString());
         assertEquals(testString.toString(),
                 GsmAlphabet.gsm7BitPackedToString(packed, 1, 0xff & packed[0]));
 
@@ -179,7 +177,7 @@ public class GsmAlphabetTest extends TestCase {
             testString.append('@');
         }
 
-        packed = GsmAlphabet.stringToGsm7BitPacked(testString.toString(), 0, 0);
+        packed = GsmAlphabet.stringToGsm7BitPacked(testString.toString());
         assertEquals(testString.toString(),
                 GsmAlphabet.gsm7BitPackedToString(packed, 1, 0xff & packed[0]));
 
@@ -187,7 +185,7 @@ public class GsmAlphabetTest extends TestCase {
         testString.append('@');
 
         try {
-            GsmAlphabet.stringToGsm7BitPacked(testString.toString(), 0, 0);
+            GsmAlphabet.stringToGsm7BitPacked(testString.toString());
             fail("expected exception");
         } catch (EncodeException ex) {
             // exception expected
@@ -200,7 +198,7 @@ public class GsmAlphabetTest extends TestCase {
             testString.append('{');
         }
 
-        packed = GsmAlphabet.stringToGsm7BitPacked(testString.toString(), 0, 0);
+        packed = GsmAlphabet.stringToGsm7BitPacked(testString.toString());
         assertEquals(testString.toString(),
                 GsmAlphabet.gsm7BitPackedToString(packed, 1, 0xff & packed[0]));
 
@@ -208,29 +206,17 @@ public class GsmAlphabetTest extends TestCase {
         testString.append('{');
 
         try {
-            GsmAlphabet.stringToGsm7BitPacked(testString.toString(), 0, 0);
+            GsmAlphabet.stringToGsm7BitPacked(testString.toString());
             fail("expected exception");
         } catch (EncodeException ex) {
             // exception expected
         }
 
-        // Reserved for extension to extension table (mapped to space)
-        packed = new byte[]{(byte)(0x1b | 0x80), 0x1b >> 1};
-        assertEquals(" ", GsmAlphabet.gsm7BitPackedToString(packed, 0, 2));
-
-        // Unmappable (mapped to character in default alphabet table)
-        packed[0] = 0x1b;
-        packed[1] = 0x00;
-        assertEquals("@", GsmAlphabet.gsm7BitPackedToString(packed, 0, 2));
-        packed[0] = (byte)(0x1b | 0x80);
-        packed[1] = (byte)(0x7f >> 1);
-        assertEquals("\u00e0", GsmAlphabet.gsm7BitPackedToString(packed, 0, 2));
-
         //
         // 8 bit unpacked format
         //
         // Note: we compare hex strings here
-        // because Assert doesn't have array comparisons
+        // because Assert doesnt have array-comparisons
 
         byte unpacked[];
 
@@ -322,16 +308,27 @@ public class GsmAlphabetTest extends TestCase {
 
         assertEquals("a",
                 GsmAlphabet.gsm8BitUnpackedToString(unpacked, 1, unpacked.length - 1));
+    }
 
-        // Reserved for extension to extension table (mapped to space)
-        unpacked[0] = 0x1b;
-        unpacked[1] = 0x1b;
-        assertEquals(" ", GsmAlphabet.gsm8BitUnpackedToString(unpacked, 0, 2));
+    @SmallTest
+    public void testGsm8BitUpackedWithEuckr() throws Exception {
+        // Some feature phones in Korea store contacts as euc-kr.
+        // Test this situations.
+        byte unpacked[];
 
-        // Unmappable (mapped to character in default or national locking shift table)
-        unpacked[1] = 0x00;
-        assertEquals("@", GsmAlphabet.gsm8BitUnpackedToString(unpacked, 0, 2));
-        unpacked[1] = 0x7f;
-        assertEquals("\u00e0", GsmAlphabet.gsm8BitUnpackedToString(unpacked, 0, 2));
+        // Test general alphabet strings.
+        unpacked = IccUtils.hexStringToBytes("61626320646566FF");
+        assertEquals("abc def",
+                GsmAlphabet.gsm8BitUnpackedToString(unpacked, 0, unpacked.length, "euc-kr"));
+
+        // Test korean strings.
+        unpacked = IccUtils.hexStringToBytes("C5D7BDBAC6AEFF");
+        assertEquals("\uD14C\uC2A4\uD2B8",
+                GsmAlphabet.gsm8BitUnpackedToString(unpacked, 0, unpacked.length, "euc-kr"));
+
+        // Test gsm Extented Characters.
+        unpacked = GsmAlphabet.stringToGsm8BitPacked(sGsmExtendedChars);
+        assertEquals(sGsmExtendedChars,
+                GsmAlphabet.gsm8BitUnpackedToString(unpacked, 0, unpacked.length, "euc-kr"));
     }
 }

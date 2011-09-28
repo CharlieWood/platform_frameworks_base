@@ -97,11 +97,11 @@ public class Keyboard {
     private boolean mShifted;
     
     /** Key instance for the shift key, if present */
-    private Key mShiftKey;
-    
+    private Key[] mShiftKeys = { null, null };
+
     /** Key index for the shift key, if present */
-    private int mShiftKeyIndex = -1;
-    
+    private int[] mShiftKeyIndices = {-1, -1};
+
     /** Current key width, while loading the keyboard */
     private int mKeyWidth;
     
@@ -504,7 +504,30 @@ public class Keyboard {
     public Keyboard(Context context, int xmlLayoutResId) {
         this(context, xmlLayoutResId, 0);
     }
-    
+
+    /**
+     * Creates a keyboard from the given xml key layout file. Weeds out rows
+     * that have a keyboard mode defined but don't match the specified mode.
+     * @param context the application or service context
+     * @param xmlLayoutResId the resource file that contains the keyboard layout and keys.
+     * @param modeId keyboard mode identifier
+     * @param width sets width of keyboard
+     * @param height sets height of keyboard
+     */
+    public Keyboard(Context context, int xmlLayoutResId, int modeId, int width, int height) {
+        mDisplayWidth = width;
+        mDisplayHeight = height;
+
+        mDefaultHorizontalGap = 0;
+        mDefaultWidth = mDisplayWidth / 10;
+        mDefaultVerticalGap = 0;
+        mDefaultHeight = mDefaultWidth;
+        mKeys = new ArrayList<Key>();
+        mModifierKeys = new ArrayList<Key>();
+        mKeyboardMode = modeId;
+        loadKeyboard(context, context.getResources().getXml(xmlLayoutResId));
+    }
+
     /**
      * Creates a keyboard from the given xml key layout file. Weeds out rows
      * that have a keyboard mode defined but don't match the specified mode. 
@@ -633,8 +656,10 @@ public class Keyboard {
     }
 
     public boolean setShifted(boolean shiftState) {
-        if (mShiftKey != null) {
-            mShiftKey.on = shiftState;
+        for (Key shiftKey : mShiftKeys) {
+            if (shiftKey != null) {
+                shiftKey.on = shiftState;
+            }
         }
         if (mShifted != shiftState) {
             mShifted = shiftState;
@@ -647,8 +672,15 @@ public class Keyboard {
         return mShifted;
     }
 
+    /**
+     * @hide
+     */
+    public int[] getShiftKeyIndices() {
+        return mShiftKeyIndices;
+    }
+
     public int getShiftKeyIndex() {
-        return mShiftKeyIndex;
+        return mShiftKeyIndices[0];
     }
     
     private void computeNearestNeighbors() {
@@ -737,8 +769,14 @@ public class Keyboard {
                         key = createKeyFromXml(res, currentRow, x, y, parser);
                         mKeys.add(key);
                         if (key.codes[0] == KEYCODE_SHIFT) {
-                            mShiftKey = key;
-                            mShiftKeyIndex = mKeys.size()-1;
+                            // Find available shift key slot and put this shift key in it
+                            for (int i = 0; i < mShiftKeys.length; i++) {
+                                if (mShiftKeys[i] == null) {
+                                    mShiftKeys[i] = key;
+                                    mShiftKeyIndices[i] = mKeys.size()-1;
+                                    break;
+                                }
+                            }
                             mModifierKeys.add(key);
                         } else if (key.codes[0] == KEYCODE_ALT) {
                             mModifierKeys.add(key);

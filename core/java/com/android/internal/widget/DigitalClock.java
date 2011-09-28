@@ -22,6 +22,8 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.res.AssetManager;
+import android.content.res.Resources;
 import android.database.ContentObserver;
 import android.graphics.Typeface;
 import android.os.Handler;
@@ -29,7 +31,7 @@ import android.provider.Settings;
 import android.text.format.DateFormat;
 import android.util.AttributeSet;
 import android.view.View;
-import android.widget.LinearLayout;
+import android.widget.RelativeLayout;
 import android.widget.TextView;
 
 import java.lang.ref.WeakReference;
@@ -39,14 +41,18 @@ import java.util.Calendar;
 /**
  * Displays the time
  */
-public class DigitalClock extends LinearLayout {
+public class DigitalClock extends RelativeLayout {
 
+    private static final String SYSTEM = "/system/fonts/";
+    private static final String SYSTEM_FONT_TIME_BACKGROUND = SYSTEM + "AndroidClock.ttf";
+    private static final String SYSTEM_FONT_TIME_FOREGROUND = SYSTEM + "AndroidClock_Highlight.ttf";
     private final static String M12 = "h:mm";
     private final static String M24 = "kk:mm";
 
     private Calendar mCalendar;
     private String mFormat;
-    private TextView mTimeDisplay;
+    private TextView mTimeDisplayBackground;
+    private TextView mTimeDisplayForeground;
     private AmPm mAmPm;
     private ContentObserver mFormatChangeObserver;
     private int mAttached = 0; // for debugging - tells us whether attach/detach is unbalanced
@@ -149,9 +155,14 @@ public class DigitalClock extends LinearLayout {
     protected void onFinishInflate() {
         super.onFinishInflate();
 
-        mTimeDisplay = (TextView) findViewById(R.id.timeDisplay);
-        mTimeDisplay.setTypeface(Typeface.createFromFile("/system/fonts/Clockopia.ttf"));
-        mAmPm = new AmPm(this, Typeface.createFromFile("/system/fonts/DroidSans-Bold.ttf"));
+        AssetManager assets = mContext.getAssets();
+
+        /* The time display consists of two tones. That's why we have two overlapping text views. */
+        mTimeDisplayBackground = (TextView) findViewById(R.id.timeDisplayBackground);
+        mTimeDisplayBackground.setTypeface(Typeface.createFromFile(SYSTEM_FONT_TIME_BACKGROUND));
+        mTimeDisplayForeground = (TextView) findViewById(R.id.timeDisplayForeground);
+        mTimeDisplayForeground.setTypeface(Typeface.createFromFile(SYSTEM_FONT_TIME_FOREGROUND));
+        mAmPm = new AmPm(this, null);
         mCalendar = Calendar.getInstance();
 
         setDateFormat();
@@ -210,7 +221,8 @@ public class DigitalClock extends LinearLayout {
         mCalendar.setTimeInMillis(System.currentTimeMillis());
 
         CharSequence newTime = DateFormat.format(mFormat, mCalendar);
-        mTimeDisplay.setText(newTime);
+        mTimeDisplayBackground.setText(newTime);
+        mTimeDisplayForeground.setText(newTime);
         mAmPm.setIsMorning(mCalendar.get(Calendar.AM_PM) == 0);
     }
 

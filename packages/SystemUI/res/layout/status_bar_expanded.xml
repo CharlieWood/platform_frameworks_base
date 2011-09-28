@@ -18,7 +18,7 @@
 */
 -->
 
-<com.android.systemui.statusbar.ExpandedView xmlns:android="http://schemas.android.com/apk/res/android"
+<com.android.systemui.statusbar.phone.ExpandedView xmlns:android="http://schemas.android.com/apk/res/android"
     android:orientation="vertical"
     android:focusable="true"
     android:descendantFocusability="afterDescendants"
@@ -31,9 +31,9 @@
         android:paddingTop="3dp"
         android:paddingBottom="5dp"
         android:paddingRight="3dp"
-        android:background="@drawable/title_bar_portrait"
+        android:background="@drawable/shade_header_background"
         >
-        <com.android.systemui.statusbar.CarrierLabel
+        <com.android.systemui.statusbar.phone.CarrierLabel
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
@@ -43,7 +43,7 @@
             android:paddingBottom="1dp"
             android:paddingLeft="4dp"
             android:textAppearance="?android:attr/textAppearanceLarge"
-            android:textColor="#ffdfdfdf"
+            android:textColor="?android:attr/textColorSecondary"
             />
         <TextView android:id="@+id/clear_all_button"
             android:layout_width="wrap_content"
@@ -57,7 +57,7 @@
             style="?android:attr/buttonStyle"
             android:paddingLeft="15dp"
             android:paddingRight="15dp"
-            android:background="@android:drawable/btn_default_small"
+            android:background="@drawable/btn_default_small"
             />
     </LinearLayout>
 
@@ -73,7 +73,7 @@
             android:fadingEdge="none"
             android:overScrollMode="ifContentScrolls"
             >
-            <com.android.systemui.statusbar.NotificationLinearLayout
+            <LinearLayout
                 android:id="@+id/notificationLinearLayout"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -83,7 +83,7 @@
                 <TextView android:id="@+id/noNotificationsTitle"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:background="@drawable/shade_bgcolor"
+                    android:background="@drawable/title_bar_portrait"
                     android:paddingLeft="5dp"
                     android:textAppearance="@style/TextAppearance.StatusBar.Title"
                     android:text="@string/status_bar_no_notifications_title"
@@ -92,7 +92,7 @@
                 <TextView android:id="@+id/ongoingTitle"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:background="@drawable/shade_bgcolor"
+                    android:background="@drawable/title_bar_portrait"
                     android:paddingLeft="5dp"
                     android:textAppearance="@style/TextAppearance.StatusBar.Title"
                     android:text="@string/status_bar_ongoing_events_title"
@@ -106,7 +106,7 @@
                 <TextView android:id="@+id/latestTitle"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:background="@drawable/shade_bgcolor"
+                    android:background="@drawable/title_bar_portrait"
                     android:paddingLeft="5dp"
                     android:textAppearance="@style/TextAppearance.StatusBar.Title"
                     android:text="@string/status_bar_latest_events_title"
@@ -116,7 +116,7 @@
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
                     />
-            </com.android.systemui.statusbar.NotificationLinearLayout>
+            </LinearLayout>
         </ScrollView>
 
         <ImageView
@@ -127,4 +127,4 @@
         />
 
     </FrameLayout>
-</com.android.systemui.statusbar.ExpandedView>
+</com.android.systemui.statusbar.phone.ExpandedView>

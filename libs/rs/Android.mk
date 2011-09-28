@@ -23,7 +23,17 @@ include $(BUILD_HOST_EXECUTABLE)
 # TODO: This should go into build/core/config.mk
 RSG_GENERATOR:=$(LOCAL_BUILT_MODULE)
 
+# include $(CLEAR_VARS)
+# input_data_file := $(LOCAL_PATH)/rslib.bc
+# slangdata_output_var_name := rs_runtime_lib_bc
+# LOCAL_MODULE := librslib_rt
 
+# LOCAL_PRELINK_MODULE := false
+# LOCAL_MODULE_CLASS := STATIC_LIBRARIES
+
+# LOCAL_MODULE_TAGS := optional
+# include frameworks/compile/slang/SlangData.mk
+# include $(BUILD_STATIC_LIBRARY)
 
 # Build render script lib ====================
 
@@ -76,42 +86,71 @@ ifneq ($(TARGET_SIMULATOR),true)
 LOCAL_SRC_FILES:= \
 	rsAdapter.cpp \
 	rsAllocation.cpp \
+	rsAnimation.cpp \
 	rsComponent.cpp \
 	rsContext.cpp \
 	rsDevice.cpp \
 	rsElement.cpp \
-        rsFileA3D.cpp \
-	rsLight.cpp \
+	rsFileA3D.cpp \
+	rsFont.cpp \
 	rsLocklessFifo.cpp \
 	rsObjectBase.cpp \
 	rsMatrix.cpp \
-        rsMesh.cpp \
-	rsNoise.cpp \
+	rsMesh.cpp \
+	rsMutex.cpp \
 	rsProgram.cpp \
 	rsProgramFragment.cpp \
-	rsProgramFragmentStore.cpp \
+	rsProgramStore.cpp \
 	rsProgramRaster.cpp \
 	rsProgramVertex.cpp \
 	rsSampler.cpp \
 	rsScript.cpp \
 	rsScriptC.cpp \
 	rsScriptC_Lib.cpp \
-        rsShaderCache.cpp \
-	rsSimpleMesh.cpp \
+	rsScriptC_LibCL.cpp \
+	rsScriptC_LibGL.cpp \
+	rsShaderCache.cpp \
+	rsSignal.cpp \
+	rsStream.cpp \
 	rsThreadIO.cpp \
 	rsType.cpp \
 	rsVertexArray.cpp
 
-ifeq ($(TARGET_BOARD_PLATFORM), s5pc110)
-	LOCAL_CFLAGS += -DHAS_CONTEXT_PRIORITY
-endif
 
-LOCAL_SHARED_LIBRARIES += libcutils libutils libEGL libGLESv1_CM libGLESv2 libui libacc
+LOCAL_SHARED_LIBRARIES += libz libcutils libutils libEGL libGLESv1_CM libGLESv2 libui libbcc
+
+LOCAL_STATIC_LIBRARIES := libdex libft2
+
+LOCAL_C_INCLUDES += external/freetype/include external/zlib dalvik
+LOCAL_C_INCLUDES += frameworks/compile/libbcc/include
+
 LOCAL_LDLIBS := -lpthread -ldl
 LOCAL_MODULE:= libRS
 LOCAL_MODULE_TAGS := optional
 
 include $(BUILD_SHARED_LIBRARY)
+
+# Now build a host version for serialization
+include $(CLEAR_VARS)
+LOCAL_CFLAGS += -DANDROID_RS_SERIALIZE
+
+LOCAL_SRC_FILES:= \
+	rsAllocation.cpp \
+	rsComponent.cpp \
+	rsElement.cpp \
+	rsFileA3D.cpp \
+	rsObjectBase.cpp \
+	rsMesh.cpp \
+	rsStream.cpp \
+	rsType.cpp
+
+LOCAL_STATIC_LIBRARIES := libcutils libutils
+
+LOCAL_LDLIBS := -lpthread
+LOCAL_MODULE:= libRSserialize
+LOCAL_MODULE_TAGS := optional
+
+include $(BUILD_HOST_STATIC_LIBRARY)
 
 # include the java examples
 include $(addprefix $(LOCAL_PATH)/,$(addsuffix /Android.mk,\

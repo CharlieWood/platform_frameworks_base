@@ -19,14 +19,13 @@ package com.android.server.am;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
-import android.os.SystemClock;
+import android.graphics.Bitmap;
 
 import java.io.PrintWriter;
 
 class TaskRecord {
     final int taskId;       // Unique identifier for this task.
     final String affinity;  // The affinity name for this task, or null.
-    final boolean clearOnBackground; // As per the original activity.
     Intent intent;          // The original intent that started the task.
     Intent affinityIntent;  // Intent of affinity-moved activity that started this task.
     ComponentName origActivity; // The non-alias activity component of the intent.
@@ -35,14 +34,14 @@ class TaskRecord {
     long lastActiveTime;    // Last time this task was active, including sleep.
     boolean rootWasReset;   // True if the intent at the root of the task had
                             // the FLAG_ACTIVITY_RESET_TASK_IF_NEEDED flag.
+    Bitmap lastThumbnail;   // Last thumbnail captured for this task.
+    CharSequence lastDescription; // Last description captured for this task.
 
     String stringName;      // caching of toString() result.
     
-    TaskRecord(int _taskId, ActivityInfo info, Intent _intent,
-            boolean _clearOnBackground) {
+    TaskRecord(int _taskId, ActivityInfo info, Intent _intent) {
         taskId = _taskId;
         affinity = info.taskAffinity;
-        clearOnBackground = _clearOnBackground;
         setIntent(_intent, info);
     }
 
@@ -86,9 +85,8 @@ class TaskRecord {
     }
     
     void dump(PrintWriter pw, String prefix) {
-        if (clearOnBackground || numActivities != 0 || rootWasReset) {
-            pw.print(prefix); pw.print("clearOnBackground="); pw.print(clearOnBackground);
-                    pw.print(" numActivities="); pw.print(numActivities);
+        if (numActivities != 0 || rootWasReset) {
+            pw.print(prefix); pw.print("numActivities="); pw.print(numActivities);
                     pw.print(" rootWasReset="); pw.println(rootWasReset);
         }
         if (affinity != null) {

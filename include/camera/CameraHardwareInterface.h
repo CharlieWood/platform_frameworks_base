@@ -18,14 +18,15 @@
 #define ANDROID_HARDWARE_CAMERA_HARDWARE_INTERFACE_H
 
 #include <binder/IMemory.h>
+#include <ui/egl/android_natives.h>
 #include <utils/RefBase.h>
 #include <surfaceflinger/ISurface.h>
+#include <ui/android_native_buffer.h>
+#include <ui/GraphicBuffer.h>
 #include <camera/Camera.h>
 #include <camera/CameraParameters.h>
 
 namespace android {
-
-class Overlay;
 
 /**
  *  The size of image for display.
@@ -86,8 +87,8 @@ class CameraHardwareInterface : public virtual RefBase {
 public:
     virtual ~CameraHardwareInterface() { }
 
-    /** Return the IMemoryHeap for the preview image heap */
-    virtual sp<IMemoryHeap>         getPreviewHeap() const = 0;
+    /** Set the ANativeWindow to which preview frames are sent */
+    virtual status_t setPreviewWindow(const sp<ANativeWindow>& buf) = 0;
 
     /** Return the IMemoryHeap for the raw image heap */
     virtual sp<IMemoryHeap>         getRawHeap() const = 0;
@@ -111,6 +112,13 @@ public:
 
     /**
      * Disable a message, or a set of messages.
+     *
+     * Once received a call to disableMsgType(CAMERA_MSG_VIDEO_FRAME), camera hal
+     * should not rely on its client to call releaseRecordingFrame() to release
+     * video recording frames sent out by the cameral hal before and after the
+     * disableMsgType(CAMERA_MSG_VIDEO_FRAME) call. Camera hal clients must not
+     * modify/access any video recording frame after calling
+     * disableMsgType(CAMERA_MSG_VIDEO_FRAME).
      */
     virtual void        disableMsgType(int32_t msgType) = 0;
 
@@ -127,12 +135,6 @@ public:
     virtual status_t    startPreview() = 0;
 
     /**
-     * Only used if overlays are used for camera preview.
-     */
-    virtual bool         useOverlay() {return false;}
-    virtual status_t     setOverlay(const sp<Overlay> &overlay) {return BAD_VALUE;}
-
-    /**
      * Stop a previously started preview.
      */
     virtual void        stopPreview() = 0;
@@ -143,9 +145,89 @@ public:
     virtual bool        previewEnabled() = 0;
 
     /**
+     * Retrieve the total number of available buffers from camera hal for passing
+     * video frame data in a recording session. Must be called again if a new
+     * recording session is started.
+     *
+     * This method should be called after startRecording(), since
+     * the some camera hal may choose to allocate the video buffers only after
+     * recording is started.
+     *
+     * Some camera hal may not implement this method, and 0 can be returned to
+     * indicate that this feature is not available.
+     *
+     * @return the number of video buffers that camera hal makes available.
+     *      Zero (0) is returned to indicate that camera hal does not support
+     *      this feature.
+     */
+    virtual int32_t     getNumberOfVideoBuffers() const { return 0; }
+
+    /**
+     * Retrieve the video buffer corresponding to the given index in a
+     * recording session. Must be called again if a new recording session
+     * is started.
+     *
+     * It allows a client to retrieve all video buffers that camera hal makes
+     * available to passing video frame data by calling this method with all
+     * valid index values. The valid index value ranges from 0 to n, where
+     * n = getNumberOfVideoBuffers() - 1. With an index outside of the valid
+     * range, 0 must be returned. This method should be called after
+     * startRecording().
+     *
+     * The video buffers should NOT be modified/released by camera hal
+     * until stopRecording() is called and all outstanding video buffers
+     * previously sent out via CAMERA_MSG_VIDEO_FRAME have been released
+     * via releaseVideoBuffer().
+     *
+     * @param index an index to retrieve the corresponding video buffer.
+     *
+     * @return the video buffer corresponding to the given index.
+     */
+    virtual sp<IMemory> getVideoBuffer(int32_t index) const { return 0; }
+
+    /**
+     * Request the camera hal to store meta data or real YUV data in
+     * the video buffers send out via CAMERA_MSG_VIDEO_FRRAME for a
+     * recording session. If it is not called, the default camera
+     * hal behavior is to store real YUV data in the video buffers.
+     *
+     * This method should be called before startRecording() in order
+     * to be effective.
+     *
+     * If meta data is stored in the video buffers, it is up to the
+     * receiver of the video buffers to interpret the contents and
+     * to find the actual frame data with the help of the meta data
+     * in the buffer. How this is done is outside of the scope of
+     * this method.
+     *
+     * Some camera hal may not support storing meta data in the video
+     * buffers, but all camera hal should support storing real YUV data
+     * in the video buffers. If the camera hal does not support storing
+     * the meta data in the video buffers when it is requested to do
+     * do, INVALID_OPERATION must be returned. It is very useful for
+     * the camera hal to pass meta data rather than the actual frame
+     * data directly to the video encoder, since the amount of the
+     * uncompressed frame data can be very large if video size is large.
+     *
+     * @param enable if true to instruct the camera hal to store
+     *      meta data in the video buffers; false to instruct
+     *      the camera hal to store real YUV data in the video
+     *      buffers.
+     *
+     * @return OK on success.
+     */
+    virtual status_t    storeMetaDataInBuffers(bool enable) {
+                            return enable? INVALID_OPERATION: OK;
+                        }
+
+    /**
      * Start record mode. When a record image is available a CAMERA_MSG_VIDEO_FRAME
      * message is sent with the corresponding frame. Every record frame must be released
-     * by calling releaseRecordingFrame().
+     * by a cameral hal client via releaseRecordingFrame() before the client calls
+     * disableMsgType(CAMERA_MSG_VIDEO_FRAME). After the client calls
+     * disableMsgType(CAMERA_MSG_VIDEO_FRAME), it is camera hal's responsibility
+     * to manage the life-cycle of the video recording frames, and the client must
+     * not modify/access any video recording frames.
      */
     virtual status_t    startRecording() = 0;
 
@@ -161,6 +243,13 @@ public:
 
     /**
      * Release a record frame previously returned by CAMERA_MSG_VIDEO_FRAME.
+     *
+     * It is camera hal client's responsibility to release video recording
+     * frames sent out by the camera hal before the camera hal receives
+     * a call to disableMsgType(CAMERA_MSG_VIDEO_FRAME). After it receives
+     * the call to disableMsgType(CAMERA_MSG_VIDEO_FRAME), it is camera hal's
+     * responsibility of managing the life-cycle of the video recording
+     * frames.
      */
     virtual void        releaseRecordingFrame(const sp<IMemory>& mem) = 0;
 

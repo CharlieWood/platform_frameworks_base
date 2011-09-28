@@ -21,14 +21,15 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.os.Message;
-import android.os.PowerManager;
+import android.bluetooth.BluetoothAdapter;
 import android.server.BluetoothA2dpService;
 import android.server.BluetoothService;
 import android.util.Log;
-import android.util.Pair;
 
 import com.android.internal.util.HierarchicalState;
 import com.android.internal.util.HierarchicalStateMachine;
+
+import java.util.Set;
 
 /**
  * This class is the Profile connection state machine associated with a remote
@@ -60,56 +61,47 @@ public final class BluetoothDeviceProfileState extends HierarchicalStateMachine 
     private static final String TAG = "BluetoothDeviceProfileState";
     private static final boolean DBG = false;
 
+    // TODO(): Restructure the state machine to make it scalable with regard to profiles.
     public static final int CONNECT_HFP_OUTGOING = 1;
     public static final int CONNECT_HFP_INCOMING = 2;
     public static final int CONNECT_A2DP_OUTGOING = 3;
     public static final int CONNECT_A2DP_INCOMING = 4;
+    public static final int CONNECT_HID_OUTGOING = 5;
+    public static final int CONNECT_HID_INCOMING = 6;
 
-    public static final int DISCONNECT_HFP_OUTGOING = 5;
-    private static final int DISCONNECT_HFP_INCOMING = 6;
-    public static final int DISCONNECT_A2DP_OUTGOING = 7;
-    public static final int DISCONNECT_A2DP_INCOMING = 8;
-    public static final int DISCONNECT_PBAP_OUTGOING = 9;
+    public static final int DISCONNECT_HFP_OUTGOING = 50;
+    private static final int DISCONNECT_HFP_INCOMING = 51;
+    public static final int DISCONNECT_A2DP_OUTGOING = 52;
+    public static final int DISCONNECT_A2DP_INCOMING = 53;
+    public static final int DISCONNECT_HID_OUTGOING = 54;
+    public static final int DISCONNECT_HID_INCOMING = 55;
+    public static final int DISCONNECT_PBAP_OUTGOING = 56;
 
     public static final int UNPAIR = 100;
     public static final int AUTO_CONNECT_PROFILES = 101;
     public static final int TRANSITION_TO_STABLE = 102;
     public static final int CONNECT_OTHER_PROFILES = 103;
-    private static final int CONNECTION_ACCESS_REQUEST_REPLY = 104;
-    private static final int CONNECTION_ACCESS_REQUEST_EXPIRY = 105;
 
-    private static final int AUTO_CONNECT_DELAY = 6000; // 6 secs
     private static final int CONNECT_OTHER_PROFILES_DELAY = 4000; // 4 secs
-    private static final int CONNECTION_ACCESS_REQUEST_EXPIRY_TIMEOUT = 7000; // 7 secs
-    private static final int CONNECTION_ACCESS_UNDEFINED = -1;
-    private static final long INIT_INCOMING_REJECT_TIMER = 1000; // 1 sec
-    private static final long MAX_INCOMING_REJECT_TIMER = 3600 * 1000 * 4; // 4 hours
-
-    private static final String PREFS_NAME = "ConnectionAccess";
 
     private BondedDevice mBondedDevice = new BondedDevice();
     private OutgoingHandsfree mOutgoingHandsfree = new OutgoingHandsfree();
     private IncomingHandsfree mIncomingHandsfree = new IncomingHandsfree();
     private IncomingA2dp mIncomingA2dp = new IncomingA2dp();
     private OutgoingA2dp mOutgoingA2dp = new OutgoingA2dp();
+    private OutgoingHid mOutgoingHid = new OutgoingHid();
+    private IncomingHid mIncomingHid = new IncomingHid();
 
     private Context mContext;
     private BluetoothService mService;
     private BluetoothA2dpService mA2dpService;
     private BluetoothHeadset  mHeadsetService;
     private BluetoothPbap     mPbapService;
-    private boolean mHeadsetServiceConnected;
     private boolean mPbapServiceConnected;
-    private static final String BLUETOOTH_ADMIN_PERM = android.Manifest.permission.BLUETOOTH_ADMIN;
 
     private BluetoothDevice mDevice;
-    private int mHeadsetState;
-    private int mA2dpState;
-    private long mIncomingRejectTimer;
-    private boolean mConnectionAccessReplyReceived = false;
-    private Pair<Integer, String> mIncomingConnections;
-    private PowerManager.WakeLock mWakeLock;
-    private PowerManager mPowerManager;
+    private int mHeadsetState = BluetoothProfile.STATE_DISCONNECTED;
+    private int mA2dpState = BluetoothProfile.STATE_DISCONNECTED;
 
     private BroadcastReceiver mBroadcastReceiver = new BroadcastReceiver() {
         @Override
@@ -118,53 +110,48 @@ public final class BluetoothDeviceProfileState extends HierarchicalStateMachine 
             BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
             if (!device.equals(mDevice)) return;
 
-            if (action.equals(BluetoothHeadset.ACTION_STATE_CHANGED)) {
-                int newState = intent.getIntExtra(BluetoothHeadset.EXTRA_STATE, 0);
-                int oldState = intent.getIntExtra(BluetoothHeadset.EXTRA_PREVIOUS_STATE, 0);
-                int initiator = intent.getIntExtra(
-                    BluetoothHeadset.EXTRA_DISCONNECT_INITIATOR,
-                    BluetoothHeadset.LOCAL_DISCONNECT);
-                // We trust this device now
-                if (newState == BluetoothHeadset.STATE_CONNECTED) {
-                    setTrust(BluetoothDevice.CONNECTION_ACCESS_YES);
-                }
-                mHeadsetState = newState;
-                if (newState == BluetoothHeadset.STATE_DISCONNECTED &&
-                    initiator == BluetoothHeadset.REMOTE_DISCONNECT) {
-                    sendMessage(DISCONNECT_HFP_INCOMING);
-                }
-                if (newState == BluetoothHeadset.STATE_CONNECTED ||
-                    newState == BluetoothHeadset.STATE_DISCONNECTED) {
-                    sendMessage(TRANSITION_TO_STABLE);
-                }
-            } else if (action.equals(BluetoothA2dp.ACTION_SINK_STATE_CHANGED)) {
-                int newState = intent.getIntExtra(BluetoothA2dp.EXTRA_SINK_STATE, 0);
-                int oldState = intent.getIntExtra(BluetoothA2dp.EXTRA_PREVIOUS_SINK_STATE, 0);
+            if (action.equals(BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED)) {
+                int newState = intent.getIntExtra(BluetoothProfile.EXTRA_STATE, 0);
+                int oldState = intent.getIntExtra(BluetoothProfile.EXTRA_PREVIOUS_STATE, 0);
                 mA2dpState = newState;
-                // We trust this device now
-                if (newState == BluetoothA2dp.STATE_CONNECTED) {
-                    setTrust(BluetoothDevice.CONNECTION_ACCESS_YES);
-                }
-                if ((oldState == BluetoothA2dp.STATE_CONNECTED ||
-                           oldState == BluetoothA2dp.STATE_PLAYING) &&
-                           newState == BluetoothA2dp.STATE_DISCONNECTED) {
+                if (oldState == BluetoothA2dp.STATE_CONNECTED &&
+                    newState == BluetoothA2dp.STATE_DISCONNECTED) {
                     sendMessage(DISCONNECT_A2DP_INCOMING);
                 }
-                if (newState == BluetoothA2dp.STATE_CONNECTED ||
-                    newState == BluetoothA2dp.STATE_DISCONNECTED) {
+                if (newState == BluetoothProfile.STATE_CONNECTED ||
+                    newState == BluetoothProfile.STATE_DISCONNECTED) {
+                    sendMessage(TRANSITION_TO_STABLE);
+                }
+            } else if (action.equals(BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED)) {
+                int newState = intent.getIntExtra(BluetoothProfile.EXTRA_STATE, 0);
+                int oldState = intent.getIntExtra(BluetoothProfile.EXTRA_PREVIOUS_STATE, 0);
+
+                mHeadsetState = newState;
+                if (oldState == BluetoothHeadset.STATE_CONNECTED &&
+                    newState == BluetoothHeadset.STATE_DISCONNECTED) {
+                    sendMessage(DISCONNECT_HFP_INCOMING);
+                }
+                if (newState == BluetoothProfile.STATE_CONNECTED ||
+                    newState == BluetoothProfile.STATE_DISCONNECTED) {
+                    sendMessage(TRANSITION_TO_STABLE);
+                }
+            } else if (action.equals(BluetoothInputDevice.ACTION_CONNECTION_STATE_CHANGED)) {
+                int newState = intent.getIntExtra(BluetoothProfile.EXTRA_STATE, 0);
+                int oldState =
+                    intent.getIntExtra(BluetoothProfile.EXTRA_PREVIOUS_STATE, 0);
+
+                if (oldState == BluetoothProfile.STATE_CONNECTED &&
+                    newState == BluetoothProfile.STATE_DISCONNECTED) {
+                    sendMessage(DISCONNECT_HID_INCOMING);
+                }
+                if (newState == BluetoothProfile.STATE_CONNECTED ||
+                    newState == BluetoothProfile.STATE_DISCONNECTED) {
                     sendMessage(TRANSITION_TO_STABLE);
                 }
             } else if (action.equals(BluetoothDevice.ACTION_ACL_DISCONNECTED)) {
                 // This is technically not needed, but we can get stuck sometimes.
                 // For example, if incoming A2DP fails, we are not informed by Bluez
                 sendMessage(TRANSITION_TO_STABLE);
-            } else if (action.equals(BluetoothDevice.ACTION_CONNECTION_ACCESS_REPLY)) {
-                mWakeLock.release();
-                int val = intent.getIntExtra(BluetoothDevice.EXTRA_CONNECTION_ACCESS_RESULT,
-                                             BluetoothDevice.CONNECTION_ACCESS_NO);
-                Message msg = obtainMessage(CONNECTION_ACCESS_REQUEST_REPLY);
-                msg.arg1 = val;
-                sendMessage(msg);
             }
       }
     };
@@ -197,45 +184,40 @@ public final class BluetoothDeviceProfileState extends HierarchicalStateMachine 
         addState(mIncomingHandsfree);
         addState(mIncomingA2dp);
         addState(mOutgoingA2dp);
+        addState(mOutgoingHid);
+        addState(mIncomingHid);
         setInitialState(mBondedDevice);
 
         IntentFilter filter = new IntentFilter();
         // Fine-grained state broadcasts
-        filter.addAction(BluetoothA2dp.ACTION_SINK_STATE_CHANGED);
-        filter.addAction(BluetoothHeadset.ACTION_STATE_CHANGED);
         filter.addAction(BluetoothDevice.ACTION_ACL_CONNECTED);
+        filter.addAction(BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED);
+        filter.addAction(BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED);
+        filter.addAction(BluetoothInputDevice.ACTION_CONNECTION_STATE_CHANGED);
         filter.addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED);
-        filter.addAction(BluetoothDevice.ACTION_CONNECTION_ACCESS_REPLY);
 
         mContext.registerReceiver(mBroadcastReceiver, filter);
 
-        HeadsetServiceListener l = new HeadsetServiceListener();
+        BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+        adapter.getProfileProxy(mContext, mBluetoothProfileServiceListener,
+                                BluetoothProfile.HEADSET);
+        // TODO(): Convert PBAP to the new Profile APIs.
         PbapServiceListener p = new PbapServiceListener();
-
-        mIncomingConnections = mService.getIncomingState(address);
-        mIncomingRejectTimer = readTimerValue();
-        mPowerManager = (PowerManager)mContext.getSystemService(Context.POWER_SERVICE);
-        mWakeLock = mPowerManager.newWakeLock(PowerManager.SCREEN_DIM_WAKE_LOCK |
-                                              PowerManager.ACQUIRE_CAUSES_WAKEUP |
-                                              PowerManager.ON_AFTER_RELEASE, TAG);
-        mWakeLock.setReferenceCounted(false);
     }
 
-    private class HeadsetServiceListener implements BluetoothHeadset.ServiceListener {
-        public HeadsetServiceListener() {
-            mHeadsetService = new BluetoothHeadset(mContext, this);
-        }
-        public void onServiceConnected() {
+    private BluetoothProfile.ServiceListener mBluetoothProfileServiceListener =
+        new BluetoothProfile.ServiceListener() {
+        public void onServiceConnected(int profile, BluetoothProfile proxy) {
             synchronized(BluetoothDeviceProfileState.this) {
-                mHeadsetServiceConnected = true;
+                mHeadsetService = (BluetoothHeadset) proxy;
             }
         }
-        public void onServiceDisconnected() {
+        public void onServiceDisconnected(int profile) {
             synchronized(BluetoothDeviceProfileState.this) {
-                mHeadsetServiceConnected = false;
+                mHeadsetService = null;
             }
         }
-    }
+    };
 
     private class PbapServiceListener implements BluetoothPbap.ServiceListener {
         public PbapServiceListener() {
@@ -283,6 +265,14 @@ public final class BluetoothDeviceProfileState extends HierarchicalStateMachine 
                 case DISCONNECT_A2DP_INCOMING:
                     transitionTo(mIncomingA2dp);
                     break;
+                case CONNECT_HID_OUTGOING:
+                case DISCONNECT_HID_OUTGOING:
+                    transitionTo(mOutgoingHid);
+                    break;
+                case CONNECT_HID_INCOMING:
+                case DISCONNECT_HID_INCOMING:
+                    transitionTo(mIncomingHid);
+                    break;
                 case DISCONNECT_PBAP_OUTGOING:
                     processCommand(DISCONNECT_PBAP_OUTGOING);
                     break;
@@ -295,6 +285,11 @@ public final class BluetoothDeviceProfileState extends HierarchicalStateMachine 
                         sendMessage(DISCONNECT_A2DP_OUTGOING);
                         deferMessage(message);
                         break;
+                    } else if (mService.getInputDeviceConnectionState(mDevice) !=
+                            BluetoothInputDevice.STATE_DISCONNECTED) {
+                        sendMessage(DISCONNECT_HID_OUTGOING);
+                        deferMessage(message);
+                        break;
                     }
                     processCommand(UNPAIR);
                     break;
@@ -302,21 +297,28 @@ public final class BluetoothDeviceProfileState extends HierarchicalStateMachine 
                     if (isPhoneDocked(mDevice)) {
                         // Don't auto connect to docks.
                         break;
-                    } else if (!mHeadsetServiceConnected) {
-                        deferMessage(message);
                     } else {
-                        if (mHeadsetService.getPriority(mDevice) ==
+                        if (mHeadsetService != null &&
+                              mHeadsetService.getPriority(mDevice) ==
                               BluetoothHeadset.PRIORITY_AUTO_CONNECT &&
-                              !mHeadsetService.isConnected(mDevice)) {
-                            Log.i(TAG, "Headset:Auto Connect Profiles");
-                            mHeadsetService.connectHeadset(mDevice);
+                              mHeadsetService.getDevicesMatchingConnectionStates(
+                                  new int[] {BluetoothProfile.STATE_CONNECTED,
+                                             BluetoothProfile.STATE_CONNECTING,
+                                             BluetoothProfile.STATE_DISCONNECTING}).size() == 0) {
+                            mHeadsetService.connect(mDevice);
                         }
                         if (mA2dpService != null &&
-                              mA2dpService.getSinkPriority(mDevice) ==
+                              mA2dpService.getPriority(mDevice) ==
                               BluetoothA2dp.PRIORITY_AUTO_CONNECT &&
-                              mA2dpService.getConnectedSinks().length == 0) {
-                            Log.i(TAG, "A2dp:Auto Connect Profiles");
-                            mA2dpService.connectSink(mDevice);
+                              mA2dpService.getDevicesMatchingConnectionStates(
+                                  new int[] {BluetoothA2dp.STATE_CONNECTED,
+                                             BluetoothProfile.STATE_CONNECTING,
+                                             BluetoothProfile.STATE_DISCONNECTING}).size() == 0) {
+                            mA2dpService.connect(mDevice);
+                        }
+                        if (mService.getInputDevicePriority(mDevice) ==
+                              BluetoothInputDevice.PRIORITY_AUTO_CONNECT) {
+                            mService.connectInputDevice(mDevice);
                         }
                     }
                     break;
@@ -326,17 +328,17 @@ public final class BluetoothDeviceProfileState extends HierarchicalStateMachine 
                     }
                     if (message.arg1 == CONNECT_A2DP_OUTGOING) {
                         if (mA2dpService != null &&
-                            mA2dpService.getConnectedSinks().length == 0) {
+                            mA2dpService.getConnectedDevices().size() == 0) {
                             Log.i(TAG, "A2dp:Connect Other Profiles");
-                            mA2dpService.connectSink(mDevice);
+                            mA2dpService.connect(mDevice);
                         }
                     } else if (message.arg1 == CONNECT_HFP_OUTGOING) {
-                        if (!mHeadsetServiceConnected) {
+                        if (mHeadsetService == null) {
                             deferMessage(message);
                         } else {
-                            if (!mHeadsetService.isConnected(mDevice)) {
+                            if (mHeadsetService.getConnectedDevices().size() == 0) {
                                 Log.i(TAG, "Headset:Connect Other Profiles");
-                                mHeadsetService.connectHeadset(mDevice);
+                                mHeadsetService.connect(mDevice);
                             }
                         }
                     }
@@ -431,6 +433,23 @@ public final class BluetoothDeviceProfileState extends HierarchicalStateMachine 
                        deferMessage(deferMsg);
                     }
                     break;
+                case CONNECT_HID_OUTGOING:
+                case DISCONNECT_HID_OUTGOING:
+                    deferMessage(message);
+                    break;
+                case CONNECT_HID_INCOMING:
+                    transitionTo(mIncomingHid);
+                    if (mStatus) {
+                        deferMsg.what = mCommand;
+                        deferMessage(deferMsg);
+                    }
+                    break;
+                case DISCONNECT_HID_INCOMING:
+                    if (mStatus) {
+                        deferMsg.what = mCommand;
+                        deferMessage(deferMsg);
+                    }
+                    break; // ignore
                 case DISCONNECT_PBAP_OUTGOING:
                 case UNPAIR:
                 case AUTO_CONNECT_PROFILES:
@@ -478,24 +497,6 @@ public final class BluetoothDeviceProfileState extends HierarchicalStateMachine 
                     // Ignore
                     Log.e(TAG, "Error: Incoming connection with a pending incoming connection");
                     break;
-                case CONNECTION_ACCESS_REQUEST_REPLY:
-                    int val = message.arg1;
-                    mConnectionAccessReplyReceived = true;
-                    boolean value = false;
-                    if (val == BluetoothDevice.CONNECTION_ACCESS_YES) {
-                        value = true;
-                    }
-                    setTrust(val);
-
-                    handleIncomingConnection(CONNECT_HFP_INCOMING, value);
-                    break;
-                case CONNECTION_ACCESS_REQUEST_EXPIRY:
-                    if (!mConnectionAccessReplyReceived) {
-                        handleIncomingConnection(CONNECT_HFP_INCOMING, false);
-                        sendConnectionAccessRemovalIntent();
-                        sendMessage(TRANSITION_TO_STABLE);
-                    }
-                    break;
                 case CONNECT_A2DP_INCOMING:
                     // Serialize the commands.
                     deferMessage(message);
@@ -522,6 +523,13 @@ public final class BluetoothDeviceProfileState extends HierarchicalStateMachine 
                     // If this causes incoming HFP to fail, it is more of a headset problem
                     // since both connections are incoming ones.
                     break;
+                case CONNECT_HID_OUTGOING:
+                case DISCONNECT_HID_OUTGOING:
+                    deferMessage(message);
+                    break;
+                case CONNECT_HID_INCOMING:
+                case DISCONNECT_HID_INCOMING:
+                     break; // ignore
                 case DISCONNECT_PBAP_OUTGOING:
                 case UNPAIR:
                 case AUTO_CONNECT_PROFILES:
@@ -615,6 +623,23 @@ public final class BluetoothDeviceProfileState extends HierarchicalStateMachine 
                 case DISCONNECT_A2DP_INCOMING:
                     // Ignore, will be handled by Bluez
                     break;
+                case CONNECT_HID_OUTGOING:
+                case DISCONNECT_HID_OUTGOING:
+                    deferMessage(message);
+                    break;
+                case CONNECT_HID_INCOMING:
+                    transitionTo(mIncomingHid);
+                    if (mStatus) {
+                        deferMsg.what = mCommand;
+                        deferMessage(deferMsg);
+                    }
+                    break;
+                case DISCONNECT_HID_INCOMING:
+                    if (mStatus) {
+                        deferMsg.what = mCommand;
+                        deferMessage(deferMsg);
+                    }
+                    break; // ignore
                 case DISCONNECT_PBAP_OUTGOING:
                 case UNPAIR:
                 case AUTO_CONNECT_PROFILES:
@@ -666,25 +691,6 @@ public final class BluetoothDeviceProfileState extends HierarchicalStateMachine 
                 case CONNECT_A2DP_INCOMING:
                     // ignore
                     break;
-                case CONNECTION_ACCESS_REQUEST_REPLY:
-                    int val = message.arg1;
-                    mConnectionAccessReplyReceived = true;
-                    boolean value = false;
-                    if (val == BluetoothDevice.CONNECTION_ACCESS_YES) {
-                        value = true;
-                    }
-                    setTrust(val);
-                    handleIncomingConnection(CONNECT_A2DP_INCOMING, value);
-                    break;
-                case CONNECTION_ACCESS_REQUEST_EXPIRY:
-                    // The check protects the race condition between REQUEST_REPLY
-                    // and the timer expiry.
-                    if (!mConnectionAccessReplyReceived) {
-                        handleIncomingConnection(CONNECT_A2DP_INCOMING, false);
-                        sendConnectionAccessRemovalIntent();
-                        sendMessage(TRANSITION_TO_STABLE);
-                    }
-                    break;
                 case CONNECT_A2DP_OUTGOING:
                     // Defer message and retry
                     deferMessage(message);
@@ -705,6 +711,13 @@ public final class BluetoothDeviceProfileState extends HierarchicalStateMachine 
                 case DISCONNECT_A2DP_INCOMING:
                     // Ignore, will be handled by Bluez
                     break;
+                case CONNECT_HID_OUTGOING:
+                case DISCONNECT_HID_OUTGOING:
+                    deferMessage(message);
+                    break;
+                case CONNECT_HID_INCOMING:
+                case DISCONNECT_HID_INCOMING:
+                     break; // ignore
                 case DISCONNECT_PBAP_OUTGOING:
                 case UNPAIR:
                 case AUTO_CONNECT_PROFILES:
@@ -722,11 +735,150 @@ public final class BluetoothDeviceProfileState extends HierarchicalStateMachine 
     }
 
 
+    private class OutgoingHid extends HierarchicalState {
+        private boolean mStatus = false;
+        private int mCommand;
+
+        @Override
+        protected void enter() {
+            log("Entering OutgoingHid state with: " + getCurrentMessage().what);
+            mCommand = getCurrentMessage().what;
+            if (mCommand != CONNECT_HID_OUTGOING &&
+                mCommand != DISCONNECT_HID_OUTGOING) {
+                Log.e(TAG, "Error: OutgoingHid state with command:" + mCommand);
+            }
+            mStatus = processCommand(mCommand);
+            if (!mStatus) sendMessage(TRANSITION_TO_STABLE);
+        }
+
+        @Override
+        protected boolean processMessage(Message message) {
+            log("OutgoingHid State->Processing Message: " + message.what);
+            Message deferMsg = new Message();
+            switch(message.what) {
+                // defer all outgoing messages
+                case CONNECT_HFP_OUTGOING:
+                case CONNECT_A2DP_OUTGOING:
+                case CONNECT_HID_OUTGOING:
+                case DISCONNECT_HFP_OUTGOING:
+                case DISCONNECT_A2DP_OUTGOING:
+                case DISCONNECT_HID_OUTGOING:
+                    deferMessage(message);
+                    break;
+
+                case CONNECT_HFP_INCOMING:
+                    transitionTo(mIncomingHandsfree);
+                    break;
+                case CONNECT_A2DP_INCOMING:
+                    transitionTo(mIncomingA2dp);
+
+                    // Don't cancel HID outgoing as there is no guarantee it
+                    // will get canceled.
+                    // It might already be connected but we might not have got the
+                    // INPUT_DEVICE_STATE_CHANGE. Hence, no point disconnecting here.
+                    // The worst case, the connection will fail, retry.
+                    if (mStatus) {
+                        deferMsg.what = mCommand;
+                        deferMessage(deferMsg);
+                    }
+                    break;
+                case CONNECT_HID_INCOMING:
+                  // Bluez will take care of the conflicts
+                    transitionTo(mIncomingHid);
+                    break;
+
+                case DISCONNECT_HFP_INCOMING:
+                case DISCONNECT_A2DP_INCOMING:
+                    // At this point, we are already disconnected
+                    // with HFP. Sometimes HID connection can
+                    // fail due to the disconnection of HFP. So add a retry
+                    // for the HID.
+                    if (mStatus) {
+                        deferMsg.what = mCommand;
+                        deferMessage(deferMsg);
+                    }
+                    break;
+                case DISCONNECT_HID_INCOMING:
+                    // Ignore, will be handled by Bluez
+                    break;
+                case DISCONNECT_PBAP_OUTGOING:
+                case UNPAIR:
+                case AUTO_CONNECT_PROFILES:
+                    deferMessage(message);
+                    break;
+                case TRANSITION_TO_STABLE:
+                    transitionTo(mBondedDevice);
+                    break;
+                default:
+                    return NOT_HANDLED;
+            }
+            return HANDLED;
+        }
+    }
+
+  private class IncomingHid extends HierarchicalState {
+      private boolean mStatus = false;
+      private int mCommand;
+
+      @Override
+      protected void enter() {
+          log("Entering IncomingHid state with: " + getCurrentMessage().what);
+          mCommand = getCurrentMessage().what;
+          if (mCommand != CONNECT_HID_INCOMING &&
+              mCommand != DISCONNECT_HID_INCOMING) {
+              Log.e(TAG, "Error: IncomingHid state with command:" + mCommand);
+          }
+          mStatus = processCommand(mCommand);
+          if (!mStatus) sendMessage(TRANSITION_TO_STABLE);
+      }
+
+      @Override
+      protected boolean processMessage(Message message) {
+          log("IncomingHid State->Processing Message: " + message.what);
+          Message deferMsg = new Message();
+          switch(message.what) {
+              case CONNECT_HFP_OUTGOING:
+              case CONNECT_HFP_INCOMING:
+              case DISCONNECT_HFP_OUTGOING:
+              case CONNECT_A2DP_INCOMING:
+              case CONNECT_A2DP_OUTGOING:
+              case DISCONNECT_A2DP_OUTGOING:
+              case CONNECT_HID_OUTGOING:
+              case CONNECT_HID_INCOMING:
+              case DISCONNECT_HID_OUTGOING:
+                  deferMessage(message);
+                  break;
+              case DISCONNECT_HFP_INCOMING:
+                  // Shouldn't happen but if does, we can handle it.
+                  // Depends if the headset can handle it.
+                  // Incoming HID will be handled by Bluez, Disconnect HFP
+                  // the socket would have already been closed.
+                  // ignore
+                  break;
+              case DISCONNECT_HID_INCOMING:
+              case DISCONNECT_A2DP_INCOMING:
+                  // Ignore, will be handled by Bluez
+                  break;
+              case DISCONNECT_PBAP_OUTGOING:
+              case UNPAIR:
+              case AUTO_CONNECT_PROFILES:
+                  deferMessage(message);
+                  break;
+              case TRANSITION_TO_STABLE:
+                  transitionTo(mBondedDevice);
+                  break;
+              default:
+                  return NOT_HANDLED;
+          }
+          return HANDLED;
+      }
+  }
+
 
     synchronized void cancelCommand(int command) {
         if (command == CONNECT_HFP_OUTGOING ) {
             // Cancel the outgoing thread.
-            if (mHeadsetServiceConnected) {
+            if (mHeadsetService != null) {
                 mHeadsetService.cancelConnectThread();
             }
             // HeadsetService is down. Phone process most likely crashed.
@@ -740,162 +892,24 @@ public final class BluetoothDeviceProfileState extends HierarchicalStateMachine 
         deferMessage(msg);
     }
 
-    private void updateIncomingAllowedTimer() {
-        // Not doing a perfect exponential backoff because
-        // we want two different rates. For all practical
-        // purposes, this is good enough.
-        if (mIncomingRejectTimer == 0) mIncomingRejectTimer = INIT_INCOMING_REJECT_TIMER;
-
-        mIncomingRejectTimer *= 5;
-        if (mIncomingRejectTimer > MAX_INCOMING_REJECT_TIMER) {
-            mIncomingRejectTimer = MAX_INCOMING_REJECT_TIMER;
-        }
-        writeTimerValue(mIncomingRejectTimer);
-    }
-
-    private boolean handleIncomingConnection(int command, boolean accept) {
-        boolean ret = false;
-        Log.i(TAG, "handleIncomingConnection:" + command + ":" + accept);
-        switch (command) {
-            case CONNECT_HFP_INCOMING:
-                if (!accept) {
-                    ret = mHeadsetService.rejectIncomingConnect(mDevice);
-                    sendMessage(TRANSITION_TO_STABLE);
-                    updateIncomingAllowedTimer();
-                } else if (mHeadsetState == BluetoothHeadset.STATE_CONNECTING) {
-                    writeTimerValue(0);
-                    ret =  mHeadsetService.acceptIncomingConnect(mDevice);
-                } else if (mHeadsetState == BluetoothHeadset.STATE_DISCONNECTED) {
-                    writeTimerValue(0);
-                    handleConnectionOfOtherProfiles(command);
-                    ret = mHeadsetService.createIncomingConnect(mDevice);
-                }
-                break;
-            case CONNECT_A2DP_INCOMING:
-                if (!accept) {
-                    ret = mA2dpService.allowIncomingConnect(mDevice, false);
-                    sendMessage(TRANSITION_TO_STABLE);
-                    updateIncomingAllowedTimer();
-                } else {
-                    writeTimerValue(0);
-                    ret = mA2dpService.allowIncomingConnect(mDevice, true);
-                    handleConnectionOfOtherProfiles(command);
-                }
-                break;
-            default:
-                Log.e(TAG, "Waiting for incoming connection but state changed to:" + command);
-                break;
-       }
-       return ret;
-    }
-
-    private void sendConnectionAccessIntent() {
-        mConnectionAccessReplyReceived = false;
-
-        if (!mPowerManager.isScreenOn()) mWakeLock.acquire();
-
-        Intent intent = new Intent(BluetoothDevice.ACTION_CONNECTION_ACCESS_REQUEST);
-        intent.putExtra(BluetoothDevice.EXTRA_DEVICE, mDevice);
-        mContext.sendBroadcast(intent, BLUETOOTH_ADMIN_PERM);
-    }
-
-    private void sendConnectionAccessRemovalIntent() {
-        mWakeLock.release();
-        Intent intent = new Intent(BluetoothDevice.ACTION_CONNECTION_ACCESS_CANCEL);
-        intent.putExtra(BluetoothDevice.EXTRA_DEVICE, mDevice);
-        mContext.sendBroadcast(intent, BLUETOOTH_ADMIN_PERM);
-    }
-
-    private int getTrust() {
-        String address = mDevice.getAddress();
-        if (mIncomingConnections != null) return mIncomingConnections.first;
-        return CONNECTION_ACCESS_UNDEFINED;
-    }
-
-
-    private String getStringValue(long value) {
-        StringBuilder sbr = new StringBuilder();
-        sbr.append(Long.toString(System.currentTimeMillis()));
-        sbr.append("-");
-        sbr.append(Long.toString(value));
-        return sbr.toString();
-    }
-
-    private void setTrust(int value) {
-        String second;
-        if (mIncomingConnections == null) {
-            second = getStringValue(INIT_INCOMING_REJECT_TIMER);
-        } else {
-            second = mIncomingConnections.second;
-        }
-
-        mIncomingConnections = new Pair(value, second);
-        mService.writeIncomingConnectionState(mDevice.getAddress(), mIncomingConnections);
-    }
-
-    private void writeTimerValue(long value) {
-        Integer first;
-        if (mIncomingConnections == null) {
-            first = CONNECTION_ACCESS_UNDEFINED;
-        } else {
-            first = mIncomingConnections.first;
-        }
-        mIncomingConnections = new Pair(first, getStringValue(value));
-        mService.writeIncomingConnectionState(mDevice.getAddress(), mIncomingConnections);
-    }
-
-    private long readTimerValue() {
-        if (mIncomingConnections == null)
-            return 0;
-        String value = mIncomingConnections.second;
-        String[] splits = value.split("-");
-        if (splits != null && splits.length == 2) {
-            return Long.parseLong(splits[1]);
-        }
-        return 0;
-    }
-
-    private boolean readIncomingAllowedValue() {
-        if (readTimerValue() == 0) return true;
-        String value = mIncomingConnections.second;
-        String[] splits = value.split("-");
-        if (splits != null && splits.length == 2) {
-            long val1 = Long.parseLong(splits[0]);
-            long val2 = Long.parseLong(splits[1]);
-            if (val1 + val2 <= System.currentTimeMillis()) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     synchronized boolean processCommand(int command) {
-        Log.e(TAG, "Processing command:" + command);
-        Message msg;
+        Log.i(TAG, "Processing command:" + command);
         switch(command) {
             case  CONNECT_HFP_OUTGOING:
-                if (mHeadsetService != null) {
+                if (mHeadsetService == null) {
+                    deferProfileServiceMessage(command);
+                } else {
                     return mHeadsetService.connectHeadsetInternal(mDevice);
                 }
                 break;
             case CONNECT_HFP_INCOMING:
-                if (!mHeadsetServiceConnected) {
+                if (mHeadsetService == null) {
                     deferProfileServiceMessage(command);
-                } else {
-                    // Check if device is already trusted
-                    int access = getTrust();
-                    if (access == BluetoothDevice.CONNECTION_ACCESS_YES) {
-                        handleIncomingConnection(command, true);
-                    } else if (access == BluetoothDevice.CONNECTION_ACCESS_NO &&
-                               !readIncomingAllowedValue()) {
-                        handleIncomingConnection(command, false);
-                    } else {
-                        sendConnectionAccessIntent();
-                        msg = obtainMessage(CONNECTION_ACCESS_REQUEST_EXPIRY);
-                        sendMessageDelayed(msg,
-                                CONNECTION_ACCESS_REQUEST_EXPIRY_TIMEOUT);
-                    }
-                    return true;
+                } else if (mHeadsetState == BluetoothHeadset.STATE_CONNECTING) {
+                    return mHeadsetService.acceptIncomingConnect(mDevice);
+                } else if (mHeadsetState == BluetoothHeadset.STATE_DISCONNECTED) {
+                    handleConnectionOfOtherProfiles(command);
+                    return mHeadsetService.createIncomingConnect(mDevice);
                 }
                 break;
             case CONNECT_A2DP_OUTGOING:
@@ -904,22 +918,15 @@ public final class BluetoothDeviceProfileState extends HierarchicalStateMachine 
                 }
                 break;
             case CONNECT_A2DP_INCOMING:
-                // Check if device is already trusted
-                int access = getTrust();
-                if (access == BluetoothDevice.CONNECTION_ACCESS_YES) {
-                    handleIncomingConnection(command, true);
-                } else if (access == BluetoothDevice.CONNECTION_ACCESS_NO &&
-                           !readIncomingAllowedValue()) {
-                    handleIncomingConnection(command, false);
-                } else {
-                    sendConnectionAccessIntent();
-                    msg = obtainMessage(CONNECTION_ACCESS_REQUEST_EXPIRY);
-                    sendMessageDelayed(msg,
-                            CONNECTION_ACCESS_REQUEST_EXPIRY_TIMEOUT);
-                }
+                handleConnectionOfOtherProfiles(command);
+                // ignore, Bluez takes care
+                return true;
+            case CONNECT_HID_OUTGOING:
+                return mService.connectInputDeviceInternal(mDevice);
+            case CONNECT_HID_INCOMING:
                 return true;
             case DISCONNECT_HFP_OUTGOING:
-                if (!mHeadsetServiceConnected) {
+                if (mHeadsetService == null) {
                     deferProfileServiceMessage(command);
                 } else {
                     // Disconnect PBAP
@@ -942,13 +949,22 @@ public final class BluetoothDeviceProfileState extends HierarchicalStateMachine 
                 return true;
             case DISCONNECT_A2DP_OUTGOING:
                 if (mA2dpService != null) {
-                    if (mA2dpService.getSinkPriority(mDevice) ==
+                    if (mA2dpService.getPriority(mDevice) ==
                         BluetoothA2dp.PRIORITY_AUTO_CONNECT) {
-                        mA2dpService.setSinkPriority(mDevice, BluetoothHeadset.PRIORITY_ON);
+                        mA2dpService.setPriority(mDevice, BluetoothHeadset.PRIORITY_ON);
                     }
                     return mA2dpService.disconnectSinkInternal(mDevice);
                 }
                 break;
+            case DISCONNECT_HID_INCOMING:
+                // ignore
+                return true;
+            case DISCONNECT_HID_OUTGOING:
+                if (mService.getInputDevicePriority(mDevice) ==
+                    BluetoothInputDevice.PRIORITY_AUTO_CONNECT) {
+                    mService.setInputDevicePriority(mDevice, BluetoothInputDevice.PRIORITY_ON);
+                }
+                return mService.disconnectInputDeviceInternal(mDevice);
             case DISCONNECT_PBAP_OUTGOING:
                 if (!mPbapServiceConnected) {
                     deferProfileServiceMessage(command);
@@ -957,8 +973,6 @@ public final class BluetoothDeviceProfileState extends HierarchicalStateMachine 
                 }
                 break;
             case UNPAIR:
-                writeTimerValue(INIT_INCOMING_REJECT_TIMER);
-                setTrust(CONNECTION_ACCESS_UNDEFINED);
                 return mService.removeBondInternal(mDevice.getAddress());
             default:
                 Log.e(TAG, "Error: Unknown Command");
@@ -996,9 +1010,9 @@ public final class BluetoothDeviceProfileState extends HierarchicalStateMachine 
             case CONNECT_HFP_INCOMING:
                 // Connect A2DP if there is no incoming connection
                 // If the priority is OFF - don't auto connect.
-                if (mA2dpService.getSinkPriority(mDevice) == BluetoothA2dp.PRIORITY_ON ||
-                        mA2dpService.getSinkPriority(mDevice) ==
-                            BluetoothA2dp.PRIORITY_AUTO_CONNECT) {
+                if (mA2dpService.getPriority(mDevice) == BluetoothProfile.PRIORITY_ON ||
+                        mA2dpService.getPriority(mDevice) ==
+                            BluetoothProfile.PRIORITY_AUTO_CONNECT) {
                     Message msg = new Message();
                     msg.what = CONNECT_OTHER_PROFILES;
                     msg.arg1 = CONNECT_A2DP_OUTGOING;
@@ -1009,9 +1023,10 @@ public final class BluetoothDeviceProfileState extends HierarchicalStateMachine 
                 // This is again against spec. HFP incoming connections should be made
                 // before A2DP, so we should not hit this case. But many devices
                 // don't follow this.
-                if (mHeadsetService.getPriority(mDevice) == BluetoothHeadset.PRIORITY_ON
-                        || mHeadsetService.getPriority(mDevice) ==
-                            BluetoothHeadset.PRIORITY_AUTO_CONNECT) {
+                if (mHeadsetService != null &&
+                    (mHeadsetService.getPriority(mDevice) == BluetoothProfile.PRIORITY_ON ||
+                        mHeadsetService.getPriority(mDevice) ==
+                            BluetoothProfile.PRIORITY_AUTO_CONNECT)) {
                     Message msg = new Message();
                     msg.what = CONNECT_OTHER_PROFILES;
                     msg.arg1 = CONNECT_HFP_OUTGOING;

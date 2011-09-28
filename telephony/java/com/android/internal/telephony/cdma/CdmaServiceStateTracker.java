@@ -16,6 +16,19 @@
 
 package com.android.internal.telephony.cdma;
 
+import static com.android.internal.telephony.TelephonyProperties.PROPERTY_ICC_OPERATOR_NUMERIC;
+
+import com.android.internal.telephony.CommandException;
+import com.android.internal.telephony.CommandsInterface;
+import com.android.internal.telephony.DataConnectionTracker;
+import com.android.internal.telephony.EventLogTags;
+import com.android.internal.telephony.IccCard;
+import com.android.internal.telephony.MccTable;
+import com.android.internal.telephony.Phone;
+import com.android.internal.telephony.ServiceStateTracker;
+import com.android.internal.telephony.TelephonyIntents;
+import com.android.internal.telephony.TelephonyProperties;
+
 import android.app.AlarmManager;
 import android.content.ContentResolver;
 import android.content.Context;
@@ -38,18 +51,7 @@ import android.telephony.cdma.CdmaCellLocation;
 import android.text.TextUtils;
 import android.util.EventLog;
 import android.util.Log;
-import android.util.Config;
 import android.util.TimeUtils;
-
-import com.android.internal.telephony.CommandException;
-import com.android.internal.telephony.CommandsInterface;
-import com.android.internal.telephony.DataConnectionTracker;
-import com.android.internal.telephony.EventLogTags;
-import com.android.internal.telephony.IccCard;
-import com.android.internal.telephony.MccTable;
-import com.android.internal.telephony.ServiceStateTracker;
-import com.android.internal.telephony.TelephonyIntents;
-import com.android.internal.telephony.TelephonyProperties;
 
 import java.util.Arrays;
 import java.util.Calendar;
@@ -59,12 +61,19 @@ import java.util.TimeZone;
 /**
  * {@hide}
  */
-final class CdmaServiceStateTracker extends ServiceStateTracker {
+public class CdmaServiceStateTracker extends ServiceStateTracker {
     static final String LOG_TAG = "CDMA";
 
     CDMAPhone phone;
     CdmaCellLocation cellLoc;
     CdmaCellLocation newCellLoc;
+
+    // Min values used to by getOtasp()
+    private static final String UNACTIVATED_MIN2_VALUE = "000000";
+    private static final String UNACTIVATED_MIN_VALUE = "1111110111";
+
+    // Current Otasp value
+    int mCurrentOtaspMode = OTASP_UNINITIALIZED;
 
      /** if time between NITZ updates is less than mNitzUpdateSpacing the update may be ignored. */
     private static final int NITZ_UPDATE_SPACING_DEFAULT = 1000 * 60 * 10;
@@ -79,8 +88,8 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
     /**
      *  Values correspond to ServiceStateTracker.DATA_ACCESS_ definitions.
      */
-    private int networkType = 0;
-    private int newNetworkType = 0;
+    protected int networkType = 0;
+    protected int newNetworkType = 0;
 
     private boolean mCdmaRoaming = false;
     private int mRoamingIndicator;
@@ -90,23 +99,23 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
     /**
      * Initially assume no data connection.
      */
-    private int cdmaDataConnectionState = ServiceState.STATE_OUT_OF_SERVICE;
-    private int newCdmaDataConnectionState = ServiceState.STATE_OUT_OF_SERVICE;
-    private int mRegistrationState = -1;
-    private RegistrantList cdmaDataConnectionAttachedRegistrants = new RegistrantList();
-    private RegistrantList cdmaDataConnectionDetachedRegistrants = new RegistrantList();
-    private RegistrantList cdmaForSubscriptionInfoReadyRegistrants = new RegistrantList();
+    protected int cdmaDataConnectionState = ServiceState.STATE_OUT_OF_SERVICE;
+    protected int newCdmaDataConnectionState = ServiceState.STATE_OUT_OF_SERVICE;
+    protected int mRegistrationState = -1;
+    protected RegistrantList cdmaDataConnectionAttachedRegistrants = new RegistrantList();
+    protected RegistrantList cdmaDataConnectionDetachedRegistrants = new RegistrantList();
+    protected RegistrantList cdmaForSubscriptionInfoReadyRegistrants = new RegistrantList();
 
     /**
      * Sometimes we get the NITZ time before we know what country we
      * are in. Keep the time zone information from the NITZ string so
      * we can fix the time zone once know the country.
      */
-    private boolean mNeedFixZone = false;
+    protected boolean mNeedFixZone = false;
     private int mZoneOffset;
     private boolean mZoneDst;
     private long mZoneTime;
-    private boolean mGotCountryCode = false;
+    protected boolean mGotCountryCode = false;
     String mSavedTimeZone;
     long mSavedTime;
     long mSavedAtTime;
@@ -120,10 +129,6 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
     /** Wake lock used while setting time of day. */
     private PowerManager.WakeLock mWakeLock;
     private static final String WAKELOCK_TAG = "ServiceStateTracker";
-
-    /** Track of SPN display rules, so we only broadcast intent if something changes. */
-    private String curSpn = null;
-    private int curSpnRule = 0;
 
     /** Contains the name of the registered network in CDMA (either ONS or ERI text). */
     private String curPlmn = null;
@@ -149,9 +154,16 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
     private ContentObserver mAutoTimeObserver = new ContentObserver(new Handler()) {
         @Override
         public void onChange(boolean selfChange) {
-            Log.i("CdmaServiceStateTracker", "Auto time state called ...");
-            revertToNitz();
+            Log.i("CdmaServiceStateTracker", "Auto time state changed");
+            revertToNitzTime();
+        }
+    };
 
+    private ContentObserver mAutoTimeZoneObserver = new ContentObserver(new Handler()) {
+        @Override
+        public void onChange(boolean selfChange) {
+            Log.i("CdmaServiceStateTracker", "Auto time zone state changed");
+            revertToNitzTimeZone();
         }
     };
 
@@ -174,7 +186,7 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
         cm.registerForAvailable(this, EVENT_RADIO_AVAILABLE, null);
         cm.registerForRadioStateChanged(this, EVENT_RADIO_STATE_CHANGED, null);
 
-        cm.registerForNetworkStateChanged(this, EVENT_NETWORK_STATE_CHANGED_CDMA, null);
+        cm.registerForVoiceNetworkStateChanged(this, EVENT_NETWORK_STATE_CHANGED_CDMA, null);
         cm.setOnNITZTime(this, EVENT_NITZ_TIME, null);
         cm.setOnSignalStrengthUpdate(this, EVENT_SIGNAL_STRENGTH_UPDATE, null);
 
@@ -191,6 +203,9 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
         cr.registerContentObserver(
                 Settings.System.getUriFor(Settings.System.AUTO_TIME), true,
                 mAutoTimeObserver);
+        cr.registerContentObserver(
+            Settings.System.getUriFor(Settings.System.AUTO_TIME_ZONE), true,
+            mAutoTimeZoneObserver);
         setSignalStrengthDefaultValues();
 
         mNeedToRegForRuimLoaded = true;
@@ -200,7 +215,7 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
         // Unregister for all events.
         cm.unregisterForAvailable(this);
         cm.unregisterForRadioStateChanged(this);
-        cm.unregisterForNetworkStateChanged(this);
+        cm.unregisterForVoiceNetworkStateChanged(this);
         cm.unregisterForRUIMReady(this);
         cm.unregisterForNVReady(this);
         cm.unregisterForCdmaOtaProvision(this);
@@ -209,6 +224,7 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
         cm.unSetOnSignalStrengthUpdate(this);
         cm.unSetOnNITZTime(this);
         cr.unregisterContentObserver(this.mAutoTimeObserver);
+        cr.unregisterContentObserver(this.mAutoTimeZoneObserver);
     }
 
     @Override
@@ -440,12 +456,22 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
                     mMin = cdmaSubscription[3];
                     mPrlVersion = cdmaSubscription[4];
                     Log.d(LOG_TAG,"GET_CDMA_SUBSCRIPTION MDN=" + mMdn);
-                    //Notify apps subscription info is ready
+
+                    mIsMinInfoReady = true;
+
+                    int otaspMode = getOtasp();
+                    int oldOtaspMode = mCurrentOtaspMode;
+                    mCurrentOtaspMode = otaspMode;
+
+                    // Notify apps subscription info is ready
                     if (cdmaForSubscriptionInfoReadyRegistrants != null) {
+                        Log.d(LOG_TAG, "call cdmaForSubscriptionInfoReady.notifyRegistrants()");
                         cdmaForSubscriptionInfoReadyRegistrants.notifyRegistrants();
                     }
-                    if (!mIsMinInfoReady) {
-                        mIsMinInfoReady = true;
+                    if (oldOtaspMode != mCurrentOtaspMode) {
+                        Log.d(LOG_TAG, "call phone.notifyOtaspChanged old otaspMode=" +
+                                oldOtaspMode + " new otaspMode=" + mCurrentOtaspMode);
+                        phone.notifyOtaspChanged(mCurrentOtaspMode);
                     }
                     phone.getIccCard().broadcastIccStateChangedIntent(IccCard.INTENT_VALUE_ICC_IMSI,
                             null);
@@ -491,7 +517,7 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
             ar = (AsyncResult) msg.obj;
 
             if (ar.exception == null) {
-                cm.getRegistrationState(obtainMessage(EVENT_GET_LOC_DONE_CDMA, null));
+                cm.getVoiceRegistrationState(obtainMessage(EVENT_GET_LOC_DONE_CDMA, null));
             }
             break;
 
@@ -540,43 +566,31 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
             cm.setRadioPower(true, null);
         } else if (!mDesiredPowerState && cm.getRadioState().isOn()) {
             DataConnectionTracker dcTracker = phone.mDataConnection;
-            if (! dcTracker.isDataConnectionAsDesired()) {
-                EventLog.writeEvent(EventLogTags.DATA_NETWORK_STATUS_ON_RADIO_OFF,
-                        dcTracker.getStateInString(),
-                        dcTracker.getAnyDataEnabled() ? 1 : 0);
-            }
 
             // If it's on and available and we want it off gracefully
             powerOffRadioSafely();
         } // Otherwise, we're in the desired state
     }
 
+    // TODO: Consider moving this method to DataConnectionTracker
     @Override
-    protected void powerOffRadioSafely(){
-        // clean data connection
+    public void powerOffRadioSafely() {
         DataConnectionTracker dcTracker = phone.mDataConnection;
 
-        Message msg = dcTracker.obtainMessage(DataConnectionTracker.EVENT_CLEAN_UP_CONNECTION);
-        msg.arg1 = 1; // tearDown is true
-        msg.obj = CDMAPhone.REASON_RADIO_TURNED_OFF;
-        dcTracker.sendMessage(msg);
-
-        synchronized(this) {
+        synchronized (this) {
             if (!mPendingRadioPowerOffAfterDataOff) {
-                DataConnectionTracker.State currentState = dcTracker.getState();
-                if (currentState != DataConnectionTracker.State.CONNECTED
-                        && currentState != DataConnectionTracker.State.DISCONNECTING
-                        && currentState != DataConnectionTracker.State.INITING) {
-                    if (DBG) log("Data disconnected, turn off radio right away.");
-                    hangupAndPowerOff();
-                }
-                else if (sendEmptyMessageDelayed(EVENT_SET_RADIO_POWER_OFF, 30000)) {
-                    if (DBG) {
-                        log("Wait up to 30 sec for data to disconnect, then turn off radio.");
+                if (dcTracker.isAnyActiveDataConnections()) {
+                    dcTracker.cleanUpAllConnections();
+                    if (sendEmptyMessageDelayed(EVENT_SET_RADIO_POWER_OFF, 30000)) {
+                        if (DBG) log("Wait upto 30s for data to disconnect, then turn off radio.");
+                        mPendingRadioPowerOffAfterDataOff = true;
+                    } else {
+                        Log.w(LOG_TAG, "Cannot send delayed Msg, turn off radio right away.");
+                        hangupAndPowerOff();
                     }
-                    mPendingRadioPowerOffAfterDataOff = true;
                 } else {
-                    Log.w(LOG_TAG, "Cannot send delayed Msg, turn off radio right away.");
+                    dcTracker.cleanUpAllConnections();
+                    if (DBG) log("Data disconnected, turn off radio right away.");
                     hangupAndPowerOff();
                 }
             }
@@ -585,52 +599,203 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
 
     @Override
     protected void updateSpnDisplay() {
-        String spn = "";
-        boolean showSpn = false;
-        String plmn = "";
-        boolean showPlmn = false;
-        int rule = 0;
-        if (cm.getRadioState().isRUIMReady()) {
-            // TODO RUIM SPN is not implemented, EF_SPN has to be read and Display Condition
-            //   Character Encoding, Language Indicator and SPN has to be set
-            // rule = phone.mRuimRecords.getDisplayRule(ss.getOperatorNumeric());
-            // spn = phone.mSIMRecords.getServiceProvideName();
-            plmn = ss.getOperatorAlphaLong(); // mOperatorAlphaLong contains the ONS
-            // showSpn = (rule & ...
-            showPlmn = true; // showPlmn = (rule & ...
+        // TODO RUIM SPN is not implemented, EF_SPN has to be read and Display Condition
+        //   Character Encoding, Language Indicator and SPN has to be set, something like below:
+        // if (cm.getRadioState().isRUIMReady()) {
+        //     rule = phone.mRuimRecords.getDisplayRule(ss.getOperatorNumeric());
+        //     spn = phone.mSIMRecords.getServiceProvideName();
+        // }
 
-        } else {
-            // In this case there is no SPN available from RUIM, we show the ERI text
-            plmn = ss.getOperatorAlphaLong(); // mOperatorAlphaLong contains the ERI text
-            showPlmn = true;
-        }
-
-        if (rule != curSpnRule
-                || !TextUtils.equals(spn, curSpn)
-                || !TextUtils.equals(plmn, curPlmn)) {
+        // mOperatorAlphaLong contains the ERI text
+        String plmn = ss.getOperatorAlphaLong();
+        if (!TextUtils.equals(plmn, curPlmn)) {
+            // Allow A blank plmn, "" to set showPlmn to true. Previously, we
+            // would set showPlmn to true only if plmn was not empty, i.e. was not
+            // null and not blank. But this would cause us to incorrectly display
+            // "No Service". Now showPlmn is set to true for any non null string.
+            boolean showPlmn = plmn != null;
+            Log.d(LOG_TAG,
+                    String.format("updateSpnDisplay: changed sending intent" +
+                            " showPlmn='%b' plmn='%s'", showPlmn, plmn));
             Intent intent = new Intent(Intents.SPN_STRINGS_UPDATED_ACTION);
             intent.addFlags(Intent.FLAG_RECEIVER_REPLACE_PENDING);
-            intent.putExtra(Intents.EXTRA_SHOW_SPN, showSpn);
-            intent.putExtra(Intents.EXTRA_SPN, spn);
+            intent.putExtra(Intents.EXTRA_SHOW_SPN, false);
+            intent.putExtra(Intents.EXTRA_SPN, "");
             intent.putExtra(Intents.EXTRA_SHOW_PLMN, showPlmn);
             intent.putExtra(Intents.EXTRA_PLMN, plmn);
             phone.getContext().sendStickyBroadcast(intent);
         }
 
-        curSpnRule = rule;
-        curSpn = spn;
         curPlmn = plmn;
     }
 
-    /**
-     * Handle the result of one of the pollState()-related requests
-     */
-
     @Override
-    protected void handlePollStateResult (int what, AsyncResult ar) {
+    protected Phone getPhone() {
+        return phone;
+    }
+
+    /**
+    * The LTE data connection state, only return true here
+    */
+    protected boolean checkAdditionalDataAvaiable(){
+        return true;
+    }
+
+    /**
+    * Hanlde the PollStateResult message
+    */
+    protected void handlePollStateResultMessage(int what, AsyncResult ar){
         int ints[];
         String states[];
+        switch (what) {
+        case EVENT_POLL_STATE_REGISTRATION_CDMA: // Handle RIL_REQUEST_REGISTRATION_STATE.
+            states = (String[])ar.result;
 
+            int registrationState = 4;     //[0] registrationState
+            int radioTechnology = -1;      //[3] radioTechnology
+            int baseStationId = -1;        //[4] baseStationId
+            //[5] baseStationLatitude
+            int baseStationLatitude = CdmaCellLocation.INVALID_LAT_LONG;
+            //[6] baseStationLongitude
+            int baseStationLongitude = CdmaCellLocation.INVALID_LAT_LONG;
+            int cssIndicator = 0;          //[7] init with 0, because it is treated as a boolean
+            int systemId = 0;              //[8] systemId
+            int networkId = 0;             //[9] networkId
+            int roamingIndicator = -1;     //[10] Roaming indicator
+            int systemIsInPrl = 0;         //[11] Indicates if current system is in PRL
+            int defaultRoamingIndicator = 0;  //[12] Is default roaming indicator from PRL
+            int reasonForDenial = 0;       //[13] Denial reason if registrationState = 3
+
+            if (states.length == 14) {
+                try {
+                    if (states[0] != null) {
+                        registrationState = Integer.parseInt(states[0]);
+                    }
+                    if (states[3] != null) {
+                        radioTechnology = Integer.parseInt(states[3]);
+                    }
+                    if (states[4] != null) {
+                        baseStationId = Integer.parseInt(states[4]);
+                    }
+                    if (states[5] != null) {
+                        baseStationLatitude = Integer.parseInt(states[5]);
+                    }
+                    if (states[6] != null) {
+                        baseStationLongitude = Integer.parseInt(states[6]);
+                    }
+                    // Some carriers only return lat-lngs of 0,0
+                    if (baseStationLatitude == 0 && baseStationLongitude == 0) {
+                        baseStationLatitude  = CdmaCellLocation.INVALID_LAT_LONG;
+                        baseStationLongitude = CdmaCellLocation.INVALID_LAT_LONG;
+                    }
+                    if (states[7] != null) {
+                        cssIndicator = Integer.parseInt(states[7]);
+                    }
+                    if (states[8] != null) {
+                        systemId = Integer.parseInt(states[8]);
+                    }
+                    if (states[9] != null) {
+                        networkId = Integer.parseInt(states[9]);
+                    }
+                    if (states[10] != null) {
+                        roamingIndicator = Integer.parseInt(states[10]);
+                    }
+                    if (states[11] != null) {
+                        systemIsInPrl = Integer.parseInt(states[11]);
+                    }
+                    if (states[12] != null) {
+                        defaultRoamingIndicator = Integer.parseInt(states[12]);
+                    }
+                    if (states[13] != null) {
+                        reasonForDenial = Integer.parseInt(states[13]);
+                    }
+                } catch (NumberFormatException ex) {
+                    Log.w(LOG_TAG, "error parsing RegistrationState: " + ex);
+                }
+            } else {
+                throw new RuntimeException("Warning! Wrong number of parameters returned from "
+                                     + "RIL_REQUEST_REGISTRATION_STATE: expected 14 got "
+                                     + states.length);
+            }
+
+            mRegistrationState = registrationState;
+            // When registration state is roaming and TSB58
+            // roaming indicator is not in the carrier-specified
+            // list of ERIs for home system, mCdmaRoaming is true.
+            mCdmaRoaming =
+                    regCodeIsRoaming(registrationState) && !isRoamIndForHomeSystem(states[10]);
+            newSS.setState (regCodeToServiceState(registrationState));
+
+            if(checkAdditionalDataAvaiable()) {
+                this.newCdmaDataConnectionState =
+                        radioTechnologyToDataServiceState(radioTechnology);
+                newSS.setRadioTechnology(radioTechnology);
+                newNetworkType = radioTechnology;
+            }
+
+            newSS.setCssIndicator(cssIndicator);
+            newSS.setSystemAndNetworkId(systemId, networkId);
+            mRoamingIndicator = roamingIndicator;
+            mIsInPrl = (systemIsInPrl == 0) ? false : true;
+            mDefaultRoamingIndicator = defaultRoamingIndicator;
+
+
+            // Values are -1 if not available.
+            newCellLoc.setCellLocationData(baseStationId, baseStationLatitude,
+                    baseStationLongitude, systemId, networkId);
+
+            if (reasonForDenial == 0) {
+                mRegistrationDeniedReason = ServiceStateTracker.REGISTRATION_DENIED_GEN;
+            } else if (reasonForDenial == 1) {
+                mRegistrationDeniedReason = ServiceStateTracker.REGISTRATION_DENIED_AUTH;
+            } else {
+                mRegistrationDeniedReason = "";
+            }
+
+            if (mRegistrationState == 3) {
+                if (DBG) log("Registration denied, " + mRegistrationDeniedReason);
+            }
+            break;
+
+        case EVENT_POLL_STATE_OPERATOR_CDMA: // Handle RIL_REQUEST_OPERATOR
+            String opNames[] = (String[])ar.result;
+
+            if (opNames != null && opNames.length >= 3) {
+                // If the NUMERIC field isn't valid use PROPERTY_CDMA_HOME_OPERATOR_NUMERIC
+                if ((opNames[2] == null) || (opNames[2].length() < 5)
+                        || ("00000".equals(opNames[2]))) {
+                    opNames[2] = SystemProperties.get(
+                            CDMAPhone.PROPERTY_CDMA_HOME_OPERATOR_NUMERIC, "00000");
+                    if (DBG) {
+                        log("RIL_REQUEST_OPERATOR.response[2], the numeric, " +
+                                " is bad. Using SystemProperties '" +
+                                        CDMAPhone.PROPERTY_CDMA_HOME_OPERATOR_NUMERIC +
+                                "'= " + opNames[2]);
+                    }
+                }
+                if (cm.getNvState().isNVReady()) {
+                    // In CDMA in case on NV, the ss.mOperatorAlphaLong is set later with the
+                    // ERI text, so here it is ignored what is coming from the modem.
+                    newSS.setOperatorName(null, opNames[1], opNames[2]);
+                } else {
+                    newSS.setOperatorName(opNames[0], opNames[1], opNames[2]);
+                }
+            } else {
+                Log.w(LOG_TAG, "error parsing opNames");
+            }
+            break;
+        default:
+            Log.e(LOG_TAG, "RIL response handle in wrong phone!"
+                + " Expected CDMA RIL request and get GSM RIL request.");
+        break;
+        }
+    }
+
+    /**
+     * Handle the result of one of the pollState() - related requests
+     */
+    @Override
+    protected void handlePollStateResult (int what, AsyncResult ar) {
         // Ignore stale requests from last poll.
         if (ar.userObj != pollingContext) return;
 
@@ -660,136 +825,7 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
                         ar.exception);
             }
         } else try {
-            switch (what) {
-            case EVENT_POLL_STATE_REGISTRATION_CDMA: // Handle RIL_REQUEST_REGISTRATION_STATE.
-                states = (String[])ar.result;
-
-                int registrationState = 4;     //[0] registrationState
-                int radioTechnology = -1;      //[3] radioTechnology
-                int baseStationId = -1;        //[4] baseStationId
-                //[5] baseStationLatitude
-                int baseStationLatitude = CdmaCellLocation.INVALID_LAT_LONG;
-                //[6] baseStationLongitude
-                int baseStationLongitude = CdmaCellLocation.INVALID_LAT_LONG;
-                int cssIndicator = 0;          //[7] init with 0, because it is treated as a boolean
-                int systemId = 0;              //[8] systemId
-                int networkId = 0;             //[9] networkId
-                int roamingIndicator = -1;     //[10] Roaming indicator
-                int systemIsInPrl = 0;         //[11] Indicates if current system is in PRL
-                int defaultRoamingIndicator = 0;  //[12] Is default roaming indicator from PRL
-                int reasonForDenial = 0;       //[13] Denial reason if registrationState = 3
-
-                if (states.length == 14) {
-                    try {
-                        if (states[0] != null) {
-                            registrationState = Integer.parseInt(states[0]);
-                        }
-                        if (states[3] != null) {
-                            radioTechnology = Integer.parseInt(states[3]);
-                        }
-                        if (states[4] != null) {
-                            baseStationId = Integer.parseInt(states[4]);
-                        }
-                        if (states[5] != null) {
-                            baseStationLatitude = Integer.parseInt(states[5]);
-                        }
-                        if (states[6] != null) {
-                            baseStationLongitude = Integer.parseInt(states[6]);
-                        }
-                        // Some carriers only return lat-lngs of 0,0
-                        if (baseStationLatitude == 0 && baseStationLongitude == 0) {
-                            baseStationLatitude  = CdmaCellLocation.INVALID_LAT_LONG;
-                            baseStationLongitude = CdmaCellLocation.INVALID_LAT_LONG;
-                        }
-                        if (states[7] != null) {
-                            cssIndicator = Integer.parseInt(states[7]);
-                        }
-                        if (states[8] != null) {
-                            systemId = Integer.parseInt(states[8]);
-                        }
-                        if (states[9] != null) {
-                            networkId = Integer.parseInt(states[9]);
-                        }
-                        if (states[10] != null) {
-                            roamingIndicator = Integer.parseInt(states[10]);
-                        }
-                        if (states[11] != null) {
-                            systemIsInPrl = Integer.parseInt(states[11]);
-                        }
-                        if (states[12] != null) {
-                            defaultRoamingIndicator = Integer.parseInt(states[12]);
-                        }
-                        if (states[13] != null) {
-                            reasonForDenial = Integer.parseInt(states[13]);
-                        }
-                    } catch (NumberFormatException ex) {
-                        Log.w(LOG_TAG, "error parsing RegistrationState: " + ex);
-                    }
-                } else {
-                    throw new RuntimeException("Warning! Wrong number of parameters returned from "
-                                         + "RIL_REQUEST_REGISTRATION_STATE: expected 14 got "
-                                         + states.length);
-                }
-
-                mRegistrationState = registrationState;
-                // When registration state is roaming and TSB58
-                // roaming indicator is not in the carrier-specified
-                // list of ERIs for home system, mCdmaRoaming is true.
-                mCdmaRoaming =
-                        regCodeIsRoaming(registrationState) && !isRoamIndForHomeSystem(states[10]);
-                newSS.setState (regCodeToServiceState(registrationState));
-
-                this.newCdmaDataConnectionState =
-                        radioTechnologyToDataServiceState(radioTechnology);
-                newSS.setRadioTechnology(radioTechnology);
-                newNetworkType = radioTechnology;
-
-                newSS.setCssIndicator(cssIndicator);
-                newSS.setSystemAndNetworkId(systemId, networkId);
-                mRoamingIndicator = roamingIndicator;
-                mIsInPrl = (systemIsInPrl == 0) ? false : true;
-                mDefaultRoamingIndicator = defaultRoamingIndicator;
-
-
-                // Values are -1 if not available.
-                newCellLoc.setCellLocationData(baseStationId, baseStationLatitude,
-                        baseStationLongitude, systemId, networkId);
-
-                if (reasonForDenial == 0) {
-                    mRegistrationDeniedReason = ServiceStateTracker.REGISTRATION_DENIED_GEN;
-                } else if (reasonForDenial == 1) {
-                    mRegistrationDeniedReason = ServiceStateTracker.REGISTRATION_DENIED_AUTH;
-                } else {
-                    mRegistrationDeniedReason = "";
-                }
-
-                if (mRegistrationState == 3) {
-                    if (DBG) log("Registration denied, " + mRegistrationDeniedReason);
-                }
-                break;
-
-            case EVENT_POLL_STATE_OPERATOR_CDMA: // Handle RIL_REQUEST_OPERATOR
-                String opNames[] = (String[])ar.result;
-
-                if (opNames != null && opNames.length >= 3) {
-                    if (cm.getRadioState().isNVReady()) {
-                        // In CDMA in case on NV, the ss.mOperatorAlphaLong is set later with the
-                        // ERI text, so here it is ignored what is coming from the modem.
-                        newSS.setOperatorName(null, opNames[1], opNames[2]);
-                    } else {
-                        newSS.setOperatorName(opNames[0], opNames[1], opNames[2]);
-                    }
-                } else {
-                    Log.w(LOG_TAG, "error parsing opNames");
-                }
-                break;
-
-            default:
-                Log.e(LOG_TAG, "RIL response handle in wrong phone!"
-                    + " Expected CDMA RIL request and get GSM RIL request.");
-            break;
-            }
-
+            handlePollStateResultMessage(what, ar);
         } catch (RuntimeException ex) {
             Log.e(LOG_TAG, "Exception while polling service state. "
                     + "Probably malformed RIL response.", ex);
@@ -860,7 +896,7 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
 
     }
 
-    private void setSignalStrengthDefaultValues() {
+    protected void setSignalStrengthDefaultValues() {
         mSignalStrength = new SignalStrength(99, -1, -1, -1, -1, -1, -1, false);
     }
 
@@ -872,7 +908,7 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
      * and start over again if the radio notifies us that some
      * event has changed
      */
-    private void
+    protected void
     pollState() {
         pollingContext = new int[1];
         pollingContext[0] = 0;
@@ -919,15 +955,15 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
                     obtainMessage(EVENT_POLL_STATE_OPERATOR_CDMA, pollingContext));
 
             pollingContext[0]++;
-            // RIL_REQUEST_REGISTRATION_STATE is necessary for CDMA
-            cm.getRegistrationState(
+            // RIL_REQUEST_VOICE_REGISTRATION_STATE is necessary for CDMA
+            cm.getVoiceRegistrationState(
                     obtainMessage(EVENT_POLL_STATE_REGISTRATION_CDMA, pollingContext));
 
             break;
         }
     }
 
-    private static String networkTypeToString(int type) {
+    protected static String networkTypeToString(int type) {
         String ret = "unknown";
 
         switch (type) {
@@ -957,7 +993,7 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
         return ret;
     }
 
-    private void fixTimeZone(String isoCountryCode) {
+    protected void fixTimeZone(String isoCountryCode) {
         TimeZone zone = null;
         // If the offset is (0, false) and the time zone property
         // is set, use the time zone property rather than GMT.
@@ -987,14 +1023,14 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
         mNeedFixZone = false;
 
         if (zone != null) {
-            if (getAutoTime()) {
+            if (getAutoTimeZone()) {
                 setAndBroadcastNetworkSetTimeZone(zone.getID());
             }
             saveNitzTimeZone(zone.getID());
         }
     }
 
-    private void pollStateDone() {
+    protected void pollStateDone() {
         if (DBG) log("Poll ServiceState done: oldSS=[" + ss + "] newSS=[" + newSS + "]");
 
         boolean hasRegistered =
@@ -1047,6 +1083,8 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
 
         cdmaDataConnectionState = newCdmaDataConnectionState;
         networkType = newNetworkType;
+        // this new state has been applied - forget it until we get a new new state
+        newNetworkType = 0;
 
         newSS.setStateOutOfService(); // clean slate for next time
 
@@ -1119,7 +1157,7 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
         }
 
         if (hasCdmaDataConnectionChanged || hasNetworkTypeChanged) {
-            phone.notifyDataConnection(null);
+            phone.notifyDataConnection();
         }
 
         if (hasRoamingOn) {
@@ -1195,7 +1233,7 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
      *  send signal-strength-changed notification if changed
      *  Called both for solicited and unsolicited signal strength updates
      */
-    private void
+    protected void
     onSignalStrengthResult(AsyncResult ar) {
         SignalStrength oldSignalStrength = mSignalStrength;
 
@@ -1250,7 +1288,7 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
     }
 
     /** code is registration state 0-5 from TS 27.007 7.2 */
-    private int
+    protected int
     regCodeToServiceState(int code) {
         switch (code) {
         case 0: // Not searching and not registered
@@ -1276,6 +1314,13 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
      * ServiceState.RADIO_TECHNOLOGY_UNKNOWN is the same as detached.
      */
     /*package*/ int getCurrentCdmaDataConnectionState() {
+        return cdmaDataConnectionState;
+    }
+
+    /**
+    * TODO: In the future, we need remove getCurrentCdmaDataConnectionState
+    */
+    public int getCurrentDataConnectionState() {
         return cdmaDataConnectionState;
     }
 
@@ -1439,7 +1484,7 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
             }
 
             if (zone != null) {
-                if (getAutoTime()) {
+                if (getAutoTimeZone()) {
                     setAndBroadcastNetworkSetTimeZone(zone.getID());
                 }
                 saveNitzTimeZone(zone.getID());
@@ -1529,6 +1574,14 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
         }
     }
 
+    private boolean getAutoTimeZone() {
+        try {
+            return Settings.System.getInt(cr, Settings.System.AUTO_TIME_ZONE) > 0;
+        } catch (SettingNotFoundException snfe) {
+            return true;
+        }
+    }
+
     private void saveNitzTimeZone(String zoneId) {
         mSavedTimeZone = zoneId;
     }
@@ -1563,17 +1616,26 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
         phone.getContext().sendStickyBroadcast(intent);
     }
 
-     private void revertToNitz() {
+    private void revertToNitzTime() {
         if (Settings.System.getInt(cr, Settings.System.AUTO_TIME, 0) == 0) {
             return;
         }
-        Log.d(LOG_TAG, "Reverting to NITZ: tz='" + mSavedTimeZone
-                + "' mSavedTime=" + mSavedTime
+        Log.d(LOG_TAG, "Reverting to NITZ Time: mSavedTime=" + mSavedTime
                 + " mSavedAtTime=" + mSavedAtTime);
-        if (mSavedTimeZone != null && mSavedTime != 0 && mSavedAtTime != 0) {
-            setAndBroadcastNetworkSetTimeZone(mSavedTimeZone);
+        if (mSavedTime != 0 && mSavedAtTime != 0) {
             setAndBroadcastNetworkSetTime(mSavedTime
                     + (SystemClock.elapsedRealtime() - mSavedAtTime));
+        }
+    }
+
+    private void revertToNitzTimeZone() {
+        if (Settings.System.getInt(phone.getContext().getContentResolver(),
+                Settings.System.AUTO_TIME_ZONE, 0) == 0) {
+            return;
+        }
+        Log.d(LOG_TAG, "Reverting to NITZ TimeZone: tz='" + mSavedTimeZone);
+        if (mSavedTimeZone != null) {
+            setAndBroadcastNetworkSetTimeZone(mSavedTimeZone);
         }
     }
 
@@ -1606,15 +1668,11 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
      * @return true if phone is camping on a technology
      * that could support voice and data simultaneously.
      */
-    boolean isConcurrentVoiceAndData() {
+    public boolean isConcurrentVoiceAndDataAllowed() {
         // Note: it needs to be confirmed which CDMA network types
         // can support voice and data calls concurrently.
         // For the time-being, the return value will be false.
         return false;
-    }
-
-    protected void log(String s) {
-        Log.d(LOG_TAG, "[CdmaServiceStateTracker] " + s);
     }
 
     public String getMdnNumber() {
@@ -1670,6 +1728,32 @@ final class CdmaServiceStateTracker extends ServiceStateTracker {
             }
             return false;
         }
+    }
+
+    /**
+     * Returns OTASP_UNKNOWN, OTASP_NEEDED or OTASP_NOT_NEEDED
+     */
+    int getOtasp() {
+        int provisioningState;
+        if (mMin == null || (mMin.length() < 6)) {
+            if (DBG) Log.d(LOG_TAG, "getOtasp: bad mMin='" + mMin + "'");
+            provisioningState = OTASP_UNKNOWN;
+        } else {
+            if ((mMin.equals(UNACTIVATED_MIN_VALUE)
+                    || mMin.substring(0,6).equals(UNACTIVATED_MIN2_VALUE))
+                    || SystemProperties.getBoolean("test_cdma_setup", false)) {
+                provisioningState = OTASP_NEEDED;
+            } else {
+                provisioningState = OTASP_NOT_NEEDED;
+            }
+        }
+        if (DBG) Log.d(LOG_TAG, "getOtasp: state=" + provisioningState);
+        return provisioningState;
+    }
+
+    @Override
+    protected void log(String s) {
+        Log.d(LOG_TAG, "[CdmaServiceStateTracker] " + s);
     }
 
     private void hangupAndPowerOff() {

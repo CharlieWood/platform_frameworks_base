@@ -21,20 +21,16 @@
 
 #include "RenderScriptEnv.h"
 
-#include <utils/KeyedVector.h>
-
-struct ACCscript;
+struct BCCOpaqueScript;
 
 // ---------------------------------------------------------------------------
 namespace android {
 namespace renderscript {
 
 
-
-class ScriptC : public Script
-{
+class ScriptC : public Script {
 public:
-    typedef int (*RunScript_t)(uint32_t launchIndex);
+    typedef int (*RunScript_t)();
     typedef void (*VoidFunc_t)();
 
     ScriptC(Context *);
@@ -44,56 +40,62 @@ public:
         int mVersionMajor;
         int mVersionMinor;
 
-        RunScript_t mScript;
+        RunScript_t mRoot;
         VoidFunc_t mInit;
 
-        void ** mSlotPointers[MAX_SCRIPT_BANKS];
+        uint32_t * mObjectSlotList;
+        uint32_t mObjectSlotCount;
     };
+
 
     Program_t mProgram;
 
-    ACCscript*    mAccScript;
+    BCCOpaqueScript *mBccScript;
 
-    virtual void setupScript();
-    virtual uint32_t run(Context *, uint32_t launchID);
+    const Allocation *ptrToAllocation(const void *) const;
+
+
+    virtual void Invoke(Context *rsc, uint32_t slot, const void *data, uint32_t len);
+
+    virtual uint32_t run(Context *);
+
+    virtual void runForEach(Context *rsc,
+                            const Allocation * ain,
+                            Allocation * aout,
+                            const void * usr,
+                            const RsScriptCall *sc = NULL);
+
+    virtual void serialize(OStream *stream) const {    }
+    virtual RsA3DClassID getClassId() const { return RS_A3D_CLASS_ID_SCRIPT_C; }
+    static Type *createFromStream(Context *rsc, IStream *stream) { return NULL; }
+
+protected:
+    void setupScript(Context *);
+    void setupGLState(Context *);
+    Script * setTLS(Script *);
 };
 
-class ScriptCState
-{
+class ScriptCState {
 public:
     ScriptCState();
     ~ScriptCState();
 
-    ScriptC *mScript;
+    char * mScriptText;
+    size_t mScriptLen;
 
-    ObjectBaseRef<const Type> mConstantBufferTypes[MAX_SCRIPT_BANKS];
-    String8 mSlotNames[MAX_SCRIPT_BANKS];
-    bool mSlotWritable[MAX_SCRIPT_BANKS];
-    String8 mInvokableNames[MAX_SCRIPT_BANKS];
-
-    void clear();
-    void runCompiler(Context *rsc, ScriptC *s);
-    void appendVarDefines(const Context *rsc, String8 *str);
-    void appendTypes(const Context *rsc, String8 *str);
+    bool runCompiler(Context *rsc, ScriptC *s, const char *resName, const char *cacheDir);
 
     struct SymbolTable_t {
         const char * mName;
         void * mPtr;
-        const char * mRet;
-        const char * mParam;
+        bool threadable;
     };
-    static SymbolTable_t gSyms[];
     static const SymbolTable_t * lookupSymbol(const char *);
-    static void appendDecls(String8 *str);
-
-    KeyedVector<String8,int> mInt32Defines;
-    KeyedVector<String8,float> mFloatDefines;
+    static const SymbolTable_t * lookupSymbolCL(const char *);
+    static const SymbolTable_t * lookupSymbolGL(const char *);
 };
 
 
 }
 }
 #endif
-
-
-

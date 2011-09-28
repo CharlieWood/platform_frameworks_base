@@ -20,6 +20,7 @@
 
 #include <android_runtime/AndroidRuntime.h>
 #include <binder/IBinder.h>
+#include <binder/IPCThreadState.h>
 #include <binder/IServiceManager.h>
 #include <utils/Log.h>
 #include <utils/misc.h>
@@ -62,7 +63,6 @@ extern int register_android_graphics_MaskFilter(JNIEnv* env);
 extern int register_android_graphics_Movie(JNIEnv* env);
 extern int register_android_graphics_NinePatch(JNIEnv*);
 extern int register_android_graphics_PathEffect(JNIEnv* env);
-extern int register_android_graphics_Region(JNIEnv* env);
 extern int register_android_graphics_Shader(JNIEnv* env);
 extern int register_android_graphics_Typeface(JNIEnv* env);
 extern int register_android_graphics_YuvImage(JNIEnv* env);
@@ -76,16 +76,15 @@ extern int register_android_opengl_jni_GLES11Ext(JNIEnv* env);
 extern int register_android_opengl_jni_GLES20(JNIEnv* env);
 
 extern int register_android_hardware_Camera(JNIEnv *env);
-
 extern int register_android_hardware_SensorManager(JNIEnv *env);
+extern int register_android_hardware_UsbDevice(JNIEnv *env);
+extern int register_android_hardware_UsbRequest(JNIEnv *env);
 
 extern int register_android_media_AudioRecord(JNIEnv *env);
 extern int register_android_media_AudioSystem(JNIEnv *env);
 extern int register_android_media_AudioTrack(JNIEnv *env);
 extern int register_android_media_JetPlayer(JNIEnv *env);
 extern int register_android_media_ToneGenerator(JNIEnv *env);
-
-extern int register_android_message_digest_sha1(JNIEnv *env);
 
 extern int register_android_util_FloatMath(JNIEnv* env);
 
@@ -111,10 +110,13 @@ extern int register_android_graphics_PathMeasure(JNIEnv* env);
 extern int register_android_graphics_Picture(JNIEnv*);
 extern int register_android_graphics_PorterDuff(JNIEnv* env);
 extern int register_android_graphics_Rasterizer(JNIEnv* env);
+extern int register_android_graphics_Region(JNIEnv* env);
+extern int register_android_graphics_SurfaceTexture(JNIEnv* env);
 extern int register_android_graphics_Xfermode(JNIEnv* env);
 extern int register_android_graphics_PixelFormat(JNIEnv* env);
 extern int register_com_android_internal_graphics_NativeUtils(JNIEnv *env);
 extern int register_android_view_Display(JNIEnv* env);
+extern int register_android_view_GLES20Canvas(JNIEnv* env);
 extern int register_android_view_Surface(JNIEnv* env);
 extern int register_android_view_ViewRoot(JNIEnv* env);
 extern int register_android_database_CursorWindow(JNIEnv* env);
@@ -145,7 +147,6 @@ extern int register_android_net_LocalSocketImpl(JNIEnv* env);
 extern int register_android_net_NetworkUtils(JNIEnv* env);
 extern int register_android_net_TrafficStats(JNIEnv* env);
 extern int register_android_net_wifi_WifiManager(JNIEnv* env);
-extern int register_android_security_Md5MessageDigest(JNIEnv *env);
 extern int register_android_text_AndroidCharacter(JNIEnv *env);
 extern int register_android_text_AndroidBidi(JNIEnv *env);
 extern int register_android_text_KeyCharacterMap(JNIEnv *env);
@@ -153,7 +154,6 @@ extern int register_android_opengl_classes(JNIEnv *env);
 extern int register_android_bluetooth_HeadsetBase(JNIEnv* env);
 extern int register_android_bluetooth_BluetoothAudioGateway(JNIEnv* env);
 extern int register_android_bluetooth_BluetoothSocket(JNIEnv *env);
-extern int register_android_bluetooth_ScoSocket(JNIEnv *env);
 extern int register_android_server_BluetoothService(JNIEnv* env);
 extern int register_android_server_BluetoothEventLoop(JNIEnv *env);
 extern int register_android_server_BluetoothA2dpService(JNIEnv* env);
@@ -171,6 +171,7 @@ extern int register_android_view_KeyEvent(JNIEnv* env);
 extern int register_android_view_MotionEvent(JNIEnv* env);
 extern int register_android_content_res_ObbScanner(JNIEnv* env);
 extern int register_android_content_res_Configuration(JNIEnv* env);
+extern int register_android_animation_PropertyValuesHolder(JNIEnv *env);
 
 static AndroidRuntime* gCurRuntime = NULL;
 
@@ -352,31 +353,10 @@ status_t AndroidRuntime::callMain(
  */
 jclass AndroidRuntime::findClass(JNIEnv* env, const char* className)
 {
-    char* convName = NULL;
-
     if (env->ExceptionCheck()) {
-        LOGE("ERROR: exception pending on entry to findClass()\n");
+        LOGE("ERROR: exception pending on entry to findClass()");
         return NULL;
     }
-
-    /*
-     * JNI FindClass uses class names with slashes, but ClassLoader.loadClass
-     * uses the dotted "binary name" format.  We don't need to convert the
-     * name with the new approach.
-     */
-#if 0
-    /* (convName only created if necessary -- use className) */
-    for (char* cp = const_cast<char*>(className); *cp != '\0'; cp++) {
-        if (*cp == '.') {
-            if (convName == NULL) {
-                convName = strdup(className);
-                cp = convName + (cp-className);
-                className = convName;
-            }
-            *cp = '/';
-        }
-    }
-#endif
 
     /*
      * This is a little awkward because the JNI FindClass call uses the
@@ -393,7 +373,6 @@ jclass AndroidRuntime::findClass(JNIEnv* env, const char* className)
      * have to do things the hard way.
      */
     jclass cls = NULL;
-    //cls = env->FindClass(className);
 
     jclass javaLangClassLoader;
     jmethodID getSystemClassLoader, loadClass;
@@ -415,24 +394,21 @@ jclass AndroidRuntime::findClass(JNIEnv* env, const char* className)
     /* create an object for the class name string; alloc could fail */
     strClassName = env->NewStringUTF(className);
     if (env->ExceptionCheck()) {
-        LOGE("ERROR: unable to convert '%s' to string\n", className);
-        goto bail;
+        LOGE("ERROR: unable to convert '%s' to string", className);
+        return NULL;
     }
-    LOGV("system class loader is %p, loading %p (%s)\n",
+    LOGV("system class loader is %p, loading %p (%s)",
         systemClassLoader, strClassName, className);
 
     /* try to find the named class */
     cls = (jclass) env->CallObjectMethod(systemClassLoader, loadClass,
                         strClassName);
     if (env->ExceptionCheck()) {
-        LOGE("ERROR: unable to load class '%s' from %p\n",
+        LOGE("ERROR: unable to load class '%s' from %p",
             className, systemClassLoader);
-        cls = NULL;
-        goto bail;
+        return NULL;
     }
 
-bail:
-    free(convName);
     return cls;
 }
 
@@ -453,6 +429,20 @@ static void runtime_exit(int code)
 static void runtime_vfprintf(FILE* fp, const char* format, va_list ap)
 {
     LOG_PRI_VA(ANDROID_LOG_INFO, "vm-printf", format, ap);
+}
+
+/**
+ * The VM calls this when mutex contention debugging is enabled to
+ * determine whether or not the blocked thread was a "sensitive thread"
+ * for user responsiveness/smoothess.
+ *
+ * Our policy for this is whether or not we're tracing any StrictMode
+ * events on this thread (which we might've inherited via Binder calls
+ * into us)
+ */
+static bool runtime_isSensitiveThread() {
+    IPCThreadState* state = IPCThreadState::selfOrNull();
+    return state && state->getStrictModePolicy() != 0;
 }
 
 
@@ -575,7 +565,9 @@ int AndroidRuntime::startVm(JavaVM** pJavaVM, JNIEnv** pEnv)
     char dexoptFlagsBuf[PROPERTY_VALUE_MAX];
     char enableAssertBuf[sizeof("-ea:")-1 + PROPERTY_VALUE_MAX];
     char jniOptsBuf[sizeof("-Xjniopts:")-1 + PROPERTY_VALUE_MAX];
+    char heapstartsizeOptsBuf[sizeof("-Xms")-1 + PROPERTY_VALUE_MAX];
     char heapsizeOptsBuf[sizeof("-Xmx")-1 + PROPERTY_VALUE_MAX];
+    char heapgrowthlimitOptsBuf[sizeof("-XX:HeapGrowthLimit=")-1 + PROPERTY_VALUE_MAX];
     char extraOptsBuf[PROPERTY_VALUE_MAX];
     char* stackTraceFile = NULL;
     bool checkJni = false;
@@ -641,6 +633,11 @@ int AndroidRuntime::startVm(JavaVM** pJavaVM, JNIEnv** pEnv)
     opt.optionString = "vfprintf";
     mOptions.add(opt);
 
+    /* register the framework-specific "is sensitive thread" hook */
+    opt.extraInfo = (void*) runtime_isSensitiveThread;
+    opt.optionString = "sensitiveThread";
+    mOptions.add(opt);
+
     opt.extraInfo = NULL;
 
     /* enable verbose; standard options are { jni, gc, class } */
@@ -649,11 +646,25 @@ int AndroidRuntime::startVm(JavaVM** pJavaVM, JNIEnv** pEnv)
     mOptions.add(opt);
     //options[curOpt++].optionString = "-verbose:class";
 
+    /*
+     * The default starting and maximum size of the heap.  Larger
+     * values should be specified in a product property override.
+     */
+    strcpy(heapstartsizeOptsBuf, "-Xms");
+    property_get("dalvik.vm.heapstartsize", heapstartsizeOptsBuf+4, "4m");
+    opt.optionString = heapstartsizeOptsBuf;
+    mOptions.add(opt);
     strcpy(heapsizeOptsBuf, "-Xmx");
     property_get("dalvik.vm.heapsize", heapsizeOptsBuf+4, "16m");
-    //LOGI("Heap size: %s", heapsizeOptsBuf);
     opt.optionString = heapsizeOptsBuf;
     mOptions.add(opt);
+
+    strcpy(heapgrowthlimitOptsBuf, "-XX:HeapGrowthLimit=");
+    property_get("dalvik.vm.heapgrowthlimit", heapgrowthlimitOptsBuf+20, "");
+    if (heapgrowthlimitOptsBuf[20] != '\0') {
+        opt.optionString = heapgrowthlimitOptsBuf;
+        mOptions.add(opt);
+    }
 
     /*
      * Enable or disable dexopt features, such as bytecode verification and
@@ -1188,16 +1199,17 @@ static const RegJNIRec gRegJNI[] = {
     REG_JNI(register_android_content_StringBlock),
     REG_JNI(register_android_content_XmlBlock),
     REG_JNI(register_android_emoji_EmojiFactory),
-    REG_JNI(register_android_security_Md5MessageDigest),
     REG_JNI(register_android_text_AndroidCharacter),
     REG_JNI(register_android_text_AndroidBidi),
     REG_JNI(register_android_text_KeyCharacterMap),
     REG_JNI(register_android_os_Process),
+    REG_JNI(register_android_os_SystemProperties),
     REG_JNI(register_android_os_Binder),
     REG_JNI(register_android_view_Display),
     REG_JNI(register_android_nio_utils),
     REG_JNI(register_android_graphics_PixelFormat),
     REG_JNI(register_android_graphics_Graphics),
+    REG_JNI(register_android_view_GLES20Canvas),
     REG_JNI(register_android_view_Surface),
     REG_JNI(register_android_view_ViewRoot),
     REG_JNI(register_com_google_android_gles_jni_EGLImpl),
@@ -1230,6 +1242,7 @@ static const RegJNIRec gRegJNI[] = {
     REG_JNI(register_android_graphics_Rasterizer),
     REG_JNI(register_android_graphics_Region),
     REG_JNI(register_android_graphics_Shader),
+    REG_JNI(register_android_graphics_SurfaceTexture),
     REG_JNI(register_android_graphics_Typeface),
     REG_JNI(register_android_graphics_Xfermode),
     REG_JNI(register_android_graphics_YuvImage),
@@ -1249,7 +1262,6 @@ static const RegJNIRec gRegJNI[] = {
     REG_JNI(register_android_os_ParcelFileDescriptor),
     REG_JNI(register_android_os_Power),
     REG_JNI(register_android_os_StatFs),
-    REG_JNI(register_android_os_SystemProperties),
     REG_JNI(register_android_os_UEventObserver),
     REG_JNI(register_android_net_LocalSocketImpl),
     REG_JNI(register_android_net_NetworkUtils),
@@ -1261,6 +1273,8 @@ static const RegJNIRec gRegJNI[] = {
     REG_JNI(register_com_android_internal_os_ZygoteInit),
     REG_JNI(register_android_hardware_Camera),
     REG_JNI(register_android_hardware_SensorManager),
+    REG_JNI(register_android_hardware_UsbDevice),
+    REG_JNI(register_android_hardware_UsbRequest),
     REG_JNI(register_android_media_AudioRecord),
     REG_JNI(register_android_media_AudioSystem),
     REG_JNI(register_android_media_AudioTrack),
@@ -1271,12 +1285,10 @@ static const RegJNIRec gRegJNI[] = {
     REG_JNI(register_android_bluetooth_HeadsetBase),
     REG_JNI(register_android_bluetooth_BluetoothAudioGateway),
     REG_JNI(register_android_bluetooth_BluetoothSocket),
-    REG_JNI(register_android_bluetooth_ScoSocket),
     REG_JNI(register_android_server_BluetoothService),
     REG_JNI(register_android_server_BluetoothEventLoop),
     REG_JNI(register_android_server_BluetoothA2dpService),
     REG_JNI(register_android_server_Watchdog),
-    REG_JNI(register_android_message_digest_sha1),
     REG_JNI(register_android_ddm_DdmHandleNativeHeap),
     REG_JNI(register_android_backup_BackupDataInput),
     REG_JNI(register_android_backup_BackupDataOutput),
@@ -1291,6 +1303,8 @@ static const RegJNIRec gRegJNI[] = {
 
     REG_JNI(register_android_content_res_ObbScanner),
     REG_JNI(register_android_content_res_Configuration),
+
+    REG_JNI(register_android_animation_PropertyValuesHolder),
 };
 
 /*

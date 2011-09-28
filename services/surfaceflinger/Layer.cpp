@@ -35,6 +35,7 @@
 #include "Layer.h"
 #include "SurfaceFlinger.h"
 #include "DisplayHardware/DisplayHardware.h"
+#include "DisplayHardware/HWComposer.h"
 
 
 #define DEBUG_RESIZE    0
@@ -55,12 +56,12 @@ Layer::Layer(SurfaceFlinger* flinger,
         mNeedsBlending(true),
         mNeedsDithering(false),
         mSecure(false),
+        mProtectedByApp(false),
+        mProtectedByDRM(false),
         mTextureManager(),
         mBufferManager(mTextureManager),
-        mWidth(0), mHeight(0), mNeedsScaling(false), mFixedSize(false),
-        mBypassState(false)
+        mWidth(0), mHeight(0), mNeedsScaling(false), mFixedSize(false)
 {
-    setDestroyer(this);
 }
 
 Layer::~Layer()
@@ -77,10 +78,6 @@ Layer::~Layer()
     }
 }
 
-void Layer::destroy(RefBase const* base) {
-    mFlinger->destroyLayer(static_cast<LayerBase const*>(base));
-}
-
 status_t Layer::setToken(const sp<UserClient>& userClient,
         SharedClient* sharedClient, int32_t token)
 {
@@ -88,8 +85,28 @@ status_t Layer::setToken(const sp<UserClient>& userClient,
             sharedClient, token, mBufferManager.getDefaultBufferCount(),
             getIdentity());
 
-    status_t err = mUserClientRef.setToken(userClient, lcblk, token);
 
+    sp<UserClient> ourClient(mUserClientRef.getClient());
+
+    /*
+     *  Here it is guaranteed that userClient != ourClient
+     *  (see UserClient::getTokenForSurface()).
+     *
+     *  We release the token used by this surface in ourClient below.
+     *  This should be safe to do so now, since this layer won't be attached
+     *  to this client, it should be okay to reuse that id.
+     *
+     *  If this causes problems, an other solution would be to keep a list
+     *  of all the {UserClient, token} ever used and release them when the
+     *  Layer is destroyed.
+     *
+     */
+
+    if (ourClient != 0) {
+        ourClient->detachLayer(this);
+    }
+
+    status_t err = mUserClientRef.setToken(userClient, lcblk, token);
     LOGE_IF(err != NO_ERROR,
             "ClientRef::setToken(%p, %p, %u) failed",
             userClient.get(), lcblk.get(), token);
@@ -125,7 +142,20 @@ void Layer::onRemoved()
 
 sp<LayerBaseClient::Surface> Layer::createSurface() const
 {
-    return mSurface;
+    sp<Surface> sur(new SurfaceLayer(mFlinger, const_cast<Layer *>(this)));
+    return sur;
+}
+
+status_t Layer::ditch()
+{
+    // NOTE: Called from the main UI thread
+
+    // the layer is not on screen anymore. free as much resources as possible
+    mFreezeLock.clear();
+
+    Mutex::Autolock _l(mLock);
+    mWidth = mHeight = 0;
+    return NO_ERROR;
 }
 
 status_t Layer::setBuffers( uint32_t w, uint32_t h,
@@ -160,15 +190,82 @@ status_t Layer::setBuffers( uint32_t w, uint32_t h,
     mReqHeight = h;
 
     mSecure = (flags & ISurfaceComposer::eSecure) ? true : false;
-    mNeedsBlending = (info.h_alpha - info.l_alpha) > 0;
+    mProtectedByApp = (flags & ISurfaceComposer::eProtectedByApp) ? true : false;
+    mProtectedByDRM = (flags & ISurfaceComposer::eProtectedByDRM) ? true : false;
+    mNeedsBlending = (info.h_alpha - info.l_alpha) > 0 &&
+            (flags & ISurfaceComposer::eOpaque) == 0;
 
     // we use the red index
     int displayRedSize = displayInfo.getSize(PixelFormatInfo::INDEX_RED);
     int layerRedsize = info.getSize(PixelFormatInfo::INDEX_RED);
     mNeedsDithering = layerRedsize > displayRedSize;
 
-    mSurface = new SurfaceLayer(mFlinger, this);
     return NO_ERROR;
+}
+
+void Layer::setGeometry(hwc_layer_t* hwcl)
+{
+    hwcl->compositionType = HWC_FRAMEBUFFER;
+    hwcl->hints = 0;
+    hwcl->flags = 0;
+    hwcl->transform = 0;
+    hwcl->blending = HWC_BLENDING_NONE;
+
+    // we can't do alpha-fade with the hwc HAL
+    const State& s(drawingState());
+    if (s.alpha < 0xFF) {
+        hwcl->flags = HWC_SKIP_LAYER;
+        return;
+    }
+
+    // we can only handle simple transformation
+    if (mOrientation & Transform::ROT_INVALID) {
+        hwcl->flags = HWC_SKIP_LAYER;
+        return;
+    }
+
+    Transform tr(Transform(mOrientation) * Transform(mBufferTransform));
+    hwcl->transform = tr.getOrientation();
+
+    if (needsBlending()) {
+        hwcl->blending = mPremultipliedAlpha ?
+                HWC_BLENDING_PREMULT : HWC_BLENDING_COVERAGE;
+    }
+
+    hwcl->displayFrame.left   = mTransformedBounds.left;
+    hwcl->displayFrame.top    = mTransformedBounds.top;
+    hwcl->displayFrame.right  = mTransformedBounds.right;
+    hwcl->displayFrame.bottom = mTransformedBounds.bottom;
+
+    hwcl->visibleRegionScreen.rects =
+            reinterpret_cast<hwc_rect_t const *>(
+                    visibleRegionScreen.getArray(
+                            &hwcl->visibleRegionScreen.numRects));
+}
+
+void Layer::setPerFrameData(hwc_layer_t* hwcl) {
+    sp<GraphicBuffer> buffer(mBufferManager.getActiveBuffer());
+    if (buffer == NULL) {
+        // this can happen if the client never drew into this layer yet,
+        // or if we ran out of memory. In that case, don't let
+        // HWC handle it.
+        hwcl->flags |= HWC_SKIP_LAYER;
+        hwcl->handle = NULL;
+        return;
+    }
+    hwcl->handle = buffer->handle;
+
+    if (!mBufferCrop.isEmpty()) {
+        hwcl->sourceCrop.left   = mBufferCrop.left;
+        hwcl->sourceCrop.top    = mBufferCrop.top;
+        hwcl->sourceCrop.right  = mBufferCrop.right;
+        hwcl->sourceCrop.bottom = mBufferCrop.bottom;
+    } else {
+        hwcl->sourceCrop.left   = 0;
+        hwcl->sourceCrop.top    = 0;
+        hwcl->sourceCrop.right  = buffer->width;
+        hwcl->sourceCrop.bottom = buffer->height;
+    }
 }
 
 void Layer::reloadTexture(const Region& dirty)
@@ -241,30 +338,46 @@ void Layer::onDraw(const Region& clip) const
         }
         return;
     }
-
-#ifdef USE_COMPOSITION_BYPASS
-    sp<GraphicBuffer> buffer(mBufferManager.getActiveBuffer());
-    if ((buffer != NULL) && (buffer->transform)) {
-        // Here we have a "bypass" buffer, but we need to composite it
-        // most likely because it's not fullscreen anymore.
-        // Since the buffer may have a transformation applied by the client
-        // we need to inverse this transformation here.
-
-        // calculate the inverse of the buffer transform
-        const uint32_t mask = HAL_TRANSFORM_FLIP_V | HAL_TRANSFORM_FLIP_H;
-        const uint32_t bufferTransformInverse = buffer->transform ^ mask;
-
-        // To accomplish the inverse transform, we use "mBufferTransform"
-        // which is not used by Layer.cpp
-        const_cast<Layer*>(this)->mBufferTransform = bufferTransformInverse;
-        drawWithOpenGL(clip, tex);
-        // reset to "no transfrom"
-        const_cast<Layer*>(this)->mBufferTransform = 0;
-        return;
-    }
-#endif
-
     drawWithOpenGL(clip, tex);
+}
+
+// As documented in libhardware header, formats in the range
+// 0x100 - 0x1FF are specific to the HAL implementation, and
+// are known to have no alpha channel
+// TODO: move definition for device-specific range into
+// hardware.h, instead of using hard-coded values here.
+#define HARDWARE_IS_DEVICE_FORMAT(f) ((f) >= 0x100 && (f) <= 0x1FF)
+
+bool Layer::needsBlending(const sp<GraphicBuffer>& buffer) const
+{
+    // If buffers where set with eOpaque flag, all buffers are known to
+    // be opaque without having to check their actual format
+    if (mNeedsBlending && buffer != NULL) {
+        PixelFormat format = buffer->getPixelFormat();
+
+        if (HARDWARE_IS_DEVICE_FORMAT(format)) {
+            return false;
+        }
+
+        PixelFormatInfo info;
+        status_t err = getPixelFormatInfo(format, &info);
+        if (!err && info.h_alpha <= info.l_alpha) {
+            return false;
+        }
+    }
+
+    // Return opacity as determined from flags and format options
+    // passed to setBuffers()
+    return mNeedsBlending;
+}
+
+bool Layer::needsBlending() const
+{
+    if (mBufferManager.hasActiveBuffer()) {
+        return needsBlending(mBufferManager.getActiveBuffer());
+    }
+
+    return mNeedsBlending;
 }
 
 bool Layer::needsFiltering() const
@@ -291,8 +404,10 @@ status_t Layer::setBufferCount(int bufferCount)
 
     // NOTE: lcblk->resize() is protected by an internal lock
     status_t err = lcblk->resize(bufferCount);
-    if (err == NO_ERROR)
-        mBufferManager.resize(bufferCount);
+    if (err == NO_ERROR) {
+        EGLDisplay dpy(mFlinger->graphicPlane(0).getEGLDisplay());
+        mBufferManager.resize(bufferCount, mFlinger, dpy);
+    }
 
     return err;
 }
@@ -324,14 +439,13 @@ sp<GraphicBuffer> Layer::requestBuffer(int index,
      * buffer 'index' as our front buffer.
      */
 
-    uint32_t w, h, f, bypass;
+    status_t err = NO_ERROR;
+    uint32_t w, h, f;
     { // scope for the lock
         Mutex::Autolock _l(mLock);
 
-        bypass = mBypassState;
-
         // zero means default
-        mFixedSize = reqWidth && reqHeight;
+        const bool fixedSize = reqWidth && reqHeight;
         if (!reqFormat) reqFormat = mFormat;
         if (!reqWidth)  reqWidth = mWidth;
         if (!reqHeight) reqHeight = mHeight;
@@ -345,6 +459,7 @@ sp<GraphicBuffer> Layer::requestBuffer(int index,
             mReqWidth  = reqWidth;
             mReqHeight = reqHeight;
             mReqFormat = reqFormat;
+            mFixedSize = fixedSize;
             mNeedsScaling = mWidth != mReqWidth || mHeight != mReqHeight;
 
             lcblk->reallocateAllExcept(index);
@@ -354,40 +469,9 @@ sp<GraphicBuffer> Layer::requestBuffer(int index,
     // here we have to reallocate a new buffer because the buffer could be
     // used as the front buffer, or by a client in our process
     // (eg: status bar), and we can't release the handle under its feet.
-    uint32_t effectiveUsage = getEffectiveUsage(usage);
-
-    status_t err = NO_MEMORY;
-
-#ifdef USE_COMPOSITION_BYPASS
-    if (!mSecure && bypass && (effectiveUsage & GRALLOC_USAGE_HW_RENDER)) {
-        // always allocate a buffer matching the screen size. the size
-        // may be different from (w,h) if the buffer is rotated.
-        const DisplayHardware& hw(graphicPlane(0).displayHardware());
-        int32_t w = hw.getWidth();
-        int32_t h = hw.getHeight();
-        int32_t f = hw.getFormat();
-
-        buffer = new GraphicBuffer(w, h, f, effectiveUsage | GRALLOC_USAGE_HW_FB);
-        err = buffer->initCheck();
-        buffer->transform = uint8_t(getOrientation());
-
-        if (err != NO_ERROR) {
-            // allocation didn't succeed, probably because an older bypass
-            // window hasn't released all its resources yet.
-            ClientRef::Access sharedClient(mUserClientRef);
-            SharedBufferServer* lcblk(sharedClient.get());
-            if (lcblk) {
-                // all buffers need reallocation
-                lcblk->reallocateAll();
-            }
-        }
-    }
-#endif
-
-    if (err != NO_ERROR) {
-        buffer = new GraphicBuffer(w, h, f, effectiveUsage);
-        err = buffer->initCheck();
-    }
+    const uint32_t effectiveUsage = getEffectiveUsage(usage);
+    buffer = new GraphicBuffer(w, h, f, effectiveUsage);
+    err = buffer->initCheck();
 
     if (err || buffer->handle == 0) {
         GraphicBuffer::dumpAllocationsToSystemLog();
@@ -431,40 +515,11 @@ uint32_t Layer::getEffectiveUsage(uint32_t usage) const
         // request EGLImage for all buffers
         usage |= GraphicBuffer::USAGE_HW_TEXTURE;
     }
+    if (mProtectedByApp || mProtectedByDRM) {
+        // need a hardware-protected path to external video sink
+        usage |= GraphicBuffer::USAGE_PROTECTED;
+    }
     return usage;
-}
-
-bool Layer::setBypass(bool enable)
-{
-    Mutex::Autolock _l(mLock);
-
-    if (mNeedsScaling || mNeedsFiltering) {
-        return false;
-    }
-
-    if (mBypassState != enable) {
-        mBypassState = enable;
-        ClientRef::Access sharedClient(mUserClientRef);
-        SharedBufferServer* lcblk(sharedClient.get());
-        if (lcblk) {
-            // all buffers need reallocation
-            lcblk->reallocateAll();
-        }
-    }
-
-    return true;
-}
-
-void Layer::updateBuffersOrientation()
-{
-    sp<GraphicBuffer> buffer(getBypassBuffer());
-    if (buffer != NULL && mOrientation != buffer->transform) {
-        ClientRef::Access sharedClient(mUserClientRef);
-        SharedBufferServer* lcblk(sharedClient.get());
-        if (lcblk) { // all buffers need reallocation
-            lcblk->reallocateAll();
-        }
-    }
 }
 
 uint32_t Layer::doTransaction(uint32_t flags)
@@ -570,14 +625,31 @@ void Layer::lockPageFlip(bool& recomputeVisibleRegions)
     }
 
     // we retired a buffer, which becomes the new front buffer
+
+    const bool noActiveBuffer = !mBufferManager.hasActiveBuffer();
+    const bool activeBlending =
+            noActiveBuffer ? true : needsBlending(mBufferManager.getActiveBuffer());
+
     if (mBufferManager.setActiveBufferIndex(buf) < NO_ERROR) {
         LOGE("retireAndLock() buffer index (%d) out of range", int(buf));
         mPostedDirtyRegion.clear();
         return;
     }
 
+    if (noActiveBuffer) {
+        // we didn't have an active buffer, we need to recompute
+        // our visible region
+        recomputeVisibleRegions = true;
+    }
+
     sp<GraphicBuffer> newFrontBuffer(getBuffer(buf));
     if (newFrontBuffer != NULL) {
+        if (!noActiveBuffer && activeBlending != needsBlending(newFrontBuffer)) {
+            // new buffer has different opacity than previous active buffer, need
+            // to recompute visible regions accordingly
+            recomputeVisibleRegions = true;
+        }
+
         // get the dirty region
         // compute the posted region
         const Region dirty(lcblk->getDirtyRegion(buf));
@@ -701,9 +773,9 @@ void Layer::dump(String8& result, char* buffer, size_t SIZE) const
     snprintf(buffer, SIZE,
             "      "
             "format=%2d, [%3ux%3u:%3u] [%3ux%3u:%3u],"
-            " freezeLock=%p, bypass=%d, dq-q-time=%u us\n",
+            " freezeLock=%p, dq-q-time=%u us\n",
             mFormat, w0, h0, s0, w1, h1, s1,
-            getFreezeLock().get(), mBypassState, totalTime);
+            getFreezeLock().get(), totalTime);
 
     result.append(buffer);
 }
@@ -768,7 +840,7 @@ Layer::ClientRef::Access::~Access()
 
 Layer::BufferManager::BufferManager(TextureManager& tm)
     : mNumBuffers(NUM_BUFFERS), mTextureManager(tm),
-      mActiveBuffer(-1), mFailover(false)
+      mActiveBufferIndex(-1), mFailover(false)
 {
 }
 
@@ -776,9 +848,52 @@ Layer::BufferManager::~BufferManager()
 {
 }
 
-status_t Layer::BufferManager::resize(size_t size)
+status_t Layer::BufferManager::resize(size_t size,
+        const sp<SurfaceFlinger>& flinger, EGLDisplay dpy)
 {
     Mutex::Autolock _l(mLock);
+
+    if (size < mNumBuffers) {
+        // Move the active texture into slot 0
+        BufferData activeBufferData = mBufferData[mActiveBufferIndex];
+        mBufferData[mActiveBufferIndex] = mBufferData[0];
+        mBufferData[0] = activeBufferData;
+        mActiveBufferIndex = 0;
+
+        // Free the buffers that are no longer needed.
+        for (size_t i = size; i < mNumBuffers; i++) {
+            mBufferData[i].buffer = 0;
+
+            // Create a message to destroy the textures on SurfaceFlinger's GL
+            // thread.
+            class MessageDestroyTexture : public MessageBase {
+                Image mTexture;
+                EGLDisplay mDpy;
+             public:
+                MessageDestroyTexture(const Image& texture, EGLDisplay dpy)
+                    : mTexture(texture), mDpy(dpy) { }
+                virtual bool handler() {
+                    status_t err = Layer::BufferManager::destroyTexture(
+                            &mTexture, mDpy);
+                    LOGE_IF(err<0, "error destroying texture: %d (%s)",
+                            mTexture.name, strerror(-err));
+                    return true; // XXX: err == 0;  ????
+                }
+            };
+
+            MessageDestroyTexture *msg = new MessageDestroyTexture(
+                    mBufferData[i].texture, dpy);
+
+            // Don't allow this texture to be cleaned up by
+            // BufferManager::destroy.
+            mBufferData[i].texture.name = -1U;
+            mBufferData[i].texture.image = EGL_NO_IMAGE_KHR;
+
+            // Post the message to the SurfaceFlinger object.
+            flinger->postMessageAsync(msg);
+        }
+    }
+
     mNumBuffers = size;
     return NO_ERROR;
 }
@@ -789,33 +904,33 @@ sp<GraphicBuffer> Layer::BufferManager::getBuffer(size_t index) const {
 }
 
 status_t Layer::BufferManager::setActiveBufferIndex(size_t index) {
-    mActiveBuffer = index;
+    BufferData const * const buffers = mBufferData;
+    Mutex::Autolock _l(mLock);
+    mActiveBuffer = buffers[index].buffer;
+    mActiveBufferIndex = index;
     return NO_ERROR;
 }
 
 size_t Layer::BufferManager::getActiveBufferIndex() const {
-    return mActiveBuffer;
+    return mActiveBufferIndex;
 }
 
 Texture Layer::BufferManager::getActiveTexture() const {
     Texture res;
-    if (mFailover || mActiveBuffer<0) {
+    if (mFailover || mActiveBufferIndex<0) {
         res = mFailoverTexture;
     } else {
-        static_cast<Image&>(res) = mBufferData[mActiveBuffer].texture;
+        static_cast<Image&>(res) = mBufferData[mActiveBufferIndex].texture;
     }
     return res;
 }
 
 sp<GraphicBuffer> Layer::BufferManager::getActiveBuffer() const {
-    sp<GraphicBuffer> result;
-    const ssize_t activeBuffer = mActiveBuffer;
-    if (activeBuffer >= 0) {
-        BufferData const * const buffers = mBufferData;
-        Mutex::Autolock _l(mLock);
-        result = buffers[activeBuffer].buffer;
-    }
-    return result;
+    return mActiveBuffer;
+}
+
+bool Layer::BufferManager::hasActiveBuffer() const {
+    return mActiveBufferIndex >= 0;
 }
 
 sp<GraphicBuffer> Layer::BufferManager::detachBuffer(size_t index)
@@ -860,7 +975,7 @@ status_t Layer::BufferManager::initEglImage(EGLDisplay dpy,
         const sp<GraphicBuffer>& buffer)
 {
     status_t err = NO_INIT;
-    ssize_t index = mActiveBuffer;
+    ssize_t index = mActiveBufferIndex;
     if (index >= 0) {
         if (!mFailover) {
             Image& texture(mBufferData[index].texture);

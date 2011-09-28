@@ -44,7 +44,7 @@ class UserClient;
 
 // ---------------------------------------------------------------------------
 
-class Layer : public LayerBaseClient, private RefBase::Destroyer
+class Layer : public LayerBaseClient
 {
 public:
             Layer(SurfaceFlinger* flinger, DisplayID display,
@@ -68,23 +68,23 @@ public:
     bool isFixedSize() const;
 
     // LayerBase interface
+    virtual void setGeometry(hwc_layer_t* hwcl);
+    virtual void setPerFrameData(hwc_layer_t* hwcl);
     virtual void drawForSreenShot() const;
     virtual void onDraw(const Region& clip) const;
     virtual uint32_t doTransaction(uint32_t transactionFlags);
     virtual void lockPageFlip(bool& recomputeVisibleRegions);
     virtual void unlockPageFlip(const Transform& planeTransform, Region& outDirtyRegion);
-    virtual bool needsBlending() const      { return mNeedsBlending; }
+    virtual bool needsBlending(const sp<GraphicBuffer>& buffer) const;
+    virtual bool needsBlending() const;
     virtual bool needsDithering() const     { return mNeedsDithering; }
     virtual bool needsFiltering() const;
     virtual bool isSecure() const           { return mSecure; }
+    virtual bool isProtectedByApp() const   { return mProtectedByApp; }
+    virtual bool isProtectedByDRM() const   { return mProtectedByDRM; }
     virtual sp<Surface> createSurface() const;
+    virtual status_t ditch();
     virtual void onRemoved();
-    virtual bool setBypass(bool enable);
-
-    void updateBuffersOrientation();
-
-    inline sp<GraphicBuffer> getBypassBuffer() const {
-        return mBufferManager.getActiveBuffer(); }
 
     // only for debugging
     inline sp<GraphicBuffer> getBuffer(int i) const {
@@ -94,7 +94,6 @@ public:
         return mFreezeLock; }
 
 protected:
-    virtual void destroy(RefBase const* base);
     virtual void dump(String8& result, char* scratch, size_t size) const;
 
 private:
@@ -167,7 +166,8 @@ private:
         size_t              mNumBuffers;
         Texture             mFailoverTexture;
         TextureManager&     mTextureManager;
-        ssize_t             mActiveBuffer;
+        ssize_t             mActiveBufferIndex;
+        sp<GraphicBuffer>   mActiveBuffer;
         bool                mFailover;
         static status_t destroyTexture(Image* tex, EGLDisplay dpy);
 
@@ -180,7 +180,8 @@ private:
         sp<GraphicBuffer> detachBuffer(size_t index);
         status_t attachBuffer(size_t index, const sp<GraphicBuffer>& buffer);
         // resize the number of active buffers
-        status_t resize(size_t size);
+        status_t resize(size_t size, const sp<SurfaceFlinger>& flinger,
+                EGLDisplay dpy);
 
         // ----------------------------------------------
         // must be called from GL thread
@@ -190,6 +191,8 @@ private:
         size_t getActiveBufferIndex() const;
         // return the active buffer
         sp<GraphicBuffer> getActiveBuffer() const;
+        // return wether we have an active buffer
+        bool hasActiveBuffer() const;
         // return the active texture (or fail-over)
         Texture getActiveTexture() const;
         // frees resources associated with all buffers
@@ -211,14 +214,15 @@ private:
     ClientRef mUserClientRef;
 
     // constants
-    sp<Surface> mSurface;
     PixelFormat mFormat;
     const GLExtensions& mGLExtensions;
     bool mNeedsBlending;
     bool mNeedsDithering;
 
     // page-flip thread (currently main thread)
-    bool mSecure;
+    bool mSecure;         // no screenshots
+    bool mProtectedByApp; // application requires protected path to external sink
+    bool mProtectedByDRM; // DRM agent requires protected path to external sink
     Region mPostedDirtyRegion;
 
     // page-flip thread and transaction thread (currently main thread)
@@ -237,7 +241,6 @@ private:
     uint32_t mReqFormat;
     bool mNeedsScaling;
     bool mFixedSize;
-    bool mBypassState;
 };
 
 // ---------------------------------------------------------------------------

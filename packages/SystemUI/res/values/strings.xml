@@ -17,59 +17,102 @@
  */
 -->
 <resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
-    <!-- Name of the status bar as seen in the applications info settings page. -->
-    <string name="app_label">Status Bar</string>
+    <!-- Name of the status bar as seen in the applications info settings page. [CHAR LIMIT=12] -->
+    <string name="app_label">System UI</string>
 
     <!-- The text for the button in the notification window-shade that clears
-         all of the currently visible notifications. -->
+         all of the currently visible notifications. [CHAR LIMIT=10]-->
     <string name="status_bar_clear_all_button">Clear</string>
 
+    <!-- The text for the button in the notification window-shade that turns
+         on do not disturb mode, where notifications no longer show their ticker,
+         no sound plays, and no icons are visible.  The windowshade continues to show
+         the notifications. [CHAR LIMIT=25]-->
+    <string name="status_bar_do_not_disturb_button">Do not disturb</string>
+
+    <!-- The text for the button in the notification window-shade that turns
+         off do not disturb mode.  After clicking this, notifications will be
+         shown again. [CHAR LIMIT=25] -->
+    <string name="status_bar_please_disturb_button">Show notifications</string>
+
+
     <!-- The label in the bar at the top of the status bar when there are no notifications
-         showing. -->
+         showing.  [CHAR LIMIT=40]-->
     <string name="status_bar_no_notifications_title">No notifications</string>
 
     <!-- The label for the group of notifications for ongoing events in the opened version of
          the status bar.  An ongoing call is the prime example of this.  The MP3 music player
-         might be another example.  -->
+         might be another example.   [CHAR LIMIT=40] -->
     <string name="status_bar_ongoing_events_title">Ongoing</string>
 
     <!-- The label for the group of notifications for recent events in the opened version of
-         the status bar.  Recently received text messsages (SMS), emails, calendar alerts, etc. -->
+         the status bar.  Recently received text messsages (SMS), emails, calendar alerts, etc.
+         [CHAR LIMIT=40] -->
     <string name="status_bar_latest_events_title">Notifications</string>
 
-    <!-- When the battery is low, this is displayed to the user in a dialog.  The title of the low battery alert. -->
+    <!-- When the battery is low, this is displayed to the user in a dialog.  The title of the low battery alert.  [CHAR LIMIT=NONE]-->
     <string name="battery_low_title">Please connect charger</string>
 
-    <!-- When the battery is low, this is displayed to the user in a dialog. The subtitle of the low battery alert. -->
-    <string name="battery_low_subtitle">The battery is getting low:</string>
+    <!-- When the battery is low, this is displayed to the user in a dialog. The subtitle of the low battery alert. [CHAR LIMIT=NONE] -->
+    <string name="battery_low_subtitle">The battery is getting low.</string>
 
-    <!-- A message that appears when the battery level is getting low in a dialog.  This is appened to the subtitle of the low battery alert. -->
-    <string name="battery_low_percent_format"><xliff:g id="number">%d%%</xliff:g>
-    or less remaining.</string>
+    <!-- A message that appears when the battery level is getting low in a dialog.  This is
+        appened to the subtitle of the low battery alert.  "number" is the percentage of battery
+        remaining [CHAR LIMIT=none]-->
+    <string name="battery_low_percent_format"><xliff:g id="number">%d%%</xliff:g> remaining</string>
+
+    <!-- A message that appears when a USB charger is plugged in and the device does not
+    support charging on it.  That is, a charger that fits into the USB port and goes into
+    a wall socket, not into a computer. (This happens because some devices require more
+    current than the USB spec allows.  [CHAR LIMIT=NONE] -->
+    <string name="invalid_charger">USB charging not supported.\nUse only the supplied charger.</string>
 
     <!-- When the battery is low, this is the label of the button to go to the
-         power usage activity to find out what drained the battery. -->
+         power usage activity to find out what drained the battery.  [CHAR LIMIT=30] -->
     <string name="battery_low_why">Battery use</string>
 
-    <!-- Prompt for the USB accessory permission dialog [CHAR LIMIT=80] -->
-    <string name="usb_accessory_permission_prompt">Allow the application %1$s to access the USB accessory?</string>
+    <!-- Name of the button that links to the Settings app. [CHAR LIMIT=NONE] -->
+    <string name="status_bar_settings_settings_button">Settings</string>
 
-    <!-- Prompt for the USB device confirm dialog [CHAR LIMIT=80] -->
-    <string name="usb_device_confirm_prompt">Open %1$s when this USB device is connected?</string>
+    <!-- Name of the button that links to the Wifi settings screen. [CHAR LIMIT=NONE] -->
+    <string name="status_bar_settings_wifi_button">Wi-Fi</string>
 
-    <!-- Prompt for the USB accessory confirm dialog [CHAR LIMIT=80] -->
-    <string name="usb_accessory_confirm_prompt">Open %1$s when this USB accessory is connected?</string>
+    <!-- Label in the system panel for airplane mode (all radios are turned off)[CHAR LIMIT=30] -->
+    <string name="status_bar_settings_airplane">Airplane mode</string>
 
-    <!-- Prompt for the USB accessory URI dialog [CHAR LIMIT=80] -->
-    <string name="usb_accessory_uri_prompt">No installed applications work with this USB accessory. Learn more about this accessory at <xliff:g id="url">%1$s</xliff:g></string>
+    <!-- Label in system panel saying the device will use the orientation sensor to rotate [CHAR LIMIT=30] -->
+    <string name="status_bar_settings_rotation_lock">Lock screen orientation</string>
 
-    <!-- Title for USB accessory dialog.  Used when the name of the accessory cannot be determined.  [CHAR LIMIT=50] -->
-    <string name="title_usb_accessory">USB accessory</string>
+    <!-- Abbreviation / label for mute brightness mode button. Should be all caps. [CHAR LIMIT=6] -->
+    <string name="status_bar_settings_mute_label">MUTE</string>
 
-    <!-- View button label for USB dialogs.  [CHAR LIMIT=15] -->
-    <string name="label_view">View</string>
+    <!-- Abbreviation / label for automatic brightness mode button. Should be all caps. [CHAR LIMIT=6] -->
+    <string name="status_bar_settings_auto_brightness_label">AUTO</string>
 
-    <!-- Checkbox label for USB accessory dialogs.  [CHAR LIMIT=50] -->
-    <string name="always_use_accessory">Use by default for this USB accessory</string>
+    <!-- Label in system panel saying the device will show notifications [CHAR LIMIT=30] -->
+    <string name="status_bar_settings_notifications">Notifications</string>
 
+    <!-- Text to display next to the graphical battery meter.  [CHAR LIMIT=3] -->
+    <string name="status_bar_settings_battery_meter_format" translatable="false">
+        <xliff:g id="number">%d</xliff:g><xliff:g id="percent">%%</xliff:g>
+    </string>
+
+    <!-- Separator for PLMN and SPN in network name. -->
+    <string name="status_bar_network_name_separator" translatable="false">"\n"</string>
+
+    <!-- Recent Tasks dialog: title [CHAR LIMIT=30] -->
+    <string name="recent_tasks_title">Recent</string>
+    <!-- Recent Tasks dialog: message when there are no recent applications [CHAR LIMIT=NONE]-->
+    <string name="recent_tasks_empty">No recent applications.</string>
+
+    <!-- Recent apps label. Shown as title on recent apps panel -->
+    <string name="recent_tasks_app_label">Apps</string>
+
+    <!-- Network connection string for Bluetooth Reverse Tethering -->
+    <string name="bluetooth_tethered">Bluetooth tethered</string>
+    <!-- Title of a button to open the settings for input methods [CHAR LIMIT=30] -->
+    <string name="status_bar_input_method_settings_configure_input_methods">Configure input methods</string>
+
+    <!-- Label of a toggle switch to disable use of the physical keyboard in favor of the IME. [CHAR LIMIT=25] -->
+    <string name="status_bar_use_physical_keyboard">Use physical keyboard</string>
 </resources>

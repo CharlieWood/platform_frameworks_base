@@ -65,7 +65,7 @@ import java.util.concurrent.locks.ReentrantLock;
  * Surface is created and destroyed as the window is shown and hidden.
  * 
  * <p>One of the purposes of this class is to provide a surface in which a
- * secondary thread can render in to the screen.  If you are going to use it
+ * secondary thread can render into the screen.  If you are going to use it
  * this way, you need to be aware of some threading semantics:
  * 
  * <ul>
@@ -145,7 +145,6 @@ public class SurfaceView extends View {
      * compatibility with applications assuming this format.
      */
     int mRequestedFormat = PixelFormat.RGB_565;
-    int mRequestedType = -1;
 
     boolean mHaveFrame = false;
     boolean mDestroyReportNeeded = false;
@@ -158,13 +157,25 @@ public class SurfaceView extends View {
     int mWidth = -1;
     int mHeight = -1;
     int mFormat = -1;
-    int mType = -1;
     final Rect mSurfaceFrame = new Rect();
+    Rect mTmpDirty;
     int mLastSurfaceWidth = -1, mLastSurfaceHeight = -1;
     boolean mUpdateWindowNeeded;
     boolean mReportDrawNeeded;
     private Translator mTranslator;
-    
+
+    private final ViewTreeObserver.OnPreDrawListener mDrawListener =
+            new ViewTreeObserver.OnPreDrawListener() {
+                @Override
+                public boolean onPreDraw() {
+                    // reposition ourselves where the surface is 
+                    mHaveFrame = getWidth() > 0 && getHeight() > 0;
+                    updateWindow(false, false);
+                    return true;
+                }
+            };
+    private boolean mGlobalListenersAdded;
+
     public SurfaceView(Context context) {
         super(context);
         init();
@@ -202,7 +213,13 @@ public class SurfaceView extends View {
         mLayout.token = getWindowToken();
         mLayout.setTitle("SurfaceView");
         mViewVisibility = getVisibility() == VISIBLE;
-        getViewTreeObserver().addOnScrollChangedListener(mScrollChangedListener);
+
+        if (!mGlobalListenersAdded) {
+            ViewTreeObserver observer = getViewTreeObserver();
+            observer.addOnScrollChangedListener(mScrollChangedListener);
+            observer.addOnPreDrawListener(mDrawListener);
+            mGlobalListenersAdded = true;
+        }
     }
 
     @Override
@@ -263,7 +280,13 @@ public class SurfaceView extends View {
     
     @Override
     protected void onDetachedFromWindow() {
-        getViewTreeObserver().removeOnScrollChangedListener(mScrollChangedListener);
+        if (mGlobalListenersAdded) {
+            ViewTreeObserver observer = getViewTreeObserver();
+            observer.removeOnScrollChangedListener(mScrollChangedListener);
+            observer.removeOnPreDrawListener(mDrawListener);
+            mGlobalListenersAdded = false;
+        }
+
         mRequestedVisible = false;
         updateWindow(false, false);
         mHaveFrame = false;
@@ -271,6 +294,7 @@ public class SurfaceView extends View {
             try {
                 mSession.remove(mWindow);
             } catch (RemoteException ex) {
+                // Not much we can do here...
             }
             mWindow = null;
         }
@@ -282,8 +306,12 @@ public class SurfaceView extends View {
 
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-        int width = getDefaultSize(mRequestedWidth, widthMeasureSpec);
-        int height = getDefaultSize(mRequestedHeight, heightMeasureSpec);
+        int width = mRequestedWidth >= 0
+                ? resolveSizeAndState(mRequestedWidth, widthMeasureSpec, 0)
+                : getDefaultSize(0, widthMeasureSpec);
+        int height = mRequestedHeight >= 0
+                ? resolveSizeAndState(mRequestedHeight, heightMeasureSpec, 0)
+                : getDefaultSize(0, heightMeasureSpec);
         setMeasuredDimension(width, height);
     }
     
@@ -343,9 +371,6 @@ public class SurfaceView extends View {
                 canvas.drawColor(0, PorterDuff.Mode.CLEAR);
             }
         }
-        // reposition ourselves where the surface is 
-        mHaveFrame = true;
-        updateWindow(false, false);
         super.dispatchDraw(canvas);
     }
 
@@ -424,9 +449,9 @@ public class SurfaceView extends View {
         final boolean sizeChanged = mWidth != myWidth || mHeight != myHeight;
         final boolean visibleChanged = mVisible != mRequestedVisible
                 || mNewSurfaceNeeded;
-        final boolean typeChanged = mType != mRequestedType;
+
         if (force || creating || formatChanged || sizeChanged || visibleChanged
-            || typeChanged || mLeft != mLocation[0] || mTop != mLocation[1]
+            || mLeft != mLocation[0] || mTop != mLocation[1]
             || mUpdateWindowNeeded || mReportDrawNeeded || redrawNeeded) {
 
             if (localLOGV) Log.i(TAG, "Changes: creating=" + creating
@@ -442,7 +467,6 @@ public class SurfaceView extends View {
                 mWidth = myWidth;
                 mHeight = myHeight;
                 mFormat = mRequestedFormat;
-                mType = mRequestedType;
 
                 // Scaling/Translate window's layout here because mLayout is not used elsewhere.
                 
@@ -466,8 +490,6 @@ public class SurfaceView extends View {
                 if (!getContext().getResources().getCompatibilityInfo().supportsScreen()) {
                     mLayout.flags |= WindowManager.LayoutParams.FLAG_COMPATIBLE_WINDOW;
                 }
-
-                mLayout.memoryType = mRequestedType;
 
                 if (mWindow == null) {
                     mWindow = new MyWindow(this);
@@ -712,24 +734,11 @@ public class SurfaceView extends View {
             }
         }
 
-        public void setType(int type) {
-            switch (type) {
-            case SURFACE_TYPE_HARDWARE:
-            case SURFACE_TYPE_GPU:
-                // these are deprecated, treat as "NORMAL"
-                type = SURFACE_TYPE_NORMAL;
-                break;
-            }
-            switch (type) {
-            case SURFACE_TYPE_NORMAL:
-            case SURFACE_TYPE_PUSH_BUFFERS:
-                mRequestedType = type;
-                if (mWindow != null) {
-                    updateWindow(false, false);
-                }
-                break;
-            }
-        }
+        /**
+         * @deprecated setType is now ignored.
+         */
+        @Deprecated
+        public void setType(int type) { }
 
         public void setKeepScreenOn(boolean screenOn) {
             Message msg = mHandler.obtainMessage(KEEP_SCREEN_ON_MSG);
@@ -746,10 +755,6 @@ public class SurfaceView extends View {
         }
 
         private final Canvas internalLockCanvas(Rect dirty) {
-            if (mType == SURFACE_TYPE_PUSH_BUFFERS) {
-                throw new BadSurfaceTypeException(
-                        "Surface type is SURFACE_TYPE_PUSH_BUFFERS");
-            }
             mSurfaceLock.lock();
 
             if (localLOGV) Log.i(TAG, "Locking canvas... stopped="
@@ -757,9 +762,16 @@ public class SurfaceView extends View {
 
             Canvas c = null;
             if (!mDrawingStopped && mWindow != null) {
-                Rect frame = dirty != null ? dirty : mSurfaceFrame;
+                if (dirty == null) {
+                    if (mTmpDirty == null) {
+                        mTmpDirty = new Rect();
+                    }
+                    mTmpDirty.set(mSurfaceFrame);
+                    dirty = mTmpDirty;
+                }
+
                 try {
-                    c = mSurface.lockCanvas(frame);
+                    c = mSurface.lockCanvas(dirty);
                 } catch (Exception e) {
                     Log.e(LOG_TAG, "Exception locking surface", e);
                 }

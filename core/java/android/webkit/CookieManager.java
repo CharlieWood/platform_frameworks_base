@@ -19,6 +19,7 @@ package android.webkit;
 import android.net.ParseException;
 import android.net.WebAddress;
 import android.net.http.AndroidHttpClient;
+import android.os.AsyncTask;
 import android.util.Log;
 
 
@@ -97,6 +98,8 @@ public final class CookieManager {
             <String, ArrayList<Cookie>>(MAX_DOMAIN_COUNT, 0.75f, true);
 
     private boolean mAcceptCookie = true;
+
+    private int pendingCookieOperations = 0;
 
     /**
      * This contains a list of 2nd-level domains that aren't allowed to have
@@ -262,6 +265,11 @@ public final class CookieManager {
      * @param accept TRUE if accept cookie
      */
     public synchronized void setAcceptCookie(boolean accept) {
+        if (JniUtil.useChromiumHttpStack()) {
+            nativeSetAcceptCookie(accept);
+            return;
+        }
+
         mAcceptCookie = accept;
     }
 
@@ -270,6 +278,10 @@ public final class CookieManager {
      * @return TRUE if accept cookie
      */
     public synchronized boolean acceptCookie() {
+        if (JniUtil.useChromiumHttpStack()) {
+            return nativeAcceptCookie();
+        }
+
         return mAcceptCookie;
     }
 
@@ -288,7 +300,12 @@ public final class CookieManager {
             Log.e(LOGTAG, "Bad address: " + url);
             return;
         }
-        setCookie(uri, value);
+
+        if (JniUtil.useChromiumHttpStack()) {
+            nativeSetCookie(uri.toString(), value);
+        } else {
+            setCookie(uri, value);
+        }
     }
 
     /**
@@ -359,7 +376,7 @@ public final class CookieManager {
                     // negative means far future
                     if (cookie.expires < 0 || cookie.expires > now) {
                         // secure cookies can't be overwritten by non-HTTPS url
-                        if (!cookieEntry.secure || HTTPS.equals(uri.mScheme)) {
+                        if (!cookieEntry.secure || HTTPS.equals(uri.getScheme())) {
                             cookieEntry.value = cookie.value;
                             cookieEntry.expires = cookie.expires;
                             cookieEntry.secure = cookie.secure;
@@ -414,7 +431,12 @@ public final class CookieManager {
             Log.e(LOGTAG, "Bad address: " + url);
             return null;
         }
-        return getCookie(uri);
+
+        if (JniUtil.useChromiumHttpStack()) {
+            return nativeGetCookie(uri.toString());
+        } else {
+            return getCookie(uri);
+        }
     }
 
     /**
@@ -444,7 +466,7 @@ public final class CookieManager {
         }
 
         long now = System.currentTimeMillis();
-        boolean secure = HTTPS.equals(uri.mScheme);
+        boolean secure = HTTPS.equals(uri.getScheme());
         Iterator<Cookie> iter = cookieList.iterator();
 
         SortedSet<Cookie> cookieSet = new TreeSet<Cookie>(COMPARATOR);
@@ -495,9 +517,45 @@ public final class CookieManager {
     }
 
     /**
+     * Waits for pending operations to completed.
+     * {@hide}  Too late to release publically.
+     */
+    public void waitForCookieOperationsToComplete() {
+        synchronized (this) {
+            while (pendingCookieOperations > 0) {
+                try {
+                    wait();
+                } catch (InterruptedException e) { }
+            }
+        }
+    }
+
+    private synchronized void signalCookieOperationsComplete() {
+        pendingCookieOperations--;
+        assert pendingCookieOperations > -1;
+        notify();
+    }
+
+    private synchronized void signalCookieOperationsStart() {
+        pendingCookieOperations++;
+    }
+
+    /**
      * Remove all session cookies, which are cookies without expiration date
      */
     public void removeSessionCookie() {
+        signalCookieOperationsStart();
+        if (JniUtil.useChromiumHttpStack()) {
+            new AsyncTask<Void, Void, Void>() {
+                protected Void doInBackground(Void... none) {
+                    nativeRemoveSessionCookie();
+                    signalCookieOperationsComplete();
+                    return null;
+                }
+            }.execute();
+            return;
+        }
+
         final Runnable clearCache = new Runnable() {
             public void run() {
                 synchronized(CookieManager.this) {
@@ -514,6 +572,7 @@ public final class CookieManager {
                         }
                     }
                     CookieSyncManager.getInstance().clearSessionCookies();
+                    signalCookieOperationsComplete();
                 }
             }
         };
@@ -524,6 +583,11 @@ public final class CookieManager {
      * Remove all cookies
      */
     public void removeAllCookie() {
+        if (JniUtil.useChromiumHttpStack()) {
+            nativeRemoveAllCookie();
+            return;
+        }
+
         final Runnable clearCache = new Runnable() {
             public void run() {
                 synchronized(CookieManager.this) {
@@ -540,6 +604,10 @@ public final class CookieManager {
      *  Return true if there are stored cookies.
      */
     public synchronized boolean hasCookies() {
+        if (JniUtil.useChromiumHttpStack()) {
+            return nativeHasCookies();
+        }
+
         return CookieSyncManager.getInstance().hasCookies();
     }
 
@@ -547,6 +615,11 @@ public final class CookieManager {
      * Remove all expired cookies
      */
     public void removeExpiredCookie() {
+        if (JniUtil.useChromiumHttpStack()) {
+            nativeRemoveExpiredCookie();
+            return;
+        }
+
         final Runnable clearCache = new Runnable() {
             public void run() {
                 synchronized(CookieManager.this) {
@@ -570,6 +643,43 @@ public final class CookieManager {
             }
         };
         new Thread(clearCache).start();
+    }
+
+    /**
+     * Package level api, called from CookieSyncManager
+     *
+     * Flush all cookies managed by the Chrome HTTP stack to flash.
+     */
+    void flushCookieStore() {
+        if (JniUtil.useChromiumHttpStack()) {
+            nativeFlushCookieStore();
+        }
+    }
+
+    /**
+     * Whether cookies are accepted for file scheme URLs.
+     */
+    public static boolean allowFileSchemeCookies() {
+        if (JniUtil.useChromiumHttpStack()) {
+            return nativeAcceptFileSchemeCookies();
+        } else {
+            return true;
+        }
+    }
+
+    /**
+     * Sets whether cookies are accepted for file scheme URLs.
+     *
+     * Use of cookies with file scheme URLs is potentially insecure. Do not use this feature unless
+     * you can be sure that no unintentional sharing of cookie data can take place.
+     * <p>
+     * Note that calls to this method will have no effect if made after a WebView or CookieManager
+     * instance has been created.
+     */
+    public static void setAcceptFileSchemeCookies(boolean accept) {
+        if (JniUtil.useChromiumHttpStack()) {
+            nativeSetAcceptFileSchemeCookies(accept);
+        }
     }
 
     /**
@@ -692,7 +802,7 @@ public final class CookieManager {
      *          ended with "/"
      */
     private String[] getHostAndPath(WebAddress uri) {
-        if (uri.mHost != null && uri.mPath != null) {
+        if (uri.getHost() != null && uri.getPath() != null) {
 
             /*
              * The domain (i.e. host) portion of the cookie is supposed to be
@@ -703,12 +813,12 @@ public final class CookieManager {
              * See: http://www.ieft.org/rfc/rfc2965.txt (Section 3.3.3)
              */
             String[] ret = new String[2];
-            ret[0] = uri.mHost.toLowerCase();
-            ret[1] = uri.mPath;
+            ret[0] = uri.getHost().toLowerCase();
+            ret[1] = uri.getPath();
 
             int index = ret[0].indexOf(PERIOD);
             if (index == -1) {
-                if (uri.mScheme.equalsIgnoreCase("file")) {
+                if (uri.getScheme().equalsIgnoreCase("file")) {
                     // There is a potential bug where a local file path matches
                     // another file in the local web server directory. Still
                     // "localhost" is the best pseudo domain name.
@@ -903,8 +1013,12 @@ public final class CookieManager {
                 }
                 equalIndex = cookieString.indexOf(EQUAL, index);
                 if (equalIndex > 0) {
-                    String name = cookieString.substring(index, equalIndex)
-                            .toLowerCase();
+                    String name = cookieString.substring(index, equalIndex).toLowerCase();
+                    int valueIndex = equalIndex + 1;
+                    while (valueIndex < length && cookieString.charAt(valueIndex) == WHITE_SPACE) {
+                        valueIndex++;
+                    }
+
                     if (name.equals(EXPIRES)) {
                         int comaIndex = cookieString.indexOf(COMMA, equalIndex);
 
@@ -912,7 +1026,7 @@ public final class CookieManager {
                         // (Weekday, DD-Mon-YY HH:MM:SS GMT) if it applies.
                         // "Wednesday" is the longest Weekday which has length 9
                         if ((comaIndex != -1) &&
-                                (comaIndex - equalIndex <= 10)) {
+                                (comaIndex - valueIndex <= 10)) {
                             index = comaIndex + 1;
                         }
                     }
@@ -927,8 +1041,7 @@ public final class CookieManager {
                     } else {
                         index = Math.min(semicolonIndex, commaIndex);
                     }
-                    String value =
-                            cookieString.substring(equalIndex + 1, index);
+                    String value = cookieString.substring(valueIndex, index);
                     
                     // Strip quotes if they exist
                     if (value.length() > 2 && value.charAt(0) == QUOTATION) {
@@ -1016,4 +1129,17 @@ public final class CookieManager {
         }
         return ret;
     }
+
+    // Native functions
+    private static native boolean nativeAcceptCookie();
+    private static native String nativeGetCookie(String url);
+    private static native boolean nativeHasCookies();
+    private static native void nativeRemoveAllCookie();
+    private static native void nativeRemoveExpiredCookie();
+    private static native void nativeRemoveSessionCookie();
+    private static native void nativeSetAcceptCookie(boolean accept);
+    private static native void nativeSetCookie(String url, String value);
+    private static native void nativeFlushCookieStore();
+    private static native boolean nativeAcceptFileSchemeCookies();
+    private static native void nativeSetAcceptFileSchemeCookies(boolean accept);
 }

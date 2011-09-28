@@ -344,10 +344,8 @@ public class MediaPlayerApiTest extends ActivityInstrumentationTestCase<MediaFra
     
     @LargeTest
     public void testWAVSeekToEnd() throws Exception {
-        if (isWMVEnable) {
-            boolean isEnd = CodecTest.seekToEnd(MediaNames.WAV);
-            assertTrue("WAV seekToEnd", isEnd);
-        }
+        boolean isEnd = CodecTest.seekToEnd(MediaNames.WAV);
+        assertTrue("WAV seekToEnd", isEnd);
     }  
     
     @MediumTest
@@ -484,30 +482,5 @@ public class MediaPlayerApiTest extends ActivityInstrumentationTestCase<MediaFra
         boolean onPrepareSuccess = 
             CodecTest.prepareAsyncCallback(MediaNames.STREAM_H264_480_360_1411k, true);
         assertTrue("StreamH264PrepareAsyncCallback", onPrepareSuccess);
-    }
-
-    //Provide a tool to play all kinds of media files in a directory
-    @Suppress
-    @LargeTest
-    public void testMediaSamples() throws Exception {
-        // load directory files
-        boolean onCompleteSuccess = false;
-        File dir = new File(MediaNames.MEDIA_SAMPLE_POOL);
-        String[] children = dir.list();
-        if (children == null) {
-            Log.v("MediaPlayerApiTest:testMediaSamples", "dir is empty");
-            return;
-        } else {
-            for (int i = 0; i < children.length; i++) {
-                //Get filename of directory
-                String filename = children[i];
-                Log.v("MediaPlayerApiTest",
-                    "testMediaSamples: file to be played: "
-                    + dir + "/" + filename);
-                onCompleteSuccess =
-                    CodecTest.playMediaSamples(dir + "/" + filename);
-                assertTrue("testMediaSamples", onCompleteSuccess);
-            }
-       }
     }
 }

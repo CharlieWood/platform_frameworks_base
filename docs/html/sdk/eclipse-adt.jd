@@ -1,8 +1,8 @@
 page.title=ADT Plugin for Eclipse
-adt.zip.version=9.0.0
-adt.zip.download=ADT_9.0.0.zip
-adt.zip.bytes=4433536
-adt.zip.checksum=bc2757f2a5a11d131390ce547bae154b
+adt.zip.version=10.0.0
+adt.zip.download=ADT-10.0.0.zip
+adt.zip.bytes=4243777
+adt.zip.checksum=bf88bff62bc45c3b6d062e2beed67765
 
 @jd:body
 
@@ -28,7 +28,7 @@ adt.zip.checksum=bc2757f2a5a11d131390ce547bae154b
 
 <p>Android Development Tools (ADT) is a plugin for the Eclipse IDE
 that is designed to give you a powerful, integrated environment in which
-to build Android applications. </p>
+to build Android applications.</p>
 
 <p>ADT extends the capabilities of Eclipse to let you quickly set up new Android
 projects, create an application UI, add components based on the Android
@@ -95,9 +95,60 @@ padding: .25em 1em;
 </style>
 
 
+
 <div class="toggleable opened">
   <a href="#" onclick="return toggleDiv(this)">
         <img src="{@docRoot}assets/images/triangle-opened.png" class="toggle-img" height="9px"
+width="9px" />
+ADT 10.0.0</a> <em>(February 2011)</em>
+  <div class="toggleme">
+
+<dl>
+
+<dt>Dependencies:</dt>
+
+<dd>ADT 10.0.0 is designed for use with SDK Tools r10. If you haven't
+already installed SDK Tools r10 into your SDK, use the Android SDK and AVD Manager to do
+so.</dd>
+
+<dt>General notes:</dt>
+<dd>
+  <ul>
+  <li>The tools now automatically generate Java Programming Language source files (in the <code>gen/</code> directory) and
+    bytecode (in the <code>res/raw/</code> directory) from your <code>.rs</code> files.</li>
+  <li>A Binary XML editor has been added (<a href="http://tools.android.com/recent/binaryxmleditor">details</a>).</li>
+  <li>Traceview is now integrated into the Eclipse UI (<a href="http://tools.android.com/recent/traceviewineclipse">details</a>).</li>
+  <li>The "Go To Declaration" feature for XML and <code>.java</code> files quickly show all the matches in the project
+  and allows you jump to specific items such as string translations or <code>onClick</code> handlers
+  (<a href="http://tools.android.com/recent/gotodeclarationimprovements">details</a>).</li>
+  <li>The Resource Chooser can create items such as dimensions, integers, ids, and booleans
+  (<a href="http://tools.android.com/recent/resourcechoosercannowcreatearbitraryvalues">details</a>).</li>
+  <li>Improvements to the Visual Layout Editor:
+      <ul>
+        <li>A new Palette with categories and rendering previews
+        (<a href="http://tools.android.com/recent/newpalette">details</a>).</li>
+        <li>A Layout Actions bar that provides quick access to common layout operations
+        (<a href="http://tools.android.com/recent/layoutactionsbar">details</a>).</li>
+        <li>When the Android 3.0 rendering library is selected, layouts render more like they do on devices.
+        This includes rendering of status and title bars to more accurately reflect the actual
+        screen space available to applications
+        (<a href="http://tools.android.com/recent/systembarandactionbar">details</a>).</li>
+        <li>Zoom improvements such as fit to view, persistent scale, and keyboard access.
+        (<a href="http://tools.android.com/recent/zoomimprovements">details</a>).</li>
+        <li>Further improvements to <code>&lt;merge&gt;</code> layouts, as well as layouts with gesture overlays
+        (<a href="http://tools.android.com/recent/improvedsupportformergetags">details</a>).</li>
+        <li>Improved rendering error diagnostics.</li>
+      </ul>
+    </li>    
+  </ul>
+</dd>
+</dl>
+</div>
+</div>
+
+<div class="toggleable closed">
+  <a href="#" onclick="return toggleDiv(this)">
+        <img src="{@docRoot}assets/images/triangle-closed.png" class="toggle-img" height="9px"
 width="9px" />
 ADT 9.0.0</a> <em>(January 2011)</em>
   <div class="toggleme">
@@ -333,7 +384,7 @@ called <code>src/</code>. There is now support for any number of source folders,
 with no name restriction. They can even be in subfolder such as
 <code>src/java</code>. If you are already working with library projects created
 in ADT 0.9.7, see <a
-href="{@docRoot}guide/developing/eclipse-adt.html#libraryMigrating">Migrating
+href="{@docRoot}guide/developing/projects/index.html#libraryMigrating">Migrating
 library projects to ADT 0.9.8</a> for important information about moving
 to the new ADT environment.</li>
 <li>Adds support for library projects that depend on other library
@@ -371,8 +422,7 @@ code and resources in a separate development project. You can then reference the
 library project from other Android projects and, at build time, the tools
 compile the shared code and resources as part of the dependent applications.
 More information about this feature is available in the <a
-href="{@docRoot}guide/developing/eclipse-adt.html#libraryProject">Developing
-in Eclipse with ADT</a> document. </p>
+href="{@docRoot}guide/developing/projects/index.html#LibraryProjects">Creating and Managing Projects</a> document. </p>
 <p>If you are not developing in Eclipse, <a
 href="tools-notes.html">SDK Tools r6</a> provides the equivalent library
 project support through the Ant build system.</p>

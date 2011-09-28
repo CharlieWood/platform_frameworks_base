@@ -154,7 +154,7 @@ public class SmsMessage {
     @Deprecated
     public static SmsMessage createFromPdu(byte[] pdu) {
         SmsMessageBase wrappedMessage;
-        int activePhone = TelephonyManager.getDefault().getPhoneType();
+        int activePhone = TelephonyManager.getDefault().getCurrentPhoneType();
 
         if (PHONE_TYPE_CDMA == activePhone) {
             wrappedMessage = com.android.internal.telephony.cdma.SmsMessage.createFromPdu(pdu);
@@ -177,7 +177,7 @@ public class SmsMessage {
     @Deprecated
     public static SmsMessage newFromCMT(String[] lines){
         SmsMessageBase wrappedMessage;
-        int activePhone = TelephonyManager.getDefault().getPhoneType();
+        int activePhone = TelephonyManager.getDefault().getCurrentPhoneType();
 
         if (PHONE_TYPE_CDMA == activePhone) {
             wrappedMessage = com.android.internal.telephony.cdma.SmsMessage.newFromCMT(lines);
@@ -193,7 +193,7 @@ public class SmsMessage {
     @Deprecated
     protected static SmsMessage newFromCMTI(String line) {
         SmsMessageBase wrappedMessage;
-        int activePhone = TelephonyManager.getDefault().getPhoneType();
+        int activePhone = TelephonyManager.getDefault().getCurrentPhoneType();
 
         if (PHONE_TYPE_CDMA == activePhone) {
             wrappedMessage = com.android.internal.telephony.cdma.SmsMessage.newFromCMTI(line);
@@ -209,7 +209,7 @@ public class SmsMessage {
     @Deprecated
     public static SmsMessage newFromCDS(String line) {
         SmsMessageBase wrappedMessage;
-        int activePhone = TelephonyManager.getDefault().getPhoneType();
+        int activePhone = TelephonyManager.getDefault().getCurrentPhoneType();
 
         if (PHONE_TYPE_CDMA == activePhone) {
             wrappedMessage = com.android.internal.telephony.cdma.SmsMessage.newFromCDS(line);
@@ -225,7 +225,7 @@ public class SmsMessage {
     @Deprecated
     public static SmsMessage newFromParcel(Parcel p) {
         SmsMessageBase wrappedMessage;
-        int activePhone = TelephonyManager.getDefault().getPhoneType();
+        int activePhone = TelephonyManager.getDefault().getCurrentPhoneType();
 
         if (PHONE_TYPE_CDMA == activePhone) {
             wrappedMessage = com.android.internal.telephony.cdma.SmsMessage.newFromParcel(p);
@@ -250,7 +250,7 @@ public class SmsMessage {
     @Deprecated
     public static SmsMessage createFromEfRecord(int index, byte[] data) {
         SmsMessageBase wrappedMessage;
-        int activePhone = TelephonyManager.getDefault().getPhoneType();
+        int activePhone = TelephonyManager.getDefault().getCurrentPhoneType();
 
         if (PHONE_TYPE_CDMA == activePhone) {
             wrappedMessage = com.android.internal.telephony.cdma.SmsMessage.createFromEfRecord(
@@ -270,7 +270,7 @@ public class SmsMessage {
      */
     @Deprecated
     public static int getTPLayerLengthForPDU(String pdu) {
-        int activePhone = TelephonyManager.getDefault().getPhoneType();
+        int activePhone = TelephonyManager.getDefault().getCurrentPhoneType();
 
         if (PHONE_TYPE_CDMA == activePhone) {
             return com.android.internal.telephony.cdma.SmsMessage.getTPLayerLengthForPDU(pdu);
@@ -297,14 +297,37 @@ public class SmsMessage {
      */
     @Deprecated
     public static int[] calculateLength(CharSequence messageBody, boolean use7bitOnly) {
-        SmsMessageBase.TextEncodingDetails ted =
-                com.android.internal.telephony.gsm.SmsMessage
-                        .calculateLength(messageBody, use7bitOnly);
         int ret[] = new int[4];
-        ret[0] = ted.msgCount;
-        ret[1] = ted.codeUnitCount;
-        ret[2] = ted.codeUnitsRemaining;
-        ret[3] = ted.codeUnitSize;
+
+        try {
+            // Try GSM alphabet
+            int septets = GsmAlphabet.countGsmSeptets(messageBody, !use7bitOnly);
+            ret[1] = septets;
+            if (septets > MAX_USER_DATA_SEPTETS) {
+                ret[0] = (septets + (MAX_USER_DATA_SEPTETS_WITH_HEADER - 1)) /
+                            MAX_USER_DATA_SEPTETS_WITH_HEADER;
+                ret[2] = (ret[0] * MAX_USER_DATA_SEPTETS_WITH_HEADER) - septets;
+            } else {
+                ret[0] = 1;
+                ret[2] = MAX_USER_DATA_SEPTETS - septets;
+            }
+            ret[3] = ENCODING_7BIT;
+        } catch (EncodeException ex) {
+            // fall back to UCS-2
+            int octets = messageBody.length() * 2;
+            ret[1] = messageBody.length();
+            if (octets > MAX_USER_DATA_BYTES) {
+                // 6 is the size of the user data header
+                ret[0] = (octets + (MAX_USER_DATA_BYTES_WITH_HEADER - 1)) /
+                            MAX_USER_DATA_BYTES_WITH_HEADER;
+                ret[2] = ((ret[0] * MAX_USER_DATA_BYTES_WITH_HEADER) - octets) / 2;
+            } else {
+                ret[0] = 1;
+                ret[2] = (MAX_USER_DATA_BYTES - octets)/2;
+            }
+            ret[3] = ENCODING_16BIT;
+        }
+
         return ret;
     }
 
@@ -344,7 +367,7 @@ public class SmsMessage {
             String destinationAddress, String message,
             boolean statusReportRequested, byte[] header) {
         SubmitPduBase spb;
-        int activePhone = TelephonyManager.getDefault().getPhoneType();
+        int activePhone = TelephonyManager.getDefault().getCurrentPhoneType();
 
         if (PHONE_TYPE_CDMA == activePhone) {
             spb = com.android.internal.telephony.cdma.SmsMessage.getSubmitPdu(scAddress,
@@ -371,7 +394,7 @@ public class SmsMessage {
     public static SubmitPdu getSubmitPdu(String scAddress,
             String destinationAddress, String message, boolean statusReportRequested) {
         SubmitPduBase spb;
-        int activePhone = TelephonyManager.getDefault().getPhoneType();
+        int activePhone = TelephonyManager.getDefault().getCurrentPhoneType();
 
         if (PHONE_TYPE_CDMA == activePhone) {
             spb = com.android.internal.telephony.cdma.SmsMessage.getSubmitPdu(scAddress,
@@ -402,7 +425,7 @@ public class SmsMessage {
             String destinationAddress, short destinationPort, byte[] data,
             boolean statusReportRequested) {
         SubmitPduBase spb;
-        int activePhone = TelephonyManager.getDefault().getPhoneType();
+        int activePhone = TelephonyManager.getDefault().getCurrentPhoneType();
 
         if (PHONE_TYPE_CDMA == activePhone) {
             spb = com.android.internal.telephony.cdma.SmsMessage.getSubmitPdu(scAddress,
@@ -716,7 +739,7 @@ public class SmsMessage {
      * @deprecated Use android.telephony.SmsMessage.
      */
     private static final SmsMessageBase getSmsFacility(){
-        int activePhone = TelephonyManager.getDefault().getPhoneType();
+        int activePhone = TelephonyManager.getDefault().getCurrentPhoneType();
         if (PHONE_TYPE_CDMA == activePhone) {
             return new com.android.internal.telephony.cdma.SmsMessage();
         } else {

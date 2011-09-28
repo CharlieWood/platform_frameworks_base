@@ -38,6 +38,7 @@ import org.apache.harmony.xml.ExpatReader;
  * XML utility methods.
  */
 public class Xml {
+    /** @hide */ public Xml() {}
 
     /**
      * {@link org.xmlpull.v1.XmlPullParser} "relaxed" feature name.
@@ -79,15 +80,11 @@ public class Xml {
      */
     public static void parse(InputStream in, Encoding encoding,
             ContentHandler contentHandler) throws IOException, SAXException {
-        try {
-            XMLReader reader = new ExpatReader();
-            reader.setContentHandler(contentHandler);
-            InputSource source = new InputSource(in);
-            source.setEncoding(encoding.expatName);
-            reader.parse(source);
-        } catch (IOException e) {
-            throw new AssertionError(e);
-        }
+        XMLReader reader = new ExpatReader();
+        reader.setContentHandler(contentHandler);
+        InputSource source = new InputSource(in);
+        source.setEncoding(encoding.expatName);
+        reader.parse(source);
     }
 
     /**
@@ -160,21 +157,21 @@ public class Xml {
         }
         throw new UnsupportedEncodingException(encodingName);
     }
-    
+
     /**
      * Return an AttributeSet interface for use with the given XmlPullParser.
      * If the given parser itself implements AttributeSet, that implementation
      * is simply returned.  Otherwise a wrapper class is
      * instantiated on top of the XmlPullParser, as a proxy for retrieving its
      * attributes, and returned to you.
-     * 
+     *
      * @param parser The existing parser for which you would like an
      *               AttributeSet.
-     * 
+     *
      * @return An AttributeSet you can use to retrieve the
      *         attribute values at each of the tags as the parser moves
      *         through its XML document.
-     *         
+     *
      * @see AttributeSet
      */
     public static AttributeSet asAttributeSet(XmlPullParser parser) {

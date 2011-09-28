@@ -21,6 +21,7 @@
 #include <hardware_legacy/AudioPolicyInterface.h>
 #include <media/ToneGenerator.h>
 #include <utils/Vector.h>
+#include <binder/BinderService.h>
 
 namespace android {
 
@@ -28,12 +29,17 @@ class String8;
 
 // ----------------------------------------------------------------------------
 
-class AudioPolicyService: public BnAudioPolicyService, public AudioPolicyClientInterface,
+class AudioPolicyService :
+    public BinderService<AudioPolicyService>,
+    public BnAudioPolicyService,
+    public AudioPolicyClientInterface,
     public IBinder::DeathRecipient
 {
+    friend class BinderService<AudioPolicyService>;
 
 public:
-    static  void        instantiate();
+    // for BinderService
+    static const char *getServiceName() { return "media.audio_policy"; }
 
     virtual status_t    dump(int fd, const Vector<String16>& args);
 
@@ -80,6 +86,7 @@ public:
     virtual status_t getStreamVolumeIndex(AudioSystem::stream_type stream, int *index);
 
     virtual uint32_t getStrategyForStream(AudioSystem::stream_type stream);
+    virtual uint32_t getDevicesForStream(AudioSystem::stream_type stream);
 
     virtual audio_io_handle_t getOutputForEffect(effect_descriptor_t *desc);
     virtual status_t registerEffect(effect_descriptor_t *desc,
@@ -88,6 +95,7 @@ public:
                                     int session,
                                     int id);
     virtual status_t unregisterEffect(int id);
+    virtual bool isStreamActive(int stream, uint32_t inPastMs = 0) const;
 
     virtual     status_t    onTransact(
                                 uint32_t code,
@@ -230,8 +238,8 @@ private:
     status_t dumpPermissionDenial(int fd);
 
 
-    Mutex   mLock;      // prevents concurrent access to AudioPolicy manager functions changing device
-                        // connection stated our routing
+    mutable Mutex mLock;    // prevents concurrent access to AudioPolicy manager functions changing
+                            // device connection state  or routing
     AudioPolicyInterface* mpPolicyManager;          // the platform specific policy manager
     sp <AudioCommandThread> mAudioCommandThread;    // audio commands thread
     sp <AudioCommandThread> mTonePlaybackThread;     // tone playback thread
@@ -240,11 +248,3 @@ private:
 }; // namespace android
 
 #endif // ANDROID_AUDIOPOLICYSERVICE_H
-
-
-
-
-
-
-
-

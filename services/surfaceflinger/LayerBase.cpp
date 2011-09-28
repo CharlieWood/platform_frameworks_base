@@ -301,6 +301,15 @@ void LayerBase::drawRegion(const Region& reg) const
     }
 }
 
+void LayerBase::setGeometry(hwc_layer_t* hwcl) {
+    hwcl->flags |= HWC_SKIP_LAYER;
+}
+
+void LayerBase::setPerFrameData(hwc_layer_t* hwcl) {
+    hwcl->compositionType = HWC_FRAMEBUFFER;
+    hwcl->handle = NULL;
+}
+
 void LayerBase::draw(const Region& clip) const
 {
     // reset GL state
@@ -489,13 +498,17 @@ void LayerBase::drawWithOpenGL(const Region& clip, const Texture& texture) const
 }
 
 void LayerBase::setBufferCrop(const Rect& crop) {
-    if (!crop.isEmpty()) {
+    if (mBufferCrop != crop) {
         mBufferCrop = crop;
+        mFlinger->invalidateHwcGeometry();
     }
 }
 
 void LayerBase::setBufferTransform(uint32_t transform) {
-    mBufferTransform = transform;
+    if (mBufferTransform != transform) {
+        mBufferTransform = transform;
+        mFlinger->invalidateHwcGeometry();
+    }
 }
 
 void LayerBase::dump(String8& result, char* buffer, size_t SIZE) const
@@ -515,13 +528,21 @@ void LayerBase::dump(String8& result, char* buffer, size_t SIZE) const
     result.append(buffer);
 }
 
+void LayerBase::shortDump(String8& result, char* scratch, size_t size) const
+{
+    LayerBase::dump(result, scratch, size);
+}
+
+
 // ---------------------------------------------------------------------------
 
 int32_t LayerBaseClient::sIdentity = 1;
 
 LayerBaseClient::LayerBaseClient(SurfaceFlinger* flinger, DisplayID display,
         const sp<Client>& client)
-    : LayerBase(flinger, display), mClientRef(client),
+    : LayerBase(flinger, display),
+      mHasSurface(false),
+      mClientRef(client),
       mIdentity(uint32_t(android_atomic_inc(&sIdentity)))
 {
 }
@@ -538,12 +559,18 @@ sp<LayerBaseClient::Surface> LayerBaseClient::getSurface()
 {
     sp<Surface> s;
     Mutex::Autolock _l(mLock);
-    s = mClientSurface.promote();
-    if (s == 0) {
-        s = createSurface();
-        mClientSurface = s;
-    }
+
+    LOG_ALWAYS_FATAL_IF(mHasSurface,
+            "LayerBaseClient::getSurface() has already been called");
+
+    mHasSurface = true;
+    s = createSurface();
+    mClientSurfaceBinder = s->asBinder();
     return s;
+}
+
+wp<IBinder> LayerBaseClient::getSurfaceBinder() const {
+    return mClientSurfaceBinder;
 }
 
 sp<LayerBaseClient::Surface> LayerBaseClient::createSurface() const
@@ -566,6 +593,12 @@ void LayerBaseClient::dump(String8& result, char* buffer, size_t SIZE) const
     result.append(buffer);
 }
 
+
+void LayerBaseClient::shortDump(String8& result, char* scratch, size_t size) const
+{
+    LayerBaseClient::dump(result, scratch, size);
+}
+
 // ---------------------------------------------------------------------------
 
 LayerBaseClient::Surface::Surface(
@@ -583,7 +616,10 @@ LayerBaseClient::Surface::~Surface()
      */
 
     // destroy client resources
-    mFlinger->destroySurface(mOwner);
+    sp<LayerBaseClient> layer = getOwner();
+    if (layer != 0) {
+        mFlinger->destroySurface(layer);
+    }
 }
 
 sp<LayerBaseClient> LayerBaseClient::Surface::getOwner() const {
@@ -594,21 +630,6 @@ sp<LayerBaseClient> LayerBaseClient::Surface::getOwner() const {
 status_t LayerBaseClient::Surface::onTransact(
         uint32_t code, const Parcel& data, Parcel* reply, uint32_t flags)
 {
-    switch (code) {
-        case REGISTER_BUFFERS:
-        case UNREGISTER_BUFFERS:
-        case CREATE_OVERLAY:
-        {
-            if (!mFlinger->mAccessSurfaceFlinger.checkCalling()) {
-                IPCThreadState* ipc = IPCThreadState::self();
-                const int pid = ipc->getCallingPid();
-                const int uid = ipc->getCallingUid();
-                LOGE("Permission Denial: "
-                        "can't access SurfaceFlinger pid=%d, uid=%d", pid, uid);
-                return PERMISSION_DENIED;
-            }
-        }
-    }
     return BnSurface::onTransact(code, data, reply, flags);
 }
 
@@ -622,26 +643,6 @@ status_t LayerBaseClient::Surface::setBufferCount(int bufferCount)
 {
     return INVALID_OPERATION;
 }
-
-status_t LayerBaseClient::Surface::registerBuffers(
-        const ISurface::BufferHeap& buffers) 
-{ 
-    return INVALID_OPERATION; 
-}
-
-void LayerBaseClient::Surface::postBuffer(ssize_t offset) 
-{
-}
-
-void LayerBaseClient::Surface::unregisterBuffers() 
-{
-}
-
-sp<OverlayRef> LayerBaseClient::Surface::createOverlay(
-        uint32_t w, uint32_t h, int32_t format, int32_t orientation)
-{
-    return NULL;
-};
 
 // ---------------------------------------------------------------------------
 

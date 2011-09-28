@@ -94,12 +94,15 @@ private:
     friend class SurfaceComposerClient;
 
     // camera and camcorder need access to the ISurface binder interface for preview
-    friend class Camera;
+    friend class CameraService;
     friend class MediaRecorder;
     // mediaplayer needs access to ISurface for display
     friend class MediaPlayer;
     // for testing
     friend class Test;
+    // videoEditor preview classes
+    friend class VideoEditorPreviewController;
+
     const sp<ISurface>& getISurface() const { return mSurface; }
     
 
@@ -173,13 +176,17 @@ private:
      * (eventually this should go away and be replaced by proper APIs)
      */
     // camera and camcorder need access to the ISurface binder interface for preview
-    friend class Camera;
+    friend class CameraService;
     friend class MediaRecorder;
     // MediaPlayer needs access to ISurface for display
     friend class MediaPlayer;
     friend class IOMX;
+    friend class SoftwareRenderer;
     // this is just to be able to write some unit tests
     friend class Test;
+    // videoEditor preview classes
+    friend class VideoEditorPreviewController;
+    friend class PreviewRenderer;
 
 private:
     friend class SurfaceComposerClient;
@@ -232,7 +239,7 @@ private:
      *  private stuff...
      */
     void init();
-    status_t validate() const;
+    status_t validate(bool inCancelBuffer = false) const;
     sp<ISurface> getISurface() const;
 
     inline const GraphicBufferMapper& getBufferMapper() const { return mBufferMapper; }
@@ -314,4 +321,3 @@ private:
 }; // namespace android
 
 #endif // ANDROID_SF_SURFACE_H
-

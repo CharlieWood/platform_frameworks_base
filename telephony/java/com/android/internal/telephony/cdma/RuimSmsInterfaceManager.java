@@ -68,8 +68,7 @@ public class RuimSmsInterfaceManager extends IccSmsInterfaceManager {
                     ar = (AsyncResult)msg.obj;
                     synchronized (mLock) {
                         if (ar.exception == null) {
-                            mSms  = (List<SmsRawData>)
-                                    buildValidRawData((ArrayList<byte[]>) ar.result);
+                            mSms = buildValidRawData((ArrayList<byte[]>) ar.result);
                         } else {
                             if(DBG) log("Cannot load Sms records");
                             if (mSms != null)
@@ -199,18 +198,6 @@ public class RuimSmsInterfaceManager extends IccSmsInterfaceManager {
     }
 
     public boolean disableCellBroadcast(int messageIdentifier) {
-        // Not implemented
-        Log.e(LOG_TAG, "Error! Not implemented for CDMA.");
-        return false;
-    }
-
-    public boolean enableCellBroadcastRange(int startMessageId, int endMessageId) {
-        // Not implemented
-        Log.e(LOG_TAG, "Error! Not implemented for CDMA.");
-        return false;
-    }
-
-    public boolean disableCellBroadcastRange(int startMessageId, int endMessageId) {
         // Not implemented
         Log.e(LOG_TAG, "Error! Not implemented for CDMA.");
         return false;

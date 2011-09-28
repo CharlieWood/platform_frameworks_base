@@ -33,7 +33,6 @@ import java.awt.Rectangle;
 import java.awt.RenderingHints;
 import java.awt.Shape;
 import java.awt.geom.AffineTransform;
-import java.awt.geom.Arc2D;
 import java.awt.image.BufferedImage;
 import java.util.List;
 
@@ -271,13 +270,6 @@ public final class Canvas_Delegate {
     }
 
     @LayoutlibDelegate
-    /*package*/ static void drawText(Canvas thisCanvas,
-            String text, float x, float y, Paint paint) {
-        native_drawText(thisCanvas.mNativeCanvas, text, 0, text.length(), x, y,
-                paint.mNativePaint);
-    }
-
-    @LayoutlibDelegate
     /*package*/ static void drawPoints(Canvas thisCanvas, float[] pts, int offset, int count,
             Paint paint) {
         // FIXME
@@ -298,7 +290,7 @@ public final class Canvas_Delegate {
             Paint paint) {
         draw(thisCanvas.mNativeCanvas, paint.mNativePaint, false /*compositeOnly*/,
                 false /*forceSrcMode*/, new GcSnapshot.Drawable() {
-                    public void draw(Graphics2D graphics, Paint_Delegate paintDelegate) {
+                    public void draw(Graphics2D graphics, Paint_Delegate paint) {
                         for (int i = 0 ; i < count ; i += 4) {
                             graphics.drawLine((int)pts[i + offset], (int)pts[i + offset + 1],
                                     (int)pts[i + offset + 2], (int)pts[i + offset + 3]);
@@ -322,18 +314,12 @@ public final class Canvas_Delegate {
             Canvas_Delegate newDelegate = new Canvas_Delegate(bitmapDelegate);
 
             return sManager.addNewDelegate(newDelegate);
+        } else {
+            // create a new Canvas_Delegate and return its new native int.
+            Canvas_Delegate newDelegate = new Canvas_Delegate();
+
+            return sManager.addNewDelegate(newDelegate);
         }
-
-        // create a new Canvas_Delegate and return its new native int.
-        Canvas_Delegate newDelegate = new Canvas_Delegate();
-
-        return sManager.addNewDelegate(newDelegate);
-    }
-
-    @LayoutlibDelegate
-    /*package*/ static int initGL() {
-        // not supported.
-        return 0;
     }
 
     @LayoutlibDelegate
@@ -351,11 +337,6 @@ public final class Canvas_Delegate {
         }
 
         canvasDelegate.setBitmap(bitmapDelegate);
-    }
-
-    @LayoutlibDelegate
-    /*package*/ static void nativeSetViewport(int nCanvas, int w, int h) {
-        // only useful in GL which is not supported, so no need to do anything.
     }
 
     @LayoutlibDelegate
@@ -443,7 +424,7 @@ public final class Canvas_Delegate {
         AffineTransform matrixTx = matrixDelegate.getAffineTransform();
 
         // combine them so that the given matrix is applied after.
-        currentTx.concatenate(matrixTx);
+        currentTx.preConcatenate(matrixTx);
 
         // give it to the graphics2D as a new matrix replacing all previous transform
         snapshot.setTransform(currentTx);
@@ -669,7 +650,7 @@ public final class Canvas_Delegate {
 
         draw(nativeCanvas, paint, false /*compositeOnly*/, false /*forceSrcMode*/,
                 new GcSnapshot.Drawable() {
-                    public void draw(Graphics2D graphics, Paint_Delegate paintDelegate) {
+                    public void draw(Graphics2D graphics, Paint_Delegate paint) {
                         graphics.drawLine((int)startX, (int)startY, (int)stopX, (int)stopY);
                     }
         });
@@ -687,8 +668,8 @@ public final class Canvas_Delegate {
 
         draw(nativeCanvas, paint, false /*compositeOnly*/, false /*forceSrcMode*/,
                 new GcSnapshot.Drawable() {
-                    public void draw(Graphics2D graphics, Paint_Delegate paintDelegate) {
-                        int style = paintDelegate.getStyle();
+                    public void draw(Graphics2D graphics, Paint_Delegate paint) {
+                        int style = paint.getStyle();
 
                         // draw
                         if (style == Paint.Style.FILL.nativeInt ||
@@ -711,8 +692,8 @@ public final class Canvas_Delegate {
         if (oval.right > oval.left && oval.bottom > oval.top) {
             draw(nativeCanvas, paint, false /*compositeOnly*/, false /*forceSrcMode*/,
                     new GcSnapshot.Drawable() {
-                        public void draw(Graphics2D graphics, Paint_Delegate paintDelegate) {
-                            int style = paintDelegate.getStyle();
+                        public void draw(Graphics2D graphics, Paint_Delegate paint) {
+                            int style = paint.getStyle();
 
                             // draw
                             if (style == Paint.Style.FILL.nativeInt ||
@@ -735,38 +716,16 @@ public final class Canvas_Delegate {
     /*package*/ static void native_drawCircle(int nativeCanvas,
             float cx, float cy, float radius, int paint) {
         native_drawOval(nativeCanvas,
-                new RectF(cx - radius, cy - radius, radius, radius),
+                new RectF(cx - radius, cy - radius, radius*2, radius*2),
                 paint);
     }
 
     @LayoutlibDelegate
     /*package*/ static void native_drawArc(int nativeCanvas,
-            final RectF oval, final float startAngle, final float sweep,
-            final boolean useCenter, int paint) {
-        if (oval.right > oval.left && oval.bottom > oval.top) {
-            draw(nativeCanvas, paint, false /*compositeOnly*/, false /*forceSrcMode*/,
-                    new GcSnapshot.Drawable() {
-                        public void draw(Graphics2D graphics, Paint_Delegate paintDelegate) {
-                            int style = paintDelegate.getStyle();
-
-                            Arc2D.Float arc = new Arc2D.Float(
-                                    oval.left, oval.top, oval.width(), oval.height(),
-                                    -startAngle, -sweep,
-                                    useCenter ? Arc2D.PIE : Arc2D.OPEN);
-
-                            // draw
-                            if (style == Paint.Style.FILL.nativeInt ||
-                                    style == Paint.Style.FILL_AND_STROKE.nativeInt) {
-                                graphics.fill(arc);
-                            }
-
-                            if (style == Paint.Style.STROKE.nativeInt ||
-                                    style == Paint.Style.FILL_AND_STROKE.nativeInt) {
-                                graphics.draw(arc);
-                            }
-                        }
-            });
-        }
+            RectF oval, float startAngle, float sweep, boolean useCenter, int paint) {
+        // FIXME
+        Bridge.getLog().fidelityWarning(LayoutLog.TAG_UNSUPPORTED,
+                "Canvas.drawArc is not supported.", null, null /*data*/);
     }
 
     @LayoutlibDelegate
@@ -775,8 +734,8 @@ public final class Canvas_Delegate {
 
         draw(nativeCanvas, paint, false /*compositeOnly*/, false /*forceSrcMode*/,
                 new GcSnapshot.Drawable() {
-                    public void draw(Graphics2D graphics, Paint_Delegate paintDelegate) {
-                        int style = paintDelegate.getStyle();
+                    public void draw(Graphics2D graphics, Paint_Delegate paint) {
+                        int style = paint.getStyle();
 
                         // draw
                         if (style == Paint.Style.FILL.nativeInt ||
@@ -807,9 +766,9 @@ public final class Canvas_Delegate {
 
         draw(nativeCanvas, paint, false /*compositeOnly*/, false /*forceSrcMode*/,
                 new GcSnapshot.Drawable() {
-                    public void draw(Graphics2D graphics, Paint_Delegate paintDelegate) {
+                    public void draw(Graphics2D graphics, Paint_Delegate paint) {
                         Shape shape = pathDelegate.getJavaShape();
-                        int style = paintDelegate.getStyle();
+                        int style = paint.getStyle();
 
                         if (style == Paint.Style.FILL.nativeInt ||
                                 style == Paint.Style.FILL_AND_STROKE.nativeInt) {
@@ -985,26 +944,26 @@ public final class Canvas_Delegate {
     @LayoutlibDelegate
     /*package*/ static void native_drawText(int nativeCanvas,
             final char[] text, final int index, final int count,
-            final float startX, final float startY, int paint) {
+            final float startX, final float startY, int flags, int paint) {
         draw(nativeCanvas, paint, false /*compositeOnly*/, false /*forceSrcMode*/,
                 new GcSnapshot.Drawable() {
-            public void draw(Graphics2D graphics, Paint_Delegate paintDelegate) {
+            public void draw(Graphics2D graphics, Paint_Delegate paint) {
                 // WARNING: the logic in this method is similar to Paint_Delegate.measureText.
                 // Any change to this method should be reflected in Paint.measureText
                 // Paint.TextAlign indicates how the text is positioned relative to X.
                 // LEFT is the default and there's nothing to do.
                 float x = startX;
                 float y = startY;
-                if (paintDelegate.getTextAlign() != Paint.Align.LEFT.nativeInt) {
-                    float m = paintDelegate.measureText(text, index, count);
-                    if (paintDelegate.getTextAlign() == Paint.Align.CENTER.nativeInt) {
+                if (paint.getTextAlign() != Paint.Align.LEFT.nativeInt) {
+                    float m = paint.measureText(text, index, count);
+                    if (paint.getTextAlign() == Paint.Align.CENTER.nativeInt) {
                         x -= m / 2;
-                    } else if (paintDelegate.getTextAlign() == Paint.Align.RIGHT.nativeInt) {
+                    } else if (paint.getTextAlign() == Paint.Align.RIGHT.nativeInt) {
                         x -= m;
                     }
                 }
 
-                List<FontInfo> fonts = paintDelegate.getFonts();
+                List<FontInfo> fonts = paint.getFonts();
 
                 if (fonts.size() > 0) {
                     FontInfo mainFont = fonts.get(0);
@@ -1084,13 +1043,30 @@ public final class Canvas_Delegate {
 
     @LayoutlibDelegate
     /*package*/ static void native_drawText(int nativeCanvas, String text,
-                                               int start, int end, float x,
-                                               float y, int paint) {
+            int start, int end, float x, float y, int flags, int paint) {
         int count = end - start;
         char[] buffer = TemporaryBuffer.obtain(count);
         TextUtils.getChars(text, start, end, buffer, 0);
 
-        native_drawText(nativeCanvas, buffer, 0, count, x, y, paint);
+        native_drawText(nativeCanvas, buffer, 0, count, x, y, flags, paint);
+    }
+
+    @LayoutlibDelegate
+    /*package*/ static void native_drawTextRun(int nativeCanvas, String text,
+            int start, int end, int contextStart, int contextEnd,
+            float x, float y, int flags, int paint) {
+        int count = end - start;
+        char[] buffer = TemporaryBuffer.obtain(count);
+        TextUtils.getChars(text, start, end, buffer, 0);
+
+        native_drawText(nativeCanvas, buffer, 0, count, x, y, flags, paint);
+    }
+
+    @LayoutlibDelegate
+    /*package*/ static void native_drawTextRun(int nativeCanvas, char[] text,
+            int start, int count, int contextStart, int contextCount,
+            float x, float y, int flags, int paint) {
+        native_drawText(nativeCanvas, text, start, count, x, y, flags, paint);
     }
 
     @LayoutlibDelegate
@@ -1117,7 +1093,7 @@ public final class Canvas_Delegate {
                                                      char[] text, int index,
                                                      int count, int path,
                                                      float hOffset,
-                                                     float vOffset,
+                                                     float vOffset, int bidiFlags,
                                                      int paint) {
         // FIXME
         Bridge.getLog().fidelityWarning(LayoutLog.TAG_UNSUPPORTED,
@@ -1129,7 +1105,7 @@ public final class Canvas_Delegate {
                                                      String text, int path,
                                                      float hOffset,
                                                      float vOffset,
-                                                     int paint) {
+                                                     int flags, int paint) {
         // FIXME
         Bridge.getLog().fidelityWarning(LayoutLog.TAG_UNSUPPORTED,
                 "Canvas.drawTextOnPath is not supported.", null, null /*data*/);

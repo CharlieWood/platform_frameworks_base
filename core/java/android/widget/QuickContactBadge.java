@@ -16,24 +16,26 @@
 
 package android.widget;
 
+import com.android.internal.R;
+
 import android.content.AsyncQueryHandler;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.TypedArray;
 import android.database.Cursor;
+import android.graphics.Canvas;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
+import android.provider.ContactsContract.CommonDataKinds.Email;
 import android.provider.ContactsContract.Contacts;
 import android.provider.ContactsContract.Intents;
 import android.provider.ContactsContract.PhoneLookup;
 import android.provider.ContactsContract.QuickContact;
 import android.provider.ContactsContract.RawContacts;
-import android.provider.ContactsContract.CommonDataKinds.Email;
 import android.util.AttributeSet;
 import android.view.View;
 import android.view.View.OnClickListener;
-import com.android.internal.R;
 
 /**
  * Widget used to show an image with the standard QuickContact badge
@@ -45,10 +47,11 @@ public class QuickContactBadge extends ImageView implements OnClickListener {
     private String mContactEmail;
     private String mContactPhone;
     private int mMode;
+    private Drawable mOverlay;
     private QueryHandler mQueryHandler;
     private Drawable mBadgeBackground;
     private Drawable mNoBadgeBackground;
-    private int mSelectedContactsAppTabIndex = -1;
+    private Drawable mDefaultAvatar;
 
     protected String[] mExcludeMimes = null;
 
@@ -100,9 +103,23 @@ public class QuickContactBadge extends ImageView implements OnClickListener {
 
         a.recycle();
 
+        TypedArray styledAttributes = mContext.obtainStyledAttributes(R.styleable.Theme);
+        mOverlay = styledAttributes.getDrawable(com.android.internal.R.styleable.Theme_quickContactBadgeOverlay);
+        styledAttributes.recycle();
+
         init();
 
         mBadgeBackground = getBackground();
+    }
+
+    @Override
+    protected void drawableStateChanged() {
+        super.drawableStateChanged();
+        Drawable d = mOverlay;
+        if (d != null && d.isStateful()) {
+            d.setState(getDrawableState());
+            invalidate();
+        }
     }
 
     private void init() {
@@ -119,10 +136,43 @@ public class QuickContactBadge extends ImageView implements OnClickListener {
         mMode = size;
     }
 
+    @Override
+    protected void onDraw(Canvas canvas) {
+        super.onDraw(canvas);
+
+        if (mOverlay == null || mOverlay.getIntrinsicWidth() == 0 ||
+                mOverlay.getIntrinsicHeight() == 0) {
+            return; // nothing to draw
+        }
+
+        mOverlay.setBounds(0, 0, getWidth(), getHeight());
+
+        if (mPaddingTop == 0 && mPaddingLeft == 0) {
+            mOverlay.draw(canvas);
+        } else {
+            int saveCount = canvas.getSaveCount();
+            canvas.save();
+            canvas.translate(mPaddingLeft, mPaddingTop);
+            mOverlay.draw(canvas);
+            canvas.restoreToCount(saveCount);
+        }
+    }
+
+    /**
+     * Resets the contact photo to the default state.
+     */
+    public void setImageToDefault() {
+        if (mDefaultAvatar == null) {
+            mDefaultAvatar = getResources().getDrawable(R.drawable.ic_contact_picture);
+        }
+        setImageDrawable(mDefaultAvatar);
+    }
+
     /**
      * Assign the contact uri that this QuickContactBadge should be associated
      * with. Note that this is only used for displaying the QuickContact window and
-     * won't bind the contact's photo for you.
+     * won't bind the contact's photo for you. Call {@link #setImageDrawable(Drawable)} to set the
+     * photo.
      *
      * @param contactUri Either a {@link Contacts#CONTENT_URI} or
      *            {@link Contacts#CONTENT_LOOKUP_URI} style URI.
@@ -134,20 +184,14 @@ public class QuickContactBadge extends ImageView implements OnClickListener {
         onContactUriChanged();
     }
 
-    /**
-     * Sets the currently selected tab of the Contacts application. If not set, this is -1
-     * and therefore does not save a tab selection when a phone call is being made
-     * @hide
-     */
-    public void setSelectedContactsAppTabIndex(int value) {
-        mSelectedContactsAppTabIndex = value;
-    }
-
     private void onContactUriChanged() {
         if (mContactUri == null && mContactEmail == null && mContactPhone == null) {
+            // Holo theme has no background on badges. Use a null background.
+            /*
             if (mNoBadgeBackground == null) {
                 mNoBadgeBackground = getResources().getDrawable(R.drawable.quickcontact_nobadge);
             }
+            */
             setBackgroundDrawable(mNoBadgeBackground);
         } else {
             setBackgroundDrawable(mBadgeBackground);
@@ -225,13 +269,7 @@ public class QuickContactBadge extends ImageView implements OnClickListener {
     }
 
     private void trigger(Uri lookupUri) {
-        final Intent intent = QuickContact.getQuickContactIntent(getContext(), this, lookupUri,
-                mMode, mExcludeMimes);
-        if (mSelectedContactsAppTabIndex != -1) {
-            intent.putExtra(QuickContact.EXTRA_SELECTED_CONTACTS_APP_TAB_INDEX,
-                    mSelectedContactsAppTabIndex);
-        }
-        getContext().startActivity(intent);
+        QuickContact.showQuickContact(getContext(), this, lookupUri, mMode, mExcludeMimes);
     }
 
     private class QueryHandler extends AsyncQueryHandler {

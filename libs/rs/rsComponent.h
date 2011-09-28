@@ -25,8 +25,7 @@ namespace renderscript {
 
 
 // An element is a group of Components that occupies one cell in a structure.
-class Component
-{
+class Component {
 public:
     Component();
     ~Component();
@@ -35,7 +34,6 @@ public:
 
     uint32_t getGLType() const;
     uint32_t getGLFormat() const;
-    String8 getCType() const;
     String8 getGLSLType() const;
     void dumpLOGV(const char *prefix) const;
 
@@ -47,6 +45,12 @@ public:
     bool getIsFloat() const {return mIsFloat;}
     bool getIsSigned() const {return mIsSigned;}
     uint32_t getBits() const {return mBits;}
+
+    // Helpers for reading / writing this class out
+    void serialize(OStream *stream) const;
+    void loadFromStream(IStream *stream);
+
+    bool isReference() const;
 
 protected:
     RsDataType mType;

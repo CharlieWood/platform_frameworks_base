@@ -17,7 +17,7 @@
 package com.android.server;
 
 import com.android.server.am.ActivityManagerService;
-import com.android.server.usb.UsbService;
+import com.android.server.wm.WindowManagerService;
 import com.android.internal.app.ShutdownThread;
 import com.android.internal.os.BinderInternal;
 import com.android.internal.os.SamplingProfilerIntegration;
@@ -25,6 +25,7 @@ import com.android.internal.os.SamplingProfilerIntegration;
 import dalvik.system.VMRuntime;
 import dalvik.system.Zygote;
 
+import android.accounts.AccountManagerService;
 import android.app.ActivityManagerNative;
 import android.bluetooth.BluetoothAdapter;
 import android.content.ComponentName;
@@ -33,9 +34,10 @@ import android.content.ContentService;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.IPackageManager;
+import android.content.res.Configuration;
 import android.database.ContentObserver;
-import android.database.Cursor;
 import android.media.AudioService;
+import android.os.Build;
 import android.os.Looper;
 import android.os.RemoteException;
 import android.os.ServiceManager;
@@ -47,10 +49,12 @@ import android.provider.Settings;
 import android.server.BluetoothA2dpService;
 import android.server.BluetoothService;
 import android.server.search.SearchManagerService;
+import android.util.DisplayMetrics;
 import android.util.EventLog;
 import android.util.Log;
 import android.util.Slog;
-import android.accounts.AccountManagerService;
+import android.view.Display;
+import android.view.WindowManager;
 
 import java.io.File;
 import java.util.Timer;
@@ -58,11 +62,8 @@ import java.util.TimerTask;
 
 class ServerThread extends Thread {
     private static final String TAG = "SystemServer";
-    private final static boolean INCLUDE_DEMO = false;
 
-    private static final int LOG_BOOT_PROGRESS_SYSTEM_RUN = 3010;
-
-    private ContentResolver mContentResolver;
+    ContentResolver mContentResolver;
 
     private class AdbSettingsObserver extends ContentObserver {
         public AdbSettingsObserver() {
@@ -121,12 +122,13 @@ class ServerThread extends Thread {
         WindowManagerService wm = null;
         BluetoothService bluetooth = null;
         BluetoothA2dpService bluetoothA2dp = null;
-        HeadsetObserver headset = null;
+        WiredAccessoryObserver wiredAccessory = null;
         DockObserver dock = null;
         UsbService usb = null;
         UiModeManagerService uiMode = null;
         RecognitionManagerService recognition = null;
         ThrottleService throttle = null;
+        NetworkTimeUpdateService networkTimeUpdater = null;
 
         // Critical services...
         try {
@@ -169,12 +171,12 @@ class ServerThread extends Thread {
             Slog.i(TAG, "System Content Providers");
             ActivityManagerService.installSystemProviders();
 
-            Slog.i(TAG, "Battery Service");
-            battery = new BatteryService(context);
-            ServiceManager.addService("battery", battery);
-
             Slog.i(TAG, "Lights Service");
             lights = new LightsService(context);
+
+            Slog.i(TAG, "Battery Service");
+            battery = new BatteryService(context, lights);
+            ServiceManager.addService("battery", battery);
 
             Slog.i(TAG, "Vibrator Service");
             ServiceManager.addService("vibrator", new VibratorService(context));
@@ -203,11 +205,9 @@ class ServerThread extends Thread {
             // TODO: Use a more reliable check to see if this product should
             // support Bluetooth - see bug 988521
             if (SystemProperties.get("ro.kernel.qemu").equals("1")) {
-                Slog.i(TAG, "Registering null Bluetooth Service (emulator)");
-                ServiceManager.addService(BluetoothAdapter.BLUETOOTH_SERVICE, null);
+                Slog.i(TAG, "No Bluetooh Service (emulator)");
             } else if (factoryTest == SystemServer.FACTORY_TEST_LOW_LEVEL) {
-                Slog.i(TAG, "Registering null Bluetooth Service (factory test)");
-                ServiceManager.addService(BluetoothAdapter.BLUETOOTH_SERVICE, null);
+                Slog.i(TAG, "No Bluetooth Service (factory test)");
             } else {
                 Slog.i(TAG, "Bluetooth Service");
                 bluetooth = new BluetoothService(context);
@@ -216,6 +216,7 @@ class ServerThread extends Thread {
                 bluetoothA2dp = new BluetoothA2dpService(context, bluetooth);
                 ServiceManager.addService(BluetoothA2dpService.BLUETOOTH_A2DP_SERVICE,
                                           bluetoothA2dp);
+                bluetooth.initAfterA2dpRegistration();
 
                 int bluetoothOn = Settings.Secure.getInt(mContentResolver,
                     Settings.Secure.BLUETOOTH_ON, 0);
@@ -235,6 +236,7 @@ class ServerThread extends Thread {
         NotificationManagerService notification = null;
         WallpaperManagerService wallpaper = null;
         LocationManagerService location = null;
+        CountryDetectorService countryDetector = null;
 
         if (factoryTest != SystemServer.FACTORY_TEST_LOW_LEVEL) {
             try {
@@ -247,7 +249,7 @@ class ServerThread extends Thread {
 
             try {
                 Slog.i(TAG, "Status Bar");
-                statusBar = new StatusBarManagerService(context);
+                statusBar = new StatusBarManagerService(context, wm);
                 ServiceManager.addService(Context.STATUS_BAR_SERVICE, statusBar);
             } catch (Throwable e) {
                 Slog.e(TAG, "Failure starting StatusBarManagerService", e);
@@ -346,16 +348,19 @@ class ServerThread extends Thread {
             }
 
             try {
+                Slog.i(TAG, "Country Detector");
+                countryDetector = new CountryDetectorService(context);
+                ServiceManager.addService(Context.COUNTRY_DETECTOR, countryDetector);
+            } catch (Throwable e) {
+                Slog.e(TAG, "Failure starting Country Detector", e);
+            }
+
+            try {
                 Slog.i(TAG, "Search Service");
                 ServiceManager.addService(Context.SEARCH_SERVICE,
                         new SearchManagerService(context));
             } catch (Throwable e) {
                 Slog.e(TAG, "Failure starting Search Service", e);
-            }
-
-            if (INCLUDE_DEMO) {
-                Slog.i(TAG, "Installing demo data...");
-                (new DemoThread(context)).start();
             }
 
             try {
@@ -382,14 +387,6 @@ class ServerThread extends Thread {
             }
 
             try {
-                Slog.i(TAG, "Headset Observer");
-                // Listen for wired headset changes
-                headset = new HeadsetObserver(context);
-            } catch (Throwable e) {
-                Slog.e(TAG, "Failure starting HeadsetObserver", e);
-            }
-
-            try {
                 Slog.i(TAG, "Dock Observer");
                 // Listen for dock station changes
                 dock = new DockObserver(context, power);
@@ -398,7 +395,15 @@ class ServerThread extends Thread {
             }
 
             try {
-                Slog.i(TAG, "USB Service");
+                Slog.i(TAG, "Wired Accessory Observer");
+                // Listen for wired headset changes
+                wiredAccessory = new WiredAccessoryObserver(context);
+            } catch (Throwable e) {
+                Slog.e(TAG, "Failure starting WiredAccessoryObserver", e);
+            }
+
+            try {
+                Slog.i(TAG, "USB Observer");
                 // Listen for USB changes
                 usb = new UsbService(context);
                 ServiceManager.addService(Context.USB_SERVICE, usb);
@@ -436,12 +441,31 @@ class ServerThread extends Thread {
             } catch (Throwable e) {
                 Slog.e(TAG, "Failure starting Recognition Service", e);
             }
-            
+
             try {
                 Slog.i(TAG, "DiskStats Service");
                 ServiceManager.addService("diskstats", new DiskStatsService(context));
             } catch (Throwable e) {
                 Slog.e(TAG, "Failure starting DiskStats Service", e);
+            }
+
+            try {
+                // need to add this service even if SamplingProfilerIntegration.isEnabled()
+                // is false, because it is this service that detects system property change and
+                // turns on SamplingProfilerIntegration. Plus, when sampling profiler doesn't work,
+                // there is little overhead for running this service.
+                Slog.i(TAG, "SamplingProfiler Service");
+                ServiceManager.addService("samplingprofiler",
+                            new SamplingProfilerService(context));
+            } catch (Throwable e) {
+                Slog.e(TAG, "Failure starting SamplingProfiler Service", e);
+            }
+
+            try {
+                Slog.i(TAG, "NetworkTimeUpdateService");
+                networkTimeUpdater = new NetworkTimeUpdateService(context);
+            } catch (Throwable e) {
+                Slog.e(TAG, "Failure starting NetworkTimeUpdate service");
             }
         }
 
@@ -457,14 +481,11 @@ class ServerThread extends Thread {
         // we are in safe mode.
         final boolean safeMode = wm.detectSafeMode();
         if (safeMode) {
-            try {
-                ActivityManagerNative.getDefault().enterSafeMode();
-                // Post the safe mode state in the Zygote class
-                Zygote.systemInSafeMode = true;
-                // Disable the JIT for the system_server process
-                VMRuntime.getRuntime().disableJitCompilation();
-            } catch (RemoteException e) {
-            }
+            ActivityManagerService.self().enterSafeMode();
+            // Post the safe mode state in the Zygote class
+            Zygote.systemInSafeMode = true;
+            // Disable the JIT for the system_server process
+            VMRuntime.getRuntime().disableJitCompilation();
         } else {
             // Enable the JIT for the system_server process
             VMRuntime.getRuntime().startJitCompilation();
@@ -480,10 +501,21 @@ class ServerThread extends Thread {
             notification.systemReady();
         }
 
-        if (statusBar != null) {
-            statusBar.systemReady();
-        }
         wm.systemReady();
+
+        if (safeMode) {
+            ActivityManagerService.self().showSafeModeOverlay();
+        }
+
+        // Update the configuration for this context by hand, because we're going
+        // to start using it before the config change done in wm.systemReady() will
+        // propagate to it.
+        Configuration config = wm.computeNewConfiguration();
+        DisplayMetrics metrics = new DisplayMetrics();
+        WindowManager w = (WindowManager)context.getSystemService(Context.WINDOW_SERVICE);
+        w.getDefaultDisplay().getMetrics(metrics);
+        context.getResources().updateConfiguration(config, metrics);
+
         power.systemReady();
         try {
             pm.systemReady();
@@ -491,7 +523,7 @@ class ServerThread extends Thread {
         }
 
         // These are needed to propagate to the runnable below.
-        final StatusBarManagerService statusBarF = statusBar;
+        final Context contextF = context;
         final BatteryService batteryF = battery;
         final ConnectivityService connectivityF = connectivity;
         final DockObserver dockF = dock;
@@ -503,6 +535,8 @@ class ServerThread extends Thread {
         final InputMethodManagerService immF = imm;
         final RecognitionManagerService recognitionF = recognition;
         final LocationManagerService locationF = location;
+        final CountryDetectorService countryDetectorF = countryDetector;
+        final NetworkTimeUpdateService networkTimeUpdaterF = networkTimeUpdater;
 
         // We now tell the activity manager it is okay to run third party
         // code.  It will call back into us once it has gotten to the state
@@ -514,7 +548,7 @@ class ServerThread extends Thread {
             public void run() {
                 Slog.i(TAG, "Making services ready");
 
-                if (statusBarF != null) statusBarF.systemReady2();
+                startSystemUi(contextF);
                 if (batteryF != null) batteryF.systemReady();
                 if (connectivityF != null) connectivityF.systemReady();
                 if (dockF != null) dockF.systemReady();
@@ -530,7 +564,9 @@ class ServerThread extends Thread {
                 if (wallpaperF != null) wallpaperF.systemReady();
                 if (immF != null) immF.systemReady();
                 if (locationF != null) locationF.systemReady();
+                if (countryDetectorF != null) countryDetectorF.systemReady();
                 if (throttleF != null) throttleF.systemReady();
+                if (networkTimeUpdaterF != null) networkTimeUpdaterF.systemReady();
             }
         });
 
@@ -542,39 +578,17 @@ class ServerThread extends Thread {
         Looper.loop();
         Slog.d(TAG, "System ServerThread is exiting!");
     }
+
+    static final void startSystemUi(Context context) {
+        Intent intent = new Intent();
+        intent.setComponent(new ComponentName("com.android.systemui",
+                    "com.android.systemui.SystemUIService"));
+        Slog.d(TAG, "Starting service: " + intent);
+        context.startService(intent);
+    }
 }
 
-class DemoThread extends Thread
-{
-    DemoThread(Context context)
-    {
-        mContext = context;
-    }
-
-    @Override
-    public void run()
-    {
-        try {
-            Cursor c = mContext.getContentResolver().query(People.CONTENT_URI, null, null, null, null);
-            boolean hasData = c != null && c.moveToFirst();
-            if (c != null) {
-                c.deactivate();
-            }
-            if (!hasData) {
-                DemoDataSet dataset = new DemoDataSet();
-                dataset.add(mContext);
-            }
-        } catch (Throwable e) {
-            Slog.e("SystemServer", "Failure installing demo data", e);
-        }
-
-    }
-
-    Context mContext;
-}
-
-public class SystemServer
-{
+public class SystemServer {
     private static final String TAG = "SystemServer";
 
     public static final int FACTORY_TEST_OFF = 0;
@@ -612,15 +626,18 @@ public class SystemServer
             timer.schedule(new TimerTask() {
                 @Override
                 public void run() {
-                    SamplingProfilerIntegration.writeSnapshot("system_server");
+                    SamplingProfilerIntegration.writeSnapshot("system_server", null);
                 }
             }, SNAPSHOT_INTERVAL, SNAPSHOT_INTERVAL);
         }
 
+        // Mmmmmm... more memory!
+        dalvik.system.VMRuntime.getRuntime().clearGrowthLimit();
+
         // The system server has to run all of the time, so it needs to be
         // as efficient as possible with its memory usage.
         VMRuntime.getRuntime().setTargetHeapUtilization(0.8f);
-        
+
         System.loadLibrary("android_servers");
         init1(args);
     }

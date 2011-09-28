@@ -1322,6 +1322,22 @@ status_t compileResourceFile(Bundle* bundle,
                     }
                 }
             } else if (strcmp16(block.getElementName(&len), string_array16.string()) == 0) {
+                // Check whether these strings need valid formats.
+                // (simplified form of what string16 does above)
+                size_t n = block.getAttributeCount();
+                for (size_t i = 0; i < n; i++) {
+                    size_t length;
+                    const uint16_t* attr = block.getAttributeName(i, &length);
+                    if (strcmp16(attr, translatable16.string()) == 0
+                            || strcmp16(attr, formatted16.string()) == 0) {
+                        const uint16_t* value = block.getAttributeStringValue(i, &length);
+                        if (strcmp16(value, false16.string()) == 0) {
+                            curIsFormatted = false;
+                            break;
+                        }
+                    }
+                }
+
                 curTag = &string_array16;
                 curType = array16;
                 curFormat = ResTable_map::TYPE_REFERENCE|ResTable_map::TYPE_STRING;
@@ -1724,13 +1740,6 @@ status_t ResourceTable::startBag(const SourcePos& sourcePos,
     
     // If a parent is explicitly specified, set it.
     if (bagParent.size() > 0) {
-        String16 curPar = e->getParent();
-        if (curPar.size() > 0 && curPar != bagParent) {
-            sourcePos.error("Conflicting parents specified, was '%s', now '%s'\n",
-                            String8(e->getParent()).string(),
-                            String8(bagParent).string());
-            return UNKNOWN_ERROR;
-        }
         e->setParent(bagParent);
     }
 
@@ -1778,13 +1787,6 @@ status_t ResourceTable::addBag(const SourcePos& sourcePos,
 
     // If a parent is explicitly specified, set it.
     if (bagParent.size() > 0) {
-        String16 curPar = e->getParent();
-        if (curPar.size() > 0 && curPar != bagParent) {
-            sourcePos.error("Conflicting parents specified, was '%s', now '%s'\n",
-                    String8(e->getParent()).string(),
-                    String8(bagParent).string());
-            return UNKNOWN_ERROR;
-        }
         e->setParent(bagParent);
     }
 
@@ -2442,7 +2444,7 @@ ResourceTable::validateLocalizations(void)
         if (configSet.count(defaultLocale) == 0) {
             fprintf(stdout, "aapt: warning: string '%s' has no default translation in %s; found:",
                     String8(nameIter->first).string(), mBundle->getResourceSourceDirs()[0]);
-            for (set<String8>::iterator locales = configSet.begin();
+            for (set<String8>::const_iterator locales = configSet.begin();
                  locales != configSet.end();
                  locales++) {
                 fprintf(stdout, " %s", (*locales).string());
@@ -2553,7 +2555,7 @@ ResourceFilter::parse(const char* arg)
 }
 
 bool
-ResourceFilter::match(int axis, uint32_t value)
+ResourceFilter::match(int axis, uint32_t value) const
 {
     if (value == 0) {
         // they didn't specify anything so take everything
@@ -2569,7 +2571,7 @@ ResourceFilter::match(int axis, uint32_t value)
 }
 
 bool
-ResourceFilter::match(const ResTable_config& config)
+ResourceFilter::match(const ResTable_config& config) const
 {
     if (config.locale) {
         uint32_t locale = (config.country[1] << 24) | (config.country[0] << 16)
@@ -2622,6 +2624,8 @@ status_t ResourceTable::flatten(Bundle* bundle, const sp<AaptFile>& dest)
     const size_t N = mOrderedPackages.size();
     size_t pi;
 
+    const static String16 mipmap16("mipmap");
+
     bool useUTF8 = !bundle->getWantUTF16() && bundle->isMinSdkAtLeast(SDK_FROYO);
 
     // Iterate through all data, collecting all values (strings,
@@ -2644,7 +2648,10 @@ status_t ResourceTable::flatten(Bundle* bundle, const sp<AaptFile>& dest)
                 typeStrings.add(String16("<empty>"), false);
                 continue;
             }
-            typeStrings.add(t->getName(), false);
+            const String16 typeName(t->getName());
+            typeStrings.add(typeName, false);
+
+            const bool filterable = (typeName != mipmap16);
 
             const size_t N = t->getOrderedConfigs().size();
             for (size_t ci=0; ci<N; ci++) {
@@ -2655,7 +2662,7 @@ status_t ResourceTable::flatten(Bundle* bundle, const sp<AaptFile>& dest)
                 const size_t N = c->getEntries().size();
                 for (size_t ei=0; ei<N; ei++) {
                     ConfigDescription config = c->getEntries().keyAt(ei);
-                    if (!filter.match(config)) {
+                    if (filterable && !filter.match(config)) {
                         continue;
                     }
                     sp<Entry> e = c->getEntries().valueAt(ei);
@@ -2735,6 +2742,8 @@ status_t ResourceTable::flatten(Bundle* bundle, const sp<AaptFile>& dest)
                                 "Type name %s not found",
                                 String8(typeName).string());
 
+            const bool filterable = (typeName != mipmap16);
+
             const size_t N = t != NULL ? t->getOrderedConfigs().size() : 0;
             
             // First write the typeSpec chunk, containing information about
@@ -2759,7 +2768,7 @@ status_t ResourceTable::flatten(Bundle* bundle, const sp<AaptFile>& dest)
                     (((uint8_t*)data->editData())
                         + typeSpecStart + sizeof(ResTable_typeSpec));
                 memset(typeSpecFlags, 0, sizeof(uint32_t)*N);
-                        
+
                 for (size_t ei=0; ei<N; ei++) {
                     sp<ConfigList> cl = t->getOrderedConfigs().itemAt(ei);
                     if (cl->getPublic()) {
@@ -2767,11 +2776,11 @@ status_t ResourceTable::flatten(Bundle* bundle, const sp<AaptFile>& dest)
                     }
                     const size_t CN = cl->getEntries().size();
                     for (size_t ci=0; ci<CN; ci++) {
-                        if (!filter.match(cl->getEntries().keyAt(ci))) {
+                        if (filterable && !filter.match(cl->getEntries().keyAt(ci))) {
                             continue;
                         }
                         for (size_t cj=ci+1; cj<CN; cj++) {
-                            if (!filter.match(cl->getEntries().keyAt(cj))) {
+                            if (filterable && !filter.match(cl->getEntries().keyAt(cj))) {
                                 continue;
                             }
                             typeSpecFlags[ei] |= htodl(
@@ -2808,7 +2817,7 @@ status_t ResourceTable::flatten(Bundle* bundle, const sp<AaptFile>& dest)
                       config.screenWidth,
                       config.screenHeight));
                       
-                if (!filter.match(config)) {
+                if (filterable && !filter.match(config)) {
                     continue;
                 }
                 

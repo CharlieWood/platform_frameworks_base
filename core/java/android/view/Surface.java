@@ -24,7 +24,7 @@ import android.util.DisplayMetrics;
 import android.util.Log;
 
 /**
- * Handle on to a raw buffer that is being managed by the screen compositor.
+ * Handle onto a raw buffer that is being managed by the screen compositor.
  */
 public class Surface implements Parcelable {
     private static final String LOG_TAG = "Surface";
@@ -41,7 +41,7 @@ public class Surface implements Parcelable {
     @Deprecated
     public static final int HARDWARE            = 0x00000010;
 
-    /** Implies "HARDWARE", the surface is to be used by the GPU
+    /** Implies "HARDWARE", the surface is to be used by the GPU;
      * additionally the backbuffer is never preserved for these
      * surfaces. 
      * @deprecated this is ignored, this value is set automatically when needed.
@@ -81,13 +81,36 @@ public class Surface implements Parcelable {
     
     /**
      * Creates a surface without a rendering buffer. Instead, the content
-     * of the surface must be pushed by an external entity. This is type
+     * of the surface must be pushed by an external entity. This type
      * of surface can be used for efficient camera preview or movie
-     * play back.
+     * playback.
+     *
+     * @deprecated not support by the system anymore
      */
+    @Deprecated
     public static final int PUSH_BUFFERS        = 0x00000200;
+    /**
+     * Indicates that the surface must be considered opaque, even if its
+     * pixel format is set to translucent. This can be useful if an
+     * application needs full RGBA 8888 support for instance but will
+     * still draw every pixel opaque.
+     * 
+     * @hide
+     */
+    public static final int OPAQUE              = 0x00000400;
     
-    /** Creates a normal surface. This is the default */
+    /**
+     * Application requires a hardware-protected path to an
+     * external display sink. If a hardware-protected path is not available,
+     * then this surface will not be displayed on the external sink.
+     *
+     * @hide
+     */
+    public static final int PROTECTED_APP       = 0x00000800;
+
+    // 0x1000 is reserved for an independent DRM protected flag in framework
+
+    /** Creates a normal surface. This is the default. */
     public static final int FX_SURFACE_NORMAL   = 0x00000000;
     
     /** Creates a Blur surface. Everything behind this surface is blurred
@@ -99,7 +122,7 @@ public class Surface implements Parcelable {
     public static final int FX_SURFACE_BLUR     = 0x00010000;
     
     /** Creates a Dim surface. Everything behind this surface is dimmed
-     * by the amount specified in setAlpha(). 
+     * by the amount specified in {@link #setAlpha}.
      * It is an error to lock a Dim surface, since it doesn't have
      * a backing store.
      */
@@ -110,14 +133,14 @@ public class Surface implements Parcelable {
 
     /* flags used with setFlags() (keep in sync with ISurfaceComposer.h) */
     
-    /** Hide the surface. Equivalent to calling hide() */
+    /** Hide the surface. Equivalent to calling hide(). */
     public static final int SURFACE_HIDDEN    = 0x01;
     
-    /** Freeze the surface. Equivalent to calling freeze() */ 
+    /** Freeze the surface. Equivalent to calling freeze(). */
     public static final int SURFACE_FROZEN     = 0x02;
 
     /**
-     * @deprecated use {@link #SURFACE_FROZEN} instead.
+     * @deprecated Use {@link #SURFACE_FROZEN} instead.
      */
     @Deprecated
     public static final int SURACE_FROZEN     = 0x02;
@@ -147,6 +170,8 @@ public class Surface implements Parcelable {
     private Canvas mCanvas;
     @SuppressWarnings("unused")
     private int mNativeSurface;
+    @SuppressWarnings("unused")
+    private int mSurfaceGenerationId;
     private String mName;
 
     // The display metrics used to provide the pseudo canvas size for applications
@@ -229,7 +254,7 @@ public class Surface implements Parcelable {
      *  like obtained from getMatrix. This is a hack to handle the case that an application
      *  uses getMatrix to keep the original matrix, set matrix of its own, then set the original
      *  matrix back. There is no perfect solution that works for all cases, and there are a lot of
-     *  cases that this model dose not work, but we hope this works for many apps.
+     *  cases that this model does not work, but we hope this works for many apps.
      * </ul>
      */
     private class CompatibleCanvas extends Canvas {
@@ -269,10 +294,10 @@ public class Surface implements Parcelable {
             }
             mOrigMatrix.set(m);
         }
-    };
+    }
 
     /**
-     * Sets the display metrics used to provide canva's width/height in compatibility mode.
+     * Sets the display metrics used to provide canvas's width/height in compatibility mode.
      */
     void setCompatibleDisplayMetrics(DisplayMetrics metrics, Translator translator) {
         mCompatibleDisplayMetrics = metrics;
@@ -296,6 +321,13 @@ public class Surface implements Parcelable {
      * returns false.
      */
     public native   boolean isValid();
+
+    /**
+     * @hide
+     */
+    public int getGenerationId() {
+        return mSurfaceGenerationId;
+    }
     
     /** Free all server-side state associated with this surface and
      * release this object's reference. {@hide} */
@@ -365,6 +397,31 @@ public class Surface implements Parcelable {
     }
     
     /**
+     * Like {@link #screenshot(int, int, int, int)} but includes all
+     * Surfaces in the screenshot.
+     *
+     * @hide
+     */
+    public static native Bitmap screenshot(int width, int height);
+    
+    /**
+     * Copy the current screen contents into a bitmap and return it.
+     *
+     * @param width The desired width of the returned bitmap; the raw
+     * screen will be scaled down to this size.
+     * @param height The desired height of the returned bitmap; the raw
+     * screen will be scaled down to this size.
+     * @param minLayer The lowest (bottom-most Z order) surface layer to
+     * include in the screenshot.
+     * @param maxLayer The highest (top-most Z order) surface layer to
+     * include in the screenshot.
+     * @return Returns a Bitmap containing the screen contents.
+     *
+     * @hide
+     */
+    public static native Bitmap screenshot(int width, int height, int minLayer, int maxLayer);
+
+    /**
      * set surface parameters.
      * needs to be inside open/closeTransaction block
      */
@@ -422,16 +479,20 @@ public class Surface implements Parcelable {
     /* no user serviceable parts here ... */
     @Override
     protected void finalize() throws Throwable {
-        if (mNativeSurface != 0 || mSurfaceControl != 0) {
-            if (DEBUG_RELEASE) {
-                Log.w(LOG_TAG, "Surface.finalize() has work. You should have called release() (" 
-                        + mNativeSurface + ", " + mSurfaceControl + ")", mCreationStack);
-            } else {
-                Log.w(LOG_TAG, "Surface.finalize() has work. You should have called release() (" 
-                        + mNativeSurface + ", " + mSurfaceControl + ")");
+        try {
+            super.finalize();
+        } finally {
+            if (mNativeSurface != 0 || mSurfaceControl != 0) {
+                if (DEBUG_RELEASE) {
+                    Log.w(LOG_TAG, "Surface.finalize() has work. You should have called release() (" 
+                            + mNativeSurface + ", " + mSurfaceControl + ")", mCreationStack);
+                } else {
+                    Log.w(LOG_TAG, "Surface.finalize() has work. You should have called release() (" 
+                            + mNativeSurface + ", " + mSurfaceControl + ")");
+                }
             }
+            release();            
         }
-        release();
     }
     
     private native void init(SurfaceSession s,

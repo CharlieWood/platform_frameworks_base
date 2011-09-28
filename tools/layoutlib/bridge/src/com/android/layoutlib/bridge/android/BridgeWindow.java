@@ -22,6 +22,7 @@ import android.os.Bundle;
 import android.os.IBinder;
 import android.os.ParcelFileDescriptor;
 import android.os.RemoteException;
+import android.view.DragEvent;
 import android.view.IWindow;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -78,6 +79,10 @@ public final class BridgeWindow implements IWindow {
     }
 
     public void closeSystemDialogs(String reason) {
+        // pass for now.
+    }
+
+    public void dispatchDragEvent(DragEvent event) {
         // pass for now.
     }
 

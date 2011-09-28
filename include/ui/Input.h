@@ -28,6 +28,10 @@
 #include <utils/RefBase.h>
 #include <utils/String8.h>
 
+#ifdef HAVE_ANDROID_OS
+class SkMatrix;
+#endif
+
 /*
  * Additional private constants not defined in ndk/ui/input.h.
  */
@@ -38,11 +42,22 @@ enum {
     AKEY_EVENT_FLAG_START_TRACKING = 0x40000000
 };
 
+enum {
+    /*
+     * Indicates that an input device has switches.
+     * This input source flag is hidden from the API because switches are only used by the system
+     * and applications have no way to interact with them.
+     */
+    AINPUT_SOURCE_SWITCH = 0x80000000,
+};
+
 /*
  * Maximum number of pointers supported per motion event.
  * Smallest number of pointers is 1.
+ * (We want at least 10 but some touch controllers obstensibly configured for 10 pointers
+ * will occasionally emit 11.  There is not much harm making this constant bigger.)
  */
-#define MAX_POINTERS 10
+#define MAX_POINTERS 16
 
 /*
  * Maximum pointer id value supported in a motion event.
@@ -68,6 +83,10 @@ struct AInputDevice {
 
 namespace android {
 
+#ifdef HAVE_ANDROID_OS
+class Parcel;
+#endif
+
 /*
  * Flags that flow alongside events in the input dispatch system to help with certain
  * policy decisions such as waking from device sleep.
@@ -76,7 +95,7 @@ namespace android {
  */
 enum {
     /* These flags originate in RawEvents and are generally set in the key map.
-     * See also labels for policy flags in KeycodeLabels.h. */
+     * NOTE: If you edit these flags, also edit labels in KeycodeLabels.h. */
 
     POLICY_FLAG_WAKE = 0x00000001,
     POLICY_FLAG_WAKE_DROPPED = 0x00000002,
@@ -87,6 +106,7 @@ enum {
     POLICY_FLAG_MENU = 0x00000040,
     POLICY_FLAG_LAUNCHER = 0x00000080,
     POLICY_FLAG_VIRTUAL = 0x00000100,
+    POLICY_FLAG_FUNCTION = 0x00000200,
 
     POLICY_FLAG_RAW_MASK = 0x0000ffff,
 
@@ -150,15 +170,30 @@ struct InputConfiguration {
  * Pointer coordinate data.
  */
 struct PointerCoords {
-    float x;
-    float y;
-    float pressure;
-    float size;
-    float touchMajor;
-    float touchMinor;
-    float toolMajor;
-    float toolMinor;
-    float orientation;
+    enum { MAX_AXES = 14 }; // 14 so that sizeof(PointerCoords) == 64
+
+    // Bitfield of axes that are present in this structure.
+    uint64_t bits;
+
+    // Values of axes that are stored in this structure packed in order by axis id
+    // for each axis that is present in the structure according to 'bits'.
+    float values[MAX_AXES];
+
+    inline void clear() {
+        bits = 0;
+    }
+
+    float getAxisValue(int32_t axis) const;
+    status_t setAxisValue(int32_t axis, float value);
+    float* editAxisValue(int32_t axis);
+
+#ifdef HAVE_ANDROID_OS
+    status_t readFromParcel(Parcel* parcel);
+    status_t writeToParcel(Parcel* parcel) const;
+#endif
+
+private:
+    void tooManyAxes(int axis);
 };
 
 /*
@@ -173,12 +208,13 @@ public:
     inline int32_t getDeviceId() const { return mDeviceId; }
 
     inline int32_t getSource() const { return mSource; }
-    
+
+    inline void setSource(int32_t source) { mSource = source; }
+
 protected:
     void initialize(int32_t deviceId, int32_t source);
     void initialize(const InputEvent& from);
 
-private:
     int32_t mDeviceId;
     int32_t mSource;
 };
@@ -229,7 +265,7 @@ public:
             nsecs_t eventTime);
     void initialize(const KeyEvent& from);
 
-private:
+protected:
     int32_t mAction;
     int32_t mFlags;
     int32_t mKeyCode;
@@ -251,11 +287,17 @@ public:
 
     inline int32_t getAction() const { return mAction; }
 
+    inline void setAction(int32_t action) { mAction = action; }
+
     inline int32_t getFlags() const { return mFlags; }
 
     inline int32_t getEdgeFlags() const { return mEdgeFlags; }
 
+    inline void setEdgeFlags(int32_t edgeFlags) { mEdgeFlags = edgeFlags; }
+
     inline int32_t getMetaState() const { return mMetaState; }
+
+    inline void setMetaState(int32_t metaState) { mMetaState = metaState; }
 
     inline float getXOffset() const { return mXOffset; }
 
@@ -273,48 +315,54 @@ public:
 
     inline nsecs_t getEventTime() const { return mSampleEventTimes[getHistorySize()]; }
 
+    const PointerCoords* getRawPointerCoords(size_t pointerIndex) const;
+
+    float getRawAxisValue(int32_t axis, size_t pointerIndex) const;
+
     inline float getRawX(size_t pointerIndex) const {
-        return getCurrentPointerCoords(pointerIndex).x;
+        return getRawAxisValue(AMOTION_EVENT_AXIS_X, pointerIndex);
     }
 
     inline float getRawY(size_t pointerIndex) const {
-        return getCurrentPointerCoords(pointerIndex).y;
+        return getRawAxisValue(AMOTION_EVENT_AXIS_Y, pointerIndex);
     }
 
+    float getAxisValue(int32_t axis, size_t pointerIndex) const;
+
     inline float getX(size_t pointerIndex) const {
-        return getRawX(pointerIndex) + mXOffset;
+        return getAxisValue(AMOTION_EVENT_AXIS_X, pointerIndex);
     }
 
     inline float getY(size_t pointerIndex) const {
-        return getRawY(pointerIndex) + mYOffset;
+        return getAxisValue(AMOTION_EVENT_AXIS_Y, pointerIndex);
     }
 
     inline float getPressure(size_t pointerIndex) const {
-        return getCurrentPointerCoords(pointerIndex).pressure;
+        return getAxisValue(AMOTION_EVENT_AXIS_PRESSURE, pointerIndex);
     }
 
     inline float getSize(size_t pointerIndex) const {
-        return getCurrentPointerCoords(pointerIndex).size;
+        return getAxisValue(AMOTION_EVENT_AXIS_SIZE, pointerIndex);
     }
 
     inline float getTouchMajor(size_t pointerIndex) const {
-        return getCurrentPointerCoords(pointerIndex).touchMajor;
+        return getAxisValue(AMOTION_EVENT_AXIS_TOUCH_MAJOR, pointerIndex);
     }
 
     inline float getTouchMinor(size_t pointerIndex) const {
-        return getCurrentPointerCoords(pointerIndex).touchMinor;
+        return getAxisValue(AMOTION_EVENT_AXIS_TOUCH_MINOR, pointerIndex);
     }
 
     inline float getToolMajor(size_t pointerIndex) const {
-        return getCurrentPointerCoords(pointerIndex).toolMajor;
+        return getAxisValue(AMOTION_EVENT_AXIS_TOOL_MAJOR, pointerIndex);
     }
 
     inline float getToolMinor(size_t pointerIndex) const {
-        return getCurrentPointerCoords(pointerIndex).toolMinor;
+        return getAxisValue(AMOTION_EVENT_AXIS_TOOL_MINOR, pointerIndex);
     }
 
     inline float getOrientation(size_t pointerIndex) const {
-        return getCurrentPointerCoords(pointerIndex).orientation;
+        return getAxisValue(AMOTION_EVENT_AXIS_ORIENTATION, pointerIndex);
     }
 
     inline size_t getHistorySize() const { return mSampleEventTimes.size() - 1; }
@@ -323,48 +371,67 @@ public:
         return mSampleEventTimes[historicalIndex];
     }
 
+    const PointerCoords* getHistoricalRawPointerCoords(
+            size_t pointerIndex, size_t historicalIndex) const;
+
+    float getHistoricalRawAxisValue(int32_t axis, size_t pointerIndex,
+            size_t historicalIndex) const;
+
     inline float getHistoricalRawX(size_t pointerIndex, size_t historicalIndex) const {
-        return getHistoricalPointerCoords(pointerIndex, historicalIndex).x;
+        return getHistoricalRawAxisValue(
+                AMOTION_EVENT_AXIS_X, pointerIndex, historicalIndex);
     }
 
     inline float getHistoricalRawY(size_t pointerIndex, size_t historicalIndex) const {
-        return getHistoricalPointerCoords(pointerIndex, historicalIndex).y;
+        return getHistoricalRawAxisValue(
+                AMOTION_EVENT_AXIS_Y, pointerIndex, historicalIndex);
     }
 
+    float getHistoricalAxisValue(int32_t axis, size_t pointerIndex, size_t historicalIndex) const;
+
     inline float getHistoricalX(size_t pointerIndex, size_t historicalIndex) const {
-        return getHistoricalRawX(pointerIndex, historicalIndex) + mXOffset;
+        return getHistoricalAxisValue(
+                AMOTION_EVENT_AXIS_X, pointerIndex, historicalIndex);
     }
 
     inline float getHistoricalY(size_t pointerIndex, size_t historicalIndex) const {
-        return getHistoricalRawY(pointerIndex, historicalIndex) + mYOffset;
+        return getHistoricalAxisValue(
+                AMOTION_EVENT_AXIS_Y, pointerIndex, historicalIndex);
     }
 
     inline float getHistoricalPressure(size_t pointerIndex, size_t historicalIndex) const {
-        return getHistoricalPointerCoords(pointerIndex, historicalIndex).pressure;
+        return getHistoricalAxisValue(
+                AMOTION_EVENT_AXIS_PRESSURE, pointerIndex, historicalIndex);
     }
 
     inline float getHistoricalSize(size_t pointerIndex, size_t historicalIndex) const {
-        return getHistoricalPointerCoords(pointerIndex, historicalIndex).size;
+        return getHistoricalAxisValue(
+                AMOTION_EVENT_AXIS_SIZE, pointerIndex, historicalIndex);
     }
 
     inline float getHistoricalTouchMajor(size_t pointerIndex, size_t historicalIndex) const {
-        return getHistoricalPointerCoords(pointerIndex, historicalIndex).touchMajor;
+        return getHistoricalAxisValue(
+                AMOTION_EVENT_AXIS_TOUCH_MAJOR, pointerIndex, historicalIndex);
     }
 
     inline float getHistoricalTouchMinor(size_t pointerIndex, size_t historicalIndex) const {
-        return getHistoricalPointerCoords(pointerIndex, historicalIndex).touchMinor;
+        return getHistoricalAxisValue(
+                AMOTION_EVENT_AXIS_TOUCH_MINOR, pointerIndex, historicalIndex);
     }
 
     inline float getHistoricalToolMajor(size_t pointerIndex, size_t historicalIndex) const {
-        return getHistoricalPointerCoords(pointerIndex, historicalIndex).toolMajor;
+        return getHistoricalAxisValue(
+                AMOTION_EVENT_AXIS_TOOL_MAJOR, pointerIndex, historicalIndex);
     }
 
     inline float getHistoricalToolMinor(size_t pointerIndex, size_t historicalIndex) const {
-        return getHistoricalPointerCoords(pointerIndex, historicalIndex).toolMinor;
+        return getHistoricalAxisValue(
+                AMOTION_EVENT_AXIS_TOOL_MINOR, pointerIndex, historicalIndex);
     }
 
     inline float getHistoricalOrientation(size_t pointerIndex, size_t historicalIndex) const {
-        return getHistoricalPointerCoords(pointerIndex, historicalIndex).orientation;
+        return getHistoricalAxisValue(
+                AMOTION_EVENT_AXIS_ORIENTATION, pointerIndex, historicalIndex);
     }
 
     void initialize(
@@ -384,11 +451,22 @@ public:
             const int32_t* pointerIds,
             const PointerCoords* pointerCoords);
 
+    void copyFrom(const MotionEvent* other, bool keepHistory);
+
     void addSample(
             nsecs_t eventTime,
             const PointerCoords* pointerCoords);
 
     void offsetLocation(float xOffset, float yOffset);
+
+    void scale(float scaleFactor);
+
+#ifdef HAVE_ANDROID_OS
+    void transform(const SkMatrix* matrix);
+
+    status_t readFromParcel(Parcel* parcel);
+    status_t writeToParcel(Parcel* parcel) const;
+#endif
 
     // Low-level accessors.
     inline const int32_t* getPointerIds() const { return mPointerIds.array(); }
@@ -397,7 +475,7 @@ public:
             return mSamplePointerCoords.array();
     }
 
-private:
+protected:
     int32_t mAction;
     int32_t mFlags;
     int32_t mEdgeFlags;
@@ -410,15 +488,6 @@ private:
     Vector<int32_t> mPointerIds;
     Vector<nsecs_t> mSampleEventTimes;
     Vector<PointerCoords> mSamplePointerCoords;
-
-    inline const PointerCoords& getCurrentPointerCoords(size_t pointerIndex) const {
-        return mSamplePointerCoords[getHistorySize() * getPointerCount() + pointerIndex];
-    }
-
-    inline const PointerCoords& getHistoricalPointerCoords(
-            size_t pointerIndex, size_t historicalIndex) const {
-        return mSamplePointerCoords[historicalIndex * getPointerCount() + pointerIndex];
-    }
 };
 
 /*
@@ -474,11 +543,11 @@ public:
     inline const String8 getName() const { return mName; }
     inline uint32_t getSources() const { return mSources; }
 
-    const MotionRange* getMotionRange(int32_t rangeType) const;
+    const MotionRange* getMotionRange(int32_t axis) const;
 
     void addSource(uint32_t source);
-    void addMotionRange(int32_t rangeType, float min, float max, float flat, float fuzz);
-    void addMotionRange(int32_t rangeType, const MotionRange& range);
+    void addMotionRange(int32_t axis, float min, float max, float flat, float fuzz);
+    void addMotionRange(int32_t axis, const MotionRange& range);
 
     inline void setKeyboardType(int32_t keyboardType) { mKeyboardType = keyboardType; }
     inline int32_t getKeyboardType() const { return mKeyboardType; }
@@ -496,6 +565,54 @@ private:
     KeyedVector<int32_t, MotionRange> mMotionRanges;
 };
 
+/*
+ * Identifies a device.
+ */
+struct InputDeviceIdentifier {
+    inline InputDeviceIdentifier() :
+            bus(0), vendor(0), product(0), version(0) {
+    }
+
+    String8 name;
+    String8 location;
+    String8 uniqueId;
+    uint16_t bus;
+    uint16_t vendor;
+    uint16_t product;
+    uint16_t version;
+};
+
+/* Types of input device configuration files. */
+enum InputDeviceConfigurationFileType {
+    INPUT_DEVICE_CONFIGURATION_FILE_TYPE_CONFIGURATION = 0,     /* .idc file */
+    INPUT_DEVICE_CONFIGURATION_FILE_TYPE_KEY_LAYOUT = 1,        /* .kl file */
+    INPUT_DEVICE_CONFIGURATION_FILE_TYPE_KEY_CHARACTER_MAP = 2, /* .kcm file */
+};
+
+/*
+ * Gets the path of an input device configuration file, if one is available.
+ * Considers both system provided and user installed configuration files.
+ *
+ * The device identifier is used to construct several default configuration file
+ * names to try based on the device name, vendor, product, and version.
+ *
+ * Returns an empty string if not found.
+ */
+extern String8 getInputDeviceConfigurationFilePathByDeviceIdentifier(
+        const InputDeviceIdentifier& deviceIdentifier,
+        InputDeviceConfigurationFileType type);
+
+/*
+ * Gets the path of an input device configuration file, if one is available.
+ * Considers both system provided and user installed configuration files.
+ *
+ * The name is case-sensitive and is used to construct the filename to resolve.
+ * All characters except 'a'-'z', 'A'-'Z', '0'-'9', '-', and '_' are replaced by underscores.
+ *
+ * Returns an empty string if not found.
+ */
+extern String8 getInputDeviceConfigurationFilePathByName(
+        const String8& name, InputDeviceConfigurationFileType type);
 
 } // namespace android
 

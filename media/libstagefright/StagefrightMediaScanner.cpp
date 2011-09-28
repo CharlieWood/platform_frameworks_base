@@ -28,9 +28,7 @@
 
 namespace android {
 
-StagefrightMediaScanner::StagefrightMediaScanner()
-    : mRetriever(new MediaMetadataRetriever) {
-}
+StagefrightMediaScanner::StagefrightMediaScanner() {}
 
 StagefrightMediaScanner::~StagefrightMediaScanner() {}
 
@@ -39,7 +37,7 @@ static bool FileHasAcceptableExtension(const char *extension) {
         ".mp3", ".mp4", ".m4a", ".3gp", ".3gpp", ".3g2", ".3gpp2",
         ".mpeg", ".ogg", ".mid", ".smf", ".imy", ".wma", ".aac",
         ".wav", ".amr", ".midi", ".xmf", ".rtttl", ".rtx", ".ota",
-        ".mkv", ".mka", ".webm", ".ts"
+        ".mkv", ".mka", ".webm", ".ts", ".fl", ".flac"
     };
     static const size_t kNumValidExtensions =
         sizeof(kValidExtensions) / sizeof(kValidExtensions[0]);
@@ -127,40 +125,45 @@ status_t StagefrightMediaScanner::processFile(
             || !strcasecmp(extension, ".rtttl")
             || !strcasecmp(extension, ".rtx")
             || !strcasecmp(extension, ".ota")) {
-        return HandleMIDI(path, &client);
-    }
-
-    if (mRetriever->setDataSource(path) == OK) {
-        const char *value;
-        if ((value = mRetriever->extractMetadata(
-                        METADATA_KEY_MIMETYPE)) != NULL) {
-            client.setMimeType(value);
+        status_t status = HandleMIDI(path, &client);
+        if (status != OK) {
+            return status;
         }
+    } else {
+        sp<MediaMetadataRetriever> mRetriever(new MediaMetadataRetriever);
 
-        struct KeyMap {
-            const char *tag;
-            int key;
-        };
-        static const KeyMap kKeyMap[] = {
-            { "tracknumber", METADATA_KEY_CD_TRACK_NUMBER },
-            { "discnumber", METADATA_KEY_DISC_NUMBER },
-            { "album", METADATA_KEY_ALBUM },
-            { "artist", METADATA_KEY_ARTIST },
-            { "albumartist", METADATA_KEY_ALBUMARTIST },
-            { "composer", METADATA_KEY_COMPOSER },
-            { "genre", METADATA_KEY_GENRE },
-            { "title", METADATA_KEY_TITLE },
-            { "year", METADATA_KEY_YEAR },
-            { "duration", METADATA_KEY_DURATION },
-            { "writer", METADATA_KEY_WRITER },
-            { "compilation", METADATA_KEY_COMPILATION },
-        };
-        static const size_t kNumEntries = sizeof(kKeyMap) / sizeof(kKeyMap[0]);
-
-        for (size_t i = 0; i < kNumEntries; ++i) {
+         if (mRetriever->setDataSource(path) == OK) {
             const char *value;
-            if ((value = mRetriever->extractMetadata(kKeyMap[i].key)) != NULL) {
-                client.addStringTag(kKeyMap[i].tag, value);
+            if ((value = mRetriever->extractMetadata(
+                            METADATA_KEY_MIMETYPE)) != NULL) {
+                client.setMimeType(value);
+            }
+
+            struct KeyMap {
+                const char *tag;
+                int key;
+            };
+            static const KeyMap kKeyMap[] = {
+                { "tracknumber", METADATA_KEY_CD_TRACK_NUMBER },
+                { "discnumber", METADATA_KEY_DISC_NUMBER },
+                { "album", METADATA_KEY_ALBUM },
+                { "artist", METADATA_KEY_ARTIST },
+                { "albumartist", METADATA_KEY_ALBUMARTIST },
+                { "composer", METADATA_KEY_COMPOSER },
+                { "genre", METADATA_KEY_GENRE },
+                { "title", METADATA_KEY_TITLE },
+                { "year", METADATA_KEY_YEAR },
+                { "duration", METADATA_KEY_DURATION },
+                { "writer", METADATA_KEY_WRITER },
+                { "compilation", METADATA_KEY_COMPILATION },
+            };
+            static const size_t kNumEntries = sizeof(kKeyMap) / sizeof(kKeyMap[0]);
+
+            for (size_t i = 0; i < kNumEntries; ++i) {
+                const char *value;
+                if ((value = mRetriever->extractMetadata(kKeyMap[i].key)) != NULL) {
+                    client.addStringTag(kKeyMap[i].tag, value);
+                }
             }
         }
     }
@@ -173,12 +176,13 @@ status_t StagefrightMediaScanner::processFile(
 char *StagefrightMediaScanner::extractAlbumArt(int fd) {
     LOGV("extractAlbumArt %d", fd);
 
-    off_t size = lseek(fd, 0, SEEK_END);
+    off64_t size = lseek64(fd, 0, SEEK_END);
     if (size < 0) {
         return NULL;
     }
-    lseek(fd, 0, SEEK_SET);
+    lseek64(fd, 0, SEEK_SET);
 
+    sp<MediaMetadataRetriever> mRetriever(new MediaMetadataRetriever);
     if (mRetriever->setDataSource(fd, 0, size) == OK) {
         sp<IMemory> mem = mRetriever->extractAlbumArt();
 

@@ -46,13 +46,14 @@ import java.io.PrintWriter;
  * to do any CPU intensive (such as MP3 playback) or blocking (such as
  * networking) operations, it should spawn its own thread in which to do that
  * work.  More information on this can be found in
- * <a href="{@docRoot}guide/topics/fundamentals.html#procthread">Application Fundamentals:
- * Processes and Threads</a>.  The {@link IntentService} class is available
+ * <a href="{@docRoot}guide/topics/fundamentals/processes-and-threads.html">Processes and
+ * Threads</a>.  The {@link IntentService} class is available
  * as a standard implementation of Service that has its own thread where it
  * schedules its work to be done.</p>
- * 
- * <p>The Service class is an important part of an
- * <a href="{@docRoot}guide/topics/fundamentals.html#lcycles">application's overall lifecycle</a>.</p>
+ *
+ * <p>You can find a detailed discussion about how to create services in the 
+ * <a href="{@docRoot}guide/topics/fundamentals/services.html">Services</a>
+ * document.</p>
  * 
  * <p>Topics covered here:
  * <ol>
@@ -453,9 +454,9 @@ public abstract class Service extends ContextWrapper implements ComponentCallbac
      * 
      * <p><em>Note that unlike other application components, calls on to the
      * IBinder interface returned here may not happen on the main thread
-     * of the process</em>.  More information about this can be found
-     * in <a href="{@docRoot}guide/topics/fundamentals.html#procthread">Application Fundamentals:
-     * Processes and Threads</a>.</p>
+     * of the process</em>.  More information about the main thread can be found in
+     * <a href="{@docRoot}guide/topics/fundamentals/processes-and-threads.html">Processes and
+     * Threads</a>.</p>
      * 
      * @param intent The Intent that was used to bind to this service,
      * as given to {@link android.content.Context#bindService
@@ -568,6 +569,8 @@ public abstract class Service extends ContextWrapper implements ComponentCallbac
      * be killed when they would like to avoid it), vs allowing the performance
      * of the entire system to be decreased, this method was deemed less
      * important.
+     * 
+     * @hide
      */
     @Deprecated
     public final void setForeground(boolean isForeground) {
@@ -585,7 +588,7 @@ public abstract class Service extends ContextWrapper implements ComponentCallbac
      * would notice if their music stopped playing.
      * 
      * <p>If you need your application to run on platform versions prior to API
-     * level 5, you can use the following model to call the the older {@link #setForeground}
+     * level 5, you can use the following model to call the the older setForeground()
      * or this modern method as appropriate:
      * 
      * {@sample development/samples/ApiDemos/src/com/example/android/apis/app/ForegroundService.java

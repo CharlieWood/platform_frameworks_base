@@ -65,12 +65,14 @@ final class GsmSMSDispatcher extends SMSDispatcher {
      * @param ar AsyncResult passed into the message handler.  ar.result should
      *           be a String representing the status report PDU, as ASCII hex.
      */
+    @Override
     protected void handleStatusReport(AsyncResult ar) {
         String pduString = (String) ar.result;
         SmsMessage sms = SmsMessage.newFromCDS(pduString);
 
+        int tpStatus = sms.getStatus();
+
         if (sms != null) {
-            int tpStatus = sms.getStatus();
             int messageRef = sms.messageRef;
             for (int i = 0, count = deliveryPendingList.size(); i < count; i++) {
                 SmsTracker tracker = deliveryPendingList.get(i);
@@ -96,7 +98,8 @@ final class GsmSMSDispatcher extends SMSDispatcher {
 
 
     /** {@inheritDoc} */
-    protected int dispatchMessage(SmsMessageBase smsb) {
+    @Override
+    public int dispatchMessage(SmsMessageBase smsb) {
 
         // If sms is null, means there was a parsing error.
         if (smsb == null) {
@@ -109,6 +112,13 @@ final class GsmSMSDispatcher extends SMSDispatcher {
             // As per 3GPP TS 23.040 9.2.3.9, Type Zero messages should not be
             // Displayed/Stored/Notified. They should only be acknowledged.
             Log.d(TAG, "Received short message type 0, Don't display or store it. Send Ack");
+            return Intents.RESULT_SMS_HANDLED;
+        }
+
+        if (mSmsReceiveDisabled) {
+            // Device doesn't support SMS service,
+            Log.d(TAG, "Received short message on device which doesn't support "
+                    + "SMS service. Ignored.");
             return Intents.RESULT_SMS_HANDLED;
         }
 
@@ -163,6 +173,7 @@ final class GsmSMSDispatcher extends SMSDispatcher {
     }
 
     /** {@inheritDoc} */
+    @Override
     protected void sendData(String destAddr, String scAddr, int destPort,
             byte[] data, PendingIntent sentIntent, PendingIntent deliveryIntent) {
         SmsMessage.SubmitPdu pdu = SmsMessage.getSubmitPdu(
@@ -171,6 +182,7 @@ final class GsmSMSDispatcher extends SMSDispatcher {
     }
 
     /** {@inheritDoc} */
+    @Override
     protected void sendText(String destAddr, String scAddr, String text,
             PendingIntent sentIntent, PendingIntent deliveryIntent) {
         SmsMessage.SubmitPdu pdu = SmsMessage.getSubmitPdu(
@@ -179,6 +191,7 @@ final class GsmSMSDispatcher extends SMSDispatcher {
     }
 
     /** {@inheritDoc} */
+    @Override
     protected void sendMultipartText(String destinationAddress, String scAddress,
             ArrayList<String> parts, ArrayList<PendingIntent> sentIntents,
             ArrayList<PendingIntent> deliveryIntents) {
@@ -189,7 +202,6 @@ final class GsmSMSDispatcher extends SMSDispatcher {
 
         mRemainingMessages = msgCount;
 
-        TextEncodingDetails[] encodingForParts = new TextEncodingDetails[msgCount];
         for (int i = 0; i < msgCount; i++) {
             TextEncodingDetails details = SmsMessage.calculateLength(parts.get(i), false);
             if (encoding != details.codeUnitSize
@@ -197,7 +209,6 @@ final class GsmSMSDispatcher extends SMSDispatcher {
                             || encoding == android.telephony.SmsMessage.ENCODING_7BIT)) {
                 encoding = details.codeUnitSize;
             }
-            encodingForParts[i] = details;
         }
 
         for (int i = 0; i < msgCount; i++) {
@@ -214,10 +225,6 @@ final class GsmSMSDispatcher extends SMSDispatcher {
             concatRef.isEightBits = true;
             SmsHeader smsHeader = new SmsHeader();
             smsHeader.concatRef = concatRef;
-            if (encoding == android.telephony.SmsMessage.ENCODING_7BIT) {
-                smsHeader.languageTable = encodingForParts[i].languageTable;
-                smsHeader.languageShiftTable = encodingForParts[i].languageShiftTable;
-            }
 
             PendingIntent sentIntent = null;
             if (sentIntents != null && sentIntents.size() > i) {
@@ -231,7 +238,7 @@ final class GsmSMSDispatcher extends SMSDispatcher {
 
             SmsMessage.SubmitPdu pdus = SmsMessage.getSubmitPdu(scAddress, destinationAddress,
                     parts.get(i), deliveryIntent != null, SmsHeader.toByteArray(smsHeader),
-                    encoding, smsHeader.languageTable, smsHeader.languageShiftTable);
+                    encoding);
 
             sendRawPdu(pdus.encodedScAddress, pdus.encodedMessage, sentIntent, deliveryIntent);
         }
@@ -286,7 +293,6 @@ final class GsmSMSDispatcher extends SMSDispatcher {
 
         mRemainingMessages = msgCount;
 
-        TextEncodingDetails[] encodingForParts = new TextEncodingDetails[msgCount];
         for (int i = 0; i < msgCount; i++) {
             TextEncodingDetails details = SmsMessage.calculateLength(parts.get(i), false);
             if (encoding != details.codeUnitSize
@@ -294,7 +300,6 @@ final class GsmSMSDispatcher extends SMSDispatcher {
                             || encoding == android.telephony.SmsMessage.ENCODING_7BIT)) {
                 encoding = details.codeUnitSize;
             }
-            encodingForParts[i] = details;
         }
 
         for (int i = 0; i < msgCount; i++) {
@@ -305,10 +310,6 @@ final class GsmSMSDispatcher extends SMSDispatcher {
             concatRef.isEightBits = false;
             SmsHeader smsHeader = new SmsHeader();
             smsHeader.concatRef = concatRef;
-            if (encoding == android.telephony.SmsMessage.ENCODING_7BIT) {
-                smsHeader.languageTable = encodingForParts[i].languageTable;
-                smsHeader.languageShiftTable = encodingForParts[i].languageShiftTable;
-            }
 
             PendingIntent sentIntent = null;
             if (sentIntents != null && sentIntents.size() > i) {
@@ -322,7 +323,7 @@ final class GsmSMSDispatcher extends SMSDispatcher {
 
             SmsMessage.SubmitPdu pdus = SmsMessage.getSubmitPdu(scAddress, destinationAddress,
                     parts.get(i), deliveryIntent != null, SmsHeader.toByteArray(smsHeader),
-                    encoding, smsHeader.languageTable, smsHeader.languageShiftTable);
+                    encoding);
 
             HashMap<String, Object> map = new HashMap<String, Object>();
             map.put("smsc", pdus.encodedScAddress);
@@ -334,8 +335,9 @@ final class GsmSMSDispatcher extends SMSDispatcher {
     }
 
     /** {@inheritDoc} */
+    @Override
     protected void sendSms(SmsTracker tracker) {
-        HashMap map = tracker.mData;
+        HashMap<String, Object> map = tracker.mData;
 
         byte smsc[] = (byte[]) map.get("smsc");
         byte pdu[] = (byte[]) map.get("pdu");
@@ -356,7 +358,7 @@ final class GsmSMSDispatcher extends SMSDispatcher {
         ArrayList<PendingIntent> sentIntents;
         ArrayList<PendingIntent> deliveryIntents;
 
-        HashMap map = tracker.mData;
+        HashMap<String, Object> map = tracker.mData;
 
         String destinationAddress = (String) map.get("destination");
         String scAddress = (String) map.get("scaddress");
@@ -377,6 +379,30 @@ final class GsmSMSDispatcher extends SMSDispatcher {
         if (mCm != null) {
             mCm.acknowledgeLastIncomingGsmSms(success, resultToCause(result), response);
         }
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public void activateCellBroadcastSms(int activate, Message response) {
+        // Unless CBS is implemented for GSM, this point should be unreachable.
+        Log.e(TAG, "Error! The functionality cell broadcast sms is not implemented for GSM.");
+        response.recycle();
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public void getCellBroadcastSmsConfig(Message response){
+        // Unless CBS is implemented for GSM, this point should be unreachable.
+        Log.e(TAG, "Error! The functionality cell broadcast sms is not implemented for GSM.");
+        response.recycle();
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public  void setCellBroadcastConfig(int[] configValuesArray, Message response) {
+        // Unless CBS is implemented for GSM, this point should be unreachable.
+        Log.e(TAG, "Error! The functionality cell broadcast sms is not implemented for GSM.");
+        response.recycle();
     }
 
     private int resultToCause(int rc) {
@@ -470,10 +496,9 @@ final class GsmSMSDispatcher extends SMSDispatcher {
     }
 
     // This map holds incomplete concatenated messages waiting for assembly
-    private final HashMap<SmsCbConcatInfo, byte[][]> mSmsCbPageMap =
+    private HashMap<SmsCbConcatInfo, byte[][]> mSmsCbPageMap =
             new HashMap<SmsCbConcatInfo, byte[][]>();
 
-    @Override
     protected void handleBroadcastSms(AsyncResult ar) {
         try {
             byte[][] pdus = null;
@@ -485,9 +510,9 @@ final class GsmSMSDispatcher extends SMSDispatcher {
                     for (int j = i; j < i + 8 && j < receivedPdu.length; j++) {
                         int b = receivedPdu[j] & 0xff;
                         if (b < 0x10) {
-                            sb.append('0');
+                            sb.append("0");
                         }
-                        sb.append(Integer.toHexString(b)).append(' ');
+                        sb.append(Integer.toHexString(b)).append(" ");
                     }
                     Log.d(TAG, sb.toString());
                 }
@@ -532,8 +557,7 @@ final class GsmSMSDispatcher extends SMSDispatcher {
                 pdus[0] = receivedPdu;
             }
 
-            boolean isEmergencyMessage = SmsCbHeader.isEmergencyMessage(header.messageIdentifier);
-            dispatchBroadcastPdus(pdus, isEmergencyMessage);
+            dispatchBroadcastPdus(pdus);
 
             // Remove messages that are out of scope to prevent the map from
             // growing indefinitely, containing incomplete messages that were

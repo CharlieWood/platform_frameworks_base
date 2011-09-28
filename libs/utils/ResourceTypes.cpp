@@ -317,6 +317,12 @@ status_t ResStringPool::setTo(const void* data, size_t size, bool copyData)
             mStringPoolSize =
                 (mHeader->header.size-mHeader->stringsStart)/charSize;
         } else {
+            // check invariant: styles starts before end of data
+            if (mHeader->stylesStart >= (mHeader->header.size-sizeof(uint16_t))) {
+                LOGW("Bad style block: style block starts at %d past data size of %d\n",
+                    (int)mHeader->stylesStart, (int)mHeader->header.size);
+                return (mError=BAD_TYPE);
+            }
             // check invariant: styles follow the strings
             if (mHeader->stylesStart <= mHeader->stringsStart) {
                 LOGW("Bad style block: style block starts at %d, before strings at %d\n",
@@ -438,15 +444,51 @@ void ResStringPool::uninit()
     }
 }
 
-#define DECODE_LENGTH(str, chrsz, len) \
-    len = *(str); \
-    if (*(str)&(1<<(chrsz*8-1))) { \
-        (str)++; \
-        len = (((len)&((1<<(chrsz*8-1))-1))<<(chrsz*8)) + *(str); \
-    } \
-    (str)++;
+/**
+ * Strings in UTF-16 format have length indicated by a length encoded in the
+ * stored data. It is either 1 or 2 characters of length data. This allows a
+ * maximum length of 0x7FFFFFF (2147483647 bytes), but if you're storing that
+ * much data in a string, you're abusing them.
+ *
+ * If the high bit is set, then there are two characters or 4 bytes of length
+ * data encoded. In that case, drop the high bit of the first character and
+ * add it together with the next character.
+ */
+static inline size_t
+decodeLength(const char16_t** str)
+{
+    size_t len = **str;
+    if ((len & 0x8000) != 0) {
+        (*str)++;
+        len = ((len & 0x7FFF) << 16) | **str;
+    }
+    (*str)++;
+    return len;
+}
 
-const uint16_t* ResStringPool::stringAt(size_t idx, size_t* outLen) const
+/**
+ * Strings in UTF-8 format have length indicated by a length encoded in the
+ * stored data. It is either 1 or 2 characters of length data. This allows a
+ * maximum length of 0x7FFF (32767 bytes), but you should consider storing
+ * text in another way if you're using that much data in a single string.
+ *
+ * If the high bit is set, then there are two characters or 2 bytes of length
+ * data encoded. In that case, drop the high bit of the first character and
+ * add it together with the next character.
+ */
+static inline size_t
+decodeLength(const uint8_t** str)
+{
+    size_t len = **str;
+    if ((len & 0x80) != 0) {
+        (*str)++;
+        len = ((len & 0x7F) << 8) | **str;
+    }
+    (*str)++;
+    return len;
+}
+
+const uint16_t* ResStringPool::stringAt(size_t idx, size_t* u16len) const
 {
     if (mError == NO_ERROR && idx < mHeader->stringCount) {
         const bool isUTF8 = (mHeader->flags&ResStringPool_header::UTF8_FLAG) != 0;
@@ -455,37 +497,51 @@ const uint16_t* ResStringPool::stringAt(size_t idx, size_t* outLen) const
             if (!isUTF8) {
                 const char16_t* strings = (char16_t*)mStrings;
                 const char16_t* str = strings+off;
-                DECODE_LENGTH(str, sizeof(char16_t), *outLen)
-                if ((uint32_t)(str+*outLen-strings) < mStringPoolSize) {
+
+                *u16len = decodeLength(&str);
+                if ((uint32_t)(str+*u16len-strings) < mStringPoolSize) {
                     return str;
                 } else {
                     LOGW("Bad string block: string #%d extends to %d, past end at %d\n",
-                            (int)idx, (int)(str+*outLen-strings), (int)mStringPoolSize);
+                            (int)idx, (int)(str+*u16len-strings), (int)mStringPoolSize);
                 }
             } else {
                 const uint8_t* strings = (uint8_t*)mStrings;
-                const uint8_t* str = strings+off;
-                DECODE_LENGTH(str, sizeof(uint8_t), *outLen)
-                size_t encLen;
-                DECODE_LENGTH(str, sizeof(uint8_t), encLen)
-                if ((uint32_t)(str+encLen-strings) < mStringPoolSize) {
+                const uint8_t* u8str = strings+off;
+
+                *u16len = decodeLength(&u8str);
+                size_t u8len = decodeLength(&u8str);
+
+                // encLen must be less than 0x7FFF due to encoding.
+                if ((uint32_t)(u8str+u8len-strings) < mStringPoolSize) {
                     AutoMutex lock(mDecodeLock);
+
                     if (mCache[idx] != NULL) {
                         return mCache[idx];
                     }
-                    char16_t *u16str = (char16_t *)calloc(*outLen+1, sizeof(char16_t));
+
+                    ssize_t actualLen = utf8_to_utf16_length(u8str, u8len);
+                    if (actualLen < 0 || (size_t)actualLen != *u16len) {
+                        LOGW("Bad string block: string #%lld decoded length is not correct "
+                                "%lld vs %llu\n",
+                                (long long)idx, (long long)actualLen, (long long)*u16len);
+                        return NULL;
+                    }
+
+                    char16_t *u16str = (char16_t *)calloc(*u16len+1, sizeof(char16_t));
                     if (!u16str) {
                         LOGW("No memory when trying to allocate decode cache for string #%d\n",
                                 (int)idx);
                         return NULL;
                     }
-                    const unsigned char *u8src = reinterpret_cast<const unsigned char *>(str);
-                    utf8_to_utf16(u8src, encLen, u16str, *outLen);
+
+                    utf8_to_utf16(u8str, u8len, u16str);
                     mCache[idx] = u16str;
                     return u16str;
                 } else {
-                    LOGW("Bad string block: string #%d extends to %d, past end at %d\n",
-                            (int)idx, (int)(str+encLen-strings), (int)mStringPoolSize);
+                    LOGW("Bad string block: string #%lld extends to %lld, past end at %lld\n",
+                            (long long)idx, (long long)(u8str+u8len-strings),
+                            (long long)mStringPoolSize);
                 }
             }
         } else {
@@ -506,9 +562,8 @@ const char* ResStringPool::string8At(size_t idx, size_t* outLen) const
             if (isUTF8) {
                 const uint8_t* strings = (uint8_t*)mStrings;
                 const uint8_t* str = strings+off;
-                DECODE_LENGTH(str, sizeof(uint8_t), *outLen)
-                size_t encLen;
-                DECODE_LENGTH(str, sizeof(uint8_t), encLen)
+                *outLen = decodeLength(&str);
+                size_t encLen = decodeLength(&str);
                 if ((uint32_t)(str+encLen-strings) < mStringPoolSize) {
                     return (const char*)str;
                 } else {
@@ -1878,13 +1933,19 @@ bool ResTable::getResourceName(uint32_t resID, resource_name* outName) const
         outName->type = grp->basePackage->typeStrings.stringAt(t, &outName->typeLen);
         outName->name = grp->basePackage->keyStrings.stringAt(
             dtohl(entry->key.index), &outName->nameLen);
+
+        // If we have a bad index for some reason, we should abort.
+        if (outName->type == NULL || outName->name == NULL) {
+            return false;
+        }
+
         return true;
     }
 
     return false;
 }
 
-ssize_t ResTable::getResource(uint32_t resID, Res_value* outValue, bool mayBeBag,
+ssize_t ResTable::getResource(uint32_t resID, Res_value* outValue, bool mayBeBag, uint16_t density,
         uint32_t* outSpecFlags, ResTable_config* outConfig) const
 {
     if (mError != NO_ERROR) {
@@ -1914,7 +1975,7 @@ ssize_t ResTable::getResource(uint32_t resID, Res_value* outValue, bool mayBeBag
     memset(&bestItem, 0, sizeof(bestItem)); // make the compiler shut up
 
     if (outSpecFlags != NULL) *outSpecFlags = 0;
-    
+
     // Look through all resource packages, starting with the most
     // recently added.
     const PackageGroup* const grp = mPackageGroups[p];
@@ -1922,6 +1983,22 @@ ssize_t ResTable::getResource(uint32_t resID, Res_value* outValue, bool mayBeBag
         LOGW("Bad identifier when getting value for resource number 0x%08x", resID);
         return BAD_INDEX;
     }
+
+    // Allow overriding density
+    const ResTable_config* desiredConfig = &mParams;
+    ResTable_config* overrideConfig = NULL;
+    if (density > 0) {
+        overrideConfig = (ResTable_config*) malloc(sizeof(ResTable_config));
+        if (overrideConfig == NULL) {
+            LOGE("Couldn't malloc ResTable_config for overrides: %s", strerror(errno));
+            return BAD_INDEX;
+        }
+        memcpy(overrideConfig, &mParams, sizeof(ResTable_config));
+        overrideConfig->density = density;
+        desiredConfig = overrideConfig;
+    }
+
+    ssize_t rc = BAD_VALUE;
     size_t ip = grp->packages.size();
     while (ip > 0) {
         ip--;
@@ -1931,12 +2008,13 @@ ssize_t ResTable::getResource(uint32_t resID, Res_value* outValue, bool mayBeBag
         const ResTable_type* type;
         const ResTable_entry* entry;
         const Type* typeClass;
-        ssize_t offset = getEntry(package, t, e, &mParams, &type, &entry, &typeClass);
+        ssize_t offset = getEntry(package, t, e, desiredConfig, &type, &entry, &typeClass);
         if (offset <= 0) {
             if (offset < 0) {
                 LOGW("Failure getting entry for 0x%08x (t=%d e=%d) in package %zd (error %d)\n",
                         resID, t, e, ip, (int)offset);
-                return offset;
+                rc = offset;
+                goto out;
             }
             continue;
         }
@@ -1951,13 +2029,14 @@ ssize_t ResTable::getResource(uint32_t resID, Res_value* outValue, bool mayBeBag
 
         TABLE_NOISY(aout << "Resource type data: "
               << HexDump(type, dtohl(type->header.size)) << endl);
-        
+
         if ((size_t)offset > (dtohl(type->header.size)-sizeof(Res_value))) {
             LOGW("ResTable_item at %d is beyond type chunk data %d",
                  (int)offset, dtohl(type->header.size));
-            return BAD_TYPE;
+            rc = BAD_TYPE;
+            goto out;
         }
-        
+
         const Res_value* item =
             (const Res_value*)(((const uint8_t*)type) + offset);
         ResTable_config thisConfig;
@@ -1999,10 +2078,16 @@ ssize_t ResTable::getResource(uint32_t resID, Res_value* outValue, bool mayBeBag
                          outValue->data, &len)).string()
                      : "",
                      outValue->data));
-        return bestPackage->header->index;
+        rc = bestPackage->header->index;
+        goto out;
     }
 
-    return BAD_VALUE;
+out:
+    if (overrideConfig != NULL) {
+        free(overrideConfig);
+    }
+
+    return rc;
 }
 
 ssize_t ResTable::resolveReference(Res_value* value, ssize_t blockIndex,
@@ -2015,7 +2100,7 @@ ssize_t ResTable::resolveReference(Res_value* value, ssize_t blockIndex,
         if (outLastRef) *outLastRef = value->data;
         uint32_t lastRef = value->data;
         uint32_t newFlags = 0;
-        const ssize_t newIndex = getResource(value->data, value, true, &newFlags,
+        const ssize_t newIndex = getResource(value->data, value, true, 0, &newFlags,
                 outConfig);
         if (newIndex == BAD_INDEX) {
             return BAD_INDEX;
@@ -2609,6 +2694,24 @@ bool ResTable::expandResourceRef(const uint16_t* refStr, size_t refLen,
         *outType = *defType;
     }
     *outName = String16(p, end-p);
+    if(**outPackage == 0) {
+        if(outErrorMsg) {
+            *outErrorMsg = "Resource package cannot be an empty string";
+        }
+        return false;
+    }
+    if(**outType == 0) {
+        if(outErrorMsg) {
+            *outErrorMsg = "Resource type cannot be an empty string";
+        }
+        return false;
+    }
+    if(**outName == 0) {
+        if(outErrorMsg) {
+            *outErrorMsg = "Resource id cannot be an empty string";
+        }
+        return false;
+    }
     return true;
 }
 
@@ -3600,9 +3703,9 @@ void ResTable::getConfigurations(Vector<ResTable_config>* configs) const
 void ResTable::getLocales(Vector<String8>* locales) const
 {
     Vector<ResTable_config> configs;
-    LOGD("calling getConfigurations");
+    LOGV("calling getConfigurations");
     getConfigurations(&configs);
-    LOGD("called getConfigurations size=%d", (int)configs.size());
+    LOGV("called getConfigurations size=%d", (int)configs.size());
     const size_t I = configs.size();
     for (size_t i=0; i<I; i++) {
         char locale[6];
@@ -4038,6 +4141,38 @@ void print_complex(uint32_t complex, bool isFraction)
     }
 }
 
+// Normalize a string for output
+String8 ResTable::normalizeForOutput( const char *input )
+{
+    String8 ret;
+    char buff[2];
+    buff[1] = '\0';
+
+    while (*input != '\0') {
+        switch (*input) {
+            // All interesting characters are in the ASCII zone, so we are making our own lives
+            // easier by scanning the string one byte at a time.
+        case '\\':
+            ret += "\\\\";
+            break;
+        case '\n':
+            ret += "\\n";
+            break;
+        case '"':
+            ret += "\\\"";
+            break;
+        default:
+            buff[0] = *input;
+            ret += buff;
+            break;
+        }
+
+        input++;
+    }
+
+    return ret;
+}
+
 void ResTable::print_value(const Package* pkg, const Res_value& value) const
 {
     if (value.dataType == Res_value::TYPE_NULL) {
@@ -4051,13 +4186,13 @@ void ResTable::print_value(const Package* pkg, const Res_value& value) const
         const char* str8 = pkg->header->values.string8At(
                 value.data, &len);
         if (str8 != NULL) {
-            printf("(string8) \"%s\"\n", str8);
+            printf("(string8) \"%s\"\n", normalizeForOutput(str8).string());
         } else {
             const char16_t* str16 = pkg->header->values.stringAt(
                     value.data, &len);
             if (str16 != NULL) {
                 printf("(string16) \"%s\"\n",
-                    String8(str16, len).string());
+                    normalizeForOutput(String8(str16, len).string()).string());
             } else {
                 printf("(string) null\n");
             }
@@ -4127,13 +4262,16 @@ void ResTable::print(bool inclValues) const
                                     | (0x00ff0000 & ((typeIndex+1)<<16))
                                     | (0x0000ffff & (entryIndex));
                         resource_name resName;
-                        this->getResourceName(resID, &resName);
-                        printf("      spec resource 0x%08x %s:%s/%s: flags=0x%08x\n",
-                            resID,
-                            CHAR16_TO_CSTR(resName.package, resName.packageLen),
-                            CHAR16_TO_CSTR(resName.type, resName.typeLen),
-                            CHAR16_TO_CSTR(resName.name, resName.nameLen),
-                            dtohl(typeConfigs->typeSpecFlags[entryIndex]));
+                        if (this->getResourceName(resID, &resName)) {
+                            printf("      spec resource 0x%08x %s:%s/%s: flags=0x%08x\n",
+                                resID,
+                                CHAR16_TO_CSTR(resName.package, resName.packageLen),
+                                CHAR16_TO_CSTR(resName.type, resName.typeLen),
+                                CHAR16_TO_CSTR(resName.name, resName.nameLen),
+                                dtohl(typeConfigs->typeSpecFlags[entryIndex]));
+                        } else {
+                            printf("      INVALID TYPE CONFIG FOR RESOURCE 0x%08x\n", resID);
+                        }
                     }
                 }
                 for (size_t configIndex=0; configIndex<NTC; configIndex++) {
@@ -4340,11 +4478,14 @@ void ResTable::print(bool inclValues) const
                                     | (0x00ff0000 & ((typeIndex+1)<<16))
                                     | (0x0000ffff & (entryIndex));
                         resource_name resName;
-                        this->getResourceName(resID, &resName);
-                        printf("        resource 0x%08x %s:%s/%s: ", resID,
-                                CHAR16_TO_CSTR(resName.package, resName.packageLen),
-                                CHAR16_TO_CSTR(resName.type, resName.typeLen),
-                                CHAR16_TO_CSTR(resName.name, resName.nameLen));
+                        if (this->getResourceName(resID, &resName)) {
+                            printf("        resource 0x%08x %s:%s/%s: ", resID,
+                                    CHAR16_TO_CSTR(resName.package, resName.packageLen),
+                                    CHAR16_TO_CSTR(resName.type, resName.typeLen),
+                                    CHAR16_TO_CSTR(resName.name, resName.nameLen));
+                        } else {
+                            printf("        INVALID RESOURCE 0x%08x: ", resID);
+                        }
                         if ((thisOffset&0x3) != 0) {
                             printf("NON-INTEGER OFFSET: %p\n", (void*)thisOffset);
                             continue;
@@ -4402,18 +4543,19 @@ void ResTable::print(bool inclValues) const
                                 print_value(pkg, value);
                             } else if (bagPtr != NULL) {
                                 const int N = dtohl(bagPtr->count);
-                                const ResTable_map* mapPtr = (const ResTable_map*)
-                                        (((const uint8_t*)ent) + esize);
+                                const uint8_t* baseMapPtr = (const uint8_t*)ent;
+                                size_t mapOffset = esize;
+                                const ResTable_map* mapPtr = (ResTable_map*)(baseMapPtr+mapOffset);
                                 printf("          Parent=0x%08x, Count=%d\n",
                                     dtohl(bagPtr->parent.ident), N);
-                                for (int i=0; i<N; i++) {
+                                for (int i=0; i<N && mapOffset < (typeSize-sizeof(ResTable_map)); i++) {
                                     printf("          #%i (Key=0x%08x): ",
                                         i, dtohl(mapPtr->name.ident));
                                     value.copyFrom_dtoh(mapPtr->value);
                                     print_value(pkg, value);
                                     const size_t size = dtohs(mapPtr->value.size);
-                                    mapPtr = (ResTable_map*)(((const uint8_t*)mapPtr)
-                                            + size + sizeof(*mapPtr)-sizeof(mapPtr->value));
+                                    mapOffset += size + sizeof(*mapPtr)-sizeof(mapPtr->value);
+                                    mapPtr = (ResTable_map*)(baseMapPtr+mapOffset);
                                 }
                             }
                         }

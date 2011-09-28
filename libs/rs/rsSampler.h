@@ -28,23 +28,27 @@ const static uint32_t RS_MAX_SAMPLER_SLOT = 16;
 
 class SamplerState;
 
-class Sampler : public ObjectBase
-{
+class Sampler : public ObjectBase {
 public:
     Sampler(Context *,
             RsSamplerValue magFilter,
             RsSamplerValue minFilter,
             RsSamplerValue wrapS,
             RsSamplerValue wrapT,
-            RsSamplerValue wrapR);
+            RsSamplerValue wrapR,
+            float aniso = 1.0f);
 
     virtual ~Sampler();
 
     void bind(Allocation *);
-    void setupGL(const Context *, bool npot);
+    void setupGL(const Context *, const Allocation *);
 
     void bindToContext(SamplerState *, uint32_t slot);
     void unbindFromContext(SamplerState *);
+
+    virtual void serialize(OStream *stream) const;
+    virtual RsA3DClassID getClassId() const { return RS_A3D_CLASS_ID_SAMPLER; }
+    static Sampler *createFromStream(Context *rsc, IStream *stream);
 
 protected:
     RsSamplerValue mMagFilter;
@@ -52,33 +56,26 @@ protected:
     RsSamplerValue mWrapS;
     RsSamplerValue mWrapT;
     RsSamplerValue mWrapR;
+    float mAniso;
 
     int32_t mBoundSlot;
 
 private:
     Sampler(Context *);
-
 };
 
 
-class SamplerState
-{
+class SamplerState {
 public:
-
     RsSamplerValue mMagFilter;
     RsSamplerValue mMinFilter;
     RsSamplerValue mWrapS;
     RsSamplerValue mWrapT;
     RsSamplerValue mWrapR;
-
+    float mAniso;
 
     ObjectBaseRef<Sampler> mSamplers[RS_MAX_SAMPLER_SLOT];
-
-    //void setupGL();
-
 };
-
-
 
 }
 }

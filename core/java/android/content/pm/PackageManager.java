@@ -785,13 +785,6 @@ public abstract class PackageManager {
 
     /**
      * Feature for {@link #getSystemAvailableFeatures} and
-     * {@link #hasSystemFeature}: The device supports connecting to USB accessories.
-     * @hide
-     */
-    public static final String FEATURE_USB_ACCESSORY = "android.hardware.usb.accessory";
-
-    /**
-     * Feature for {@link #getSystemAvailableFeatures} and
      * {@link #hasSystemFeature}: The SIP API is enabled on the device.
      */
     @SdkConstant(SdkConstantType.FEATURE)
@@ -836,6 +829,18 @@ public abstract class PackageManager {
      */
     @SdkConstant(SdkConstantType.FEATURE)
     public static final String FEATURE_TOUCHSCREEN_MULTITOUCH_JAZZHAND = "android.hardware.touchscreen.multitouch.jazzhand";
+
+    /**
+     * Feature for {@link #getSystemAvailableFeatures} and
+     * {@link #hasSystemFeature}: The device does not have a touch screen, but
+     * does support touch emulation for basic events. For instance, the
+     * device might use a mouse or remote control to drive a cursor, and
+     * emulate basic touch pointer events like down, up, drag, etc. All
+     * devices that support android.hardware.touchscreen or a sub-feature are
+     * presumed to also support faketouch.
+     */
+    @SdkConstant(SdkConstantType.FEATURE)
+    public static final String FEATURE_FAKETOUCH = "android.hardware.faketouch";
 
     /**
      * Feature for {@link #getSystemAvailableFeatures} and
@@ -1922,6 +1927,24 @@ public abstract class PackageManager {
      */
     public abstract void installPackage(
             Uri packageURI, IPackageInstallObserver observer, int flags,
+            String installerPackageName);
+
+    /**
+     * Change the installer associated with a given package.  There are limitations
+     * on how the installer package can be changed; in particular:
+     * <ul>
+     * <li> A SecurityException will be thrown if <var>installerPackageName</var>
+     * is not signed with the same certificate as the calling application.
+     * <li> A SecurityException will be thrown if <var>targetPackage</var> already
+     * has an installer package, and that installer package is not signed with
+     * the same certificate as the calling application.
+     * </ul>
+     *
+     * @param targetPackage The installed package whose installer will be changed.
+     * @param installerPackageName The package name of the new installer.  May be
+     * null to clear the association.
+     */
+    public abstract void setInstallerPackageName(String targetPackage,
             String installerPackageName);
 
     /**

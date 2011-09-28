@@ -37,12 +37,16 @@ extern const char *MEDIA_MIMETYPE_AUDIO_VORBIS;
 extern const char *MEDIA_MIMETYPE_AUDIO_G711_ALAW;
 extern const char *MEDIA_MIMETYPE_AUDIO_G711_MLAW;
 extern const char *MEDIA_MIMETYPE_AUDIO_RAW;
+extern const char *MEDIA_MIMETYPE_AUDIO_FLAC;
+extern const char *MEDIA_MIMETYPE_AUDIO_AAC_ADTS;
 
 extern const char *MEDIA_MIMETYPE_CONTAINER_MPEG4;
 extern const char *MEDIA_MIMETYPE_CONTAINER_WAV;
 extern const char *MEDIA_MIMETYPE_CONTAINER_OGG;
 extern const char *MEDIA_MIMETYPE_CONTAINER_MATROSKA;
 extern const char *MEDIA_MIMETYPE_CONTAINER_MPEG2TS;
+
+extern const char *MEDIA_MIMETYPE_CONTAINER_WVM;
 
 }  // namespace android
 

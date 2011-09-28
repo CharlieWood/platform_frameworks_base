@@ -16,14 +16,11 @@
 
 package android.provider;
 
-import com.google.android.collect.Maps;
 
-import org.apache.commons.codec.binary.Base64;
 
 import android.annotation.SdkConstant;
 import android.annotation.SdkConstant.SdkConstantType;
 import android.content.ComponentName;
-import android.content.ContentQueryMap;
 import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Context;
@@ -37,20 +34,19 @@ import android.content.res.Resources;
 import android.database.Cursor;
 import android.database.SQLException;
 import android.net.Uri;
-import android.os.*;
-import android.telephony.TelephonyManager;
+import android.net.wifi.WifiManager;
+import android.os.BatteryManager;
+import android.os.Bundle;
+import android.os.RemoteException;
+import android.os.SystemProperties;
 import android.text.TextUtils;
 import android.util.AndroidException;
 import android.util.Config;
 import android.util.Log;
 
 import java.net.URISyntaxException;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Map;
 
 
 /**
@@ -282,6 +278,27 @@ public final class Settings {
     @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
     public static final String ACTION_INPUT_METHOD_SETTINGS =
             "android.settings.INPUT_METHOD_SETTINGS";
+
+    /**
+     * Activity Action: Show settings to enable/disable input method subtypes.
+     * <p>
+     * In some cases, a matching Activity may not exist, so ensure you
+     * safeguard against this.
+     * <p>
+     * To tell which input method's subtypes are displayed in the settings, add
+     * {@link #EXTRA_INPUT_METHOD_ID} extra to this Intent with the input method id.
+     * If there is no extra in this Intent, subtypes from all installed input methods
+     * will be displayed in the settings.
+     *
+     * @see android.view.inputmethod.InputMethodInfo#getId
+     * <p>
+     * Input: Nothing.
+     * <p>
+     * Output: Nothing.
+     */
+    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+    public static final String ACTION_INPUT_METHOD_SUBTYPE_SETTINGS =
+            "android.settings.INPUT_METHOD_SUBTYPE_SETTINGS";
 
     /**
      * Activity Action: Show settings to manage the user input dictionary.
@@ -544,6 +561,8 @@ public final class Settings {
      */
     public static final String EXTRA_AUTHORITIES =
             "authorities";
+
+    public static final String EXTRA_INPUT_METHOD_ID = "input_method_id";
 
     private static final String JID_RESOURCE_PREFIX = "android";
 
@@ -967,6 +986,9 @@ public final class Settings {
         public static float getFloat(ContentResolver cr, String name)
                 throws SettingNotFoundException {
             String v = getString(cr, name);
+            if (v == null) {
+                throw new SettingNotFoundException(name);
+            }
             try {
                 return Float.parseFloat(v);
             } catch (NumberFormatException e) {
@@ -1023,7 +1045,7 @@ public final class Settings {
         public static boolean hasInterestingConfigurationChanges(int changes) {
             return (changes&ActivityInfo.CONFIG_FONT_SCALE) != 0;
         }
-        
+
         public static boolean getShowGTalkServiceStatus(ContentResolver cr) {
             return getInt(cr, SHOW_GTALK_SERVICE_STATUS, 0) != 0;
         }
@@ -1101,12 +1123,6 @@ public final class Settings {
         public static final String RADIO_CELL = "cell";
 
         /**
-         * Constant for use in AIRPLANE_MODE_RADIOS to specify WiMAX radio.
-         * @hide
-         */
-        public static final String RADIO_WIMAX = "wimax";
-
-        /**
          * A comma separated list of radios that need to be disabled when airplane mode
          * is on. This overrides WIFI_ON and BLUETOOTH_ON, if Wi-Fi and bluetooth are
          * included in the comma separated list.
@@ -1153,6 +1169,7 @@ public final class Settings {
          */
         public static final int WIFI_SLEEP_POLICY_NEVER = 2;
 
+        //TODO: deprecate static IP constants
         /**
          * Whether to use static IP and other static network attributes.
          * <p>
@@ -1195,12 +1212,6 @@ public final class Settings {
          */
         public static final String WIFI_STATIC_DNS2 = "wifi_static_dns2";
 
-        /**
-         * The number of radio channels that are allowed in the local
-         * 802.11 regulatory domain.
-         * @hide
-         */
-        public static final String WIFI_NUM_ALLOWED_CHANNELS = "wifi_num_allowed_channels";
 
         /**
          * Determines whether remote devices may discover and/or connect to
@@ -1236,7 +1247,7 @@ public final class Settings {
         public static final String LOCK_PATTERN_VISIBLE = "lock_pattern_visible_pattern";
 
         /**
-         * @deprecated Use 
+         * @deprecated Use
          * {@link android.provider.Settings.Secure#LOCK_PATTERN_TACTILE_FEEDBACK_ENABLED}
          * instead
          */
@@ -1518,6 +1529,12 @@ public final class Settings {
         public static final String AUTO_TIME = "auto_time";
 
         /**
+         * Value to specify if the user prefers the time zone
+         * to be automatically fetched from the network (NITZ). 1=yes, 0=no
+         */
+        public static final String AUTO_TIME_ZONE = "auto_time_zone";
+
+        /**
          * Display times as 12 or 24 hours
          *   12
          *   24
@@ -1567,6 +1584,16 @@ public final class Settings {
          * disabled by the application.
          */
         public static final String ACCELEROMETER_ROTATION = "accelerometer_rotation";
+
+        /**
+         * Default screen rotation when no other policy applies.
+         * When {@link #ACCELEROMETER_ROTATION} is zero and no on-screen Activity expresses a
+         * preference, this rotation value will be used. Must be one of the
+         * {@link android.view.Surface#ROTATION_0 Surface rotation constants}.
+         *
+         * @see Display#getRotation
+         */
+        public static final String USER_ROTATION = "user_rotation";
 
         /**
          * Whether the audible DTMF tones are played by the dialer when dialing. The value is
@@ -1631,11 +1658,10 @@ public final class Settings {
         public static final String HAPTIC_FEEDBACK_ENABLED = "haptic_feedback_enabled";
 
         /**
-         * Whether live web suggestions while the user types into search dialogs are
-         * enabled. Browsers and other search UIs should respect this, as it allows
-         * a user to avoid sending partial queries to a search engine, if it poses
-         * any privacy concern. The value is boolean (1 or 0).
+         * @deprecated Each application that shows web suggestions should have its own
+         * setting for this.
          */
+        @Deprecated
         public static final String SHOW_WEB_SUGGESTIONS = "show_web_suggestions";
 
         /**
@@ -1652,6 +1678,16 @@ public final class Settings {
          * @hide
          */
         public static final String POINTER_LOCATION = "pointer_location";
+
+        /**
+         * Log raw orientation data from {@link WindowOrientationListener} for use with the
+         * orientationplot.py tool.
+         * 0 = no
+         * 1 = yes
+         * @hide
+         */
+        public static final String WINDOW_ORIENTATION_LISTENER_LOG =
+                "window_orientation_listener_log";
 
         /**
          * Whether to play a sound for low-battery alerts.
@@ -1714,6 +1750,12 @@ public final class Settings {
         public static final String UNLOCK_SOUND = "unlock_sound";
 
         /**
+         * True if we should appear as a PTP device instead of MTP.
+         * @hide
+         */
+        public static final String USE_PTP_INTERFACE = "use_ptp_interface";
+
+        /**
          * Receive incoming SIP calls?
          * 0 = no
          * 1 = yes
@@ -1755,7 +1797,6 @@ public final class Settings {
          */
         public static final String[] SETTINGS_TO_BACKUP = {
             STAY_ON_WHILE_PLUGGED_IN,
-            WIFI_SLEEP_POLICY,
             WIFI_USE_STATIC_IP,
             WIFI_STATIC_IP,
             WIFI_STATIC_GATEWAY,
@@ -1769,7 +1810,6 @@ public final class Settings {
             SCREEN_BRIGHTNESS,
             SCREEN_BRIGHTNESS_MODE,
             VIBRATE_ON,
-            NOTIFICATIONS_USE_RING_VOLUME,
             MODE_RINGER,
             MODE_RINGER_STREAMS_AFFECTED,
             MUTE_STREAMS_AFFECTED,
@@ -1793,9 +1833,11 @@ public final class Settings {
             TEXT_AUTO_PUNCTUATE,
             TEXT_SHOW_PASSWORD,
             AUTO_TIME,
+            AUTO_TIME_ZONE,
             TIME_12_24,
             DATE_FORMAT,
             ACCELEROMETER_ROTATION,
+            USER_ROTATION,
             DTMF_TONE_WHEN_DIALING,
             DTMF_TONE_TYPE_WHEN_DIALING,
             EMERGENCY_TONE,
@@ -1809,6 +1851,7 @@ public final class Settings {
             LOCKSCREEN_SOUNDS_ENABLED,
             SHOW_WEB_SUGGESTIONS,
             NOTIFICATION_LIGHT_PULSE,
+            USE_PTP_INTERFACE,
             SIP_CALL_OPTIONS,
             SIP_RECEIVE_CALLS,
         };
@@ -2273,6 +2316,9 @@ public final class Settings {
         public static float getFloat(ContentResolver cr, String name)
                 throws SettingNotFoundException {
             String v = getString(cr, name);
+            if (v == null) {
+                throw new SettingNotFoundException(name);
+            }
             try {
                 return Float.parseFloat(v);
             } catch (NumberFormatException e) {
@@ -2347,6 +2393,14 @@ public final class Settings {
         }
 
         /**
+         * Get the key that retrieves a bluetooth Input Device's priority.
+         * @hide
+         */
+        public static final String getBluetoothInputDevicePriorityKey(String address) {
+            return ("bluetooth_input_device_priority_" + address.toUpperCase());
+        }
+
+        /**
          * Whether or not data roaming is enabled. (0 = false, 1 = true)
          */
         public static final String DATA_ROAMING = "data_roaming";
@@ -2356,6 +2410,27 @@ public final class Settings {
          * of the desired method.
          */
         public static final String DEFAULT_INPUT_METHOD = "default_input_method";
+
+        /**
+         * Setting to record the input method subtype used by default, holding the ID
+         * of the desired method.
+         */
+        public static final String SELECTED_INPUT_METHOD_SUBTYPE =
+                "selected_input_method_subtype";
+
+        /**
+         * Setting to record the history of input method subtype, holding the pair of ID of IME
+         * and its last used subtype.
+         * @hide
+         */
+        public static final String INPUT_METHODS_SUBTYPE_HISTORY =
+                "input_methods_subtype_history";
+
+        /**
+         * Setting to record the visibility of input method selector
+         */
+        public static final String INPUT_METHOD_SELECTOR_VISIBILITY =
+                "input_method_selector_visibility";
 
         /**
          * Whether the device has been provisioned (0 = false, 1 = true)
@@ -2378,9 +2453,45 @@ public final class Settings {
         public static final String DISABLED_SYSTEM_INPUT_METHODS = "disabled_system_input_methods";
 
         /**
-         * Host name and port for a user-selected proxy.
+         * Host name and port for global http proxy.  Uses ':' seperator for between host and port
+         * TODO - deprecate in favor of global_http_proxy_host, etc
          */
         public static final String HTTP_PROXY = "http_proxy";
+
+        /**
+         * Host name for global http proxy.  Set via ConnectivityManager.
+         * @hide
+         */
+        public static final String GLOBAL_HTTP_PROXY_HOST = "global_http_proxy_host";
+
+        /**
+         * Integer host port for global http proxy.  Set via ConnectivityManager.
+         * @hide
+         */
+        public static final String GLOBAL_HTTP_PROXY_PORT = "global_http_proxy_port";
+
+        /**
+         * Exclusion list for global proxy. This string contains a list of comma-separated
+         * domains where the global proxy does not apply. Domains should be listed in a comma-
+         * separated list. Example of acceptable formats: ".domain1.com,my.domain2.com"
+         * Use ConnectivityManager to set/get.
+         * @hide
+         */
+        public static final String GLOBAL_HTTP_PROXY_EXCLUSION_LIST =
+                "global_http_proxy_exclusion_list";
+
+        /**
+         * Enables the UI setting to allow the user to specify the global HTTP proxy
+         * and associated exclusion list.
+         * @hide
+         */
+        public static final String SET_GLOBAL_HTTP_PROXY = "set_global_http_proxy";
+
+        /**
+         * Setting for default DNS in case nobody suggests one
+         * @hide
+         */
+        public static final String DEFAULT_DNS_SERVER = "default_dns_server";
 
         /**
          * Whether the package installer should allow installation of apps downloaded from
@@ -2411,6 +2522,27 @@ public final class Settings {
          */
         public static final String LOCK_PATTERN_TACTILE_FEEDBACK_ENABLED =
             "lock_pattern_tactile_feedback_enabled";
+
+        /**
+         * This preference allows the device to be locked given time after screen goes off,
+         * subject to current DeviceAdmin policy limits.
+         * @hide
+         */
+        public static final String LOCK_SCREEN_LOCK_AFTER_TIMEOUT = "lock_screen_lock_after_timeout";
+
+
+        /**
+         * This preference contains the string that shows for owner info on LockScren.
+         * @hide
+         */
+        public static final String LOCK_SCREEN_OWNER_INFO = "lock_screen_owner_info";
+
+        /**
+         * This preference enables showing the owner info on LockScren.
+         * @hide
+         */
+        public static final String LOCK_SCREEN_OWNER_INFO_ENABLED =
+            "lock_screen_owner_info_enabled";
 
         /**
          * Whether assisted GPS should be enabled or not.
@@ -2473,6 +2605,15 @@ public final class Settings {
         public static final String PARENTAL_CONTROL_REDIRECT_URL = "parental_control_redirect_url";
 
         /**
+         * A positive value indicates how often the SamplingProfiler
+         * should take snapshots. Zero value means SamplingProfiler
+         * is disabled.
+         *
+         * @hide
+         */
+        public static final String SAMPLING_PROFILER_MS = "sampling_profiler_ms";
+
+        /**
          * Settings classname to launch when Settings is clicked from All
          * Applications.  Needed because of user testing between the old
          * and new Settings apps.
@@ -2501,6 +2642,60 @@ public final class Settings {
          */
         public static final String ENABLED_ACCESSIBILITY_SERVICES =
             "enabled_accessibility_services";
+
+        /**
+         * If injection of accessibility enhancing JavaScript scripts
+         * is enabled.
+         * <p>
+         *   Note: Accessibility injecting scripts are served by the
+         *   Google infrastructure and enable users with disabilities to
+         *   efficiantly navigate in and explore web content.
+         * </p>
+         * <p>
+         *   This property represents a boolean value.
+         * </p>
+         * @hide
+         */
+        public static final String ACCESSIBILITY_SCRIPT_INJECTION =
+            "accessibility_script_injection";
+
+        /**
+         * Key bindings for navigation in built-in accessibility support for web content.
+         * <p>
+         *   Note: These key bindings are for the built-in accessibility navigation for
+         *   web content which is used as a fall back solution if JavaScript in a WebView
+         *   is not enabled or the user has not opted-in script injection from Google.
+         * </p>
+         * <p>
+         *   The bindings are separated by semi-colon. A binding is a mapping from
+         *   a key to a sequence of actions (for more details look at
+         *   android.webkit.AccessibilityInjector). A key is represented as the hexademical
+         *   string representation of an integer obtained from a meta state (optional) shifted
+         *   sixteen times left and bitwise ored with a key code. An action is represented
+         *   as a hexademical string representation of an integer where the first two digits
+         *   are navigation action index, the second, the third, and the fourth digit pairs
+         *   represent the action arguments. The separate actions in a binding are colon
+         *   separated. The key and the action sequence it maps to are separated by equals.
+         * </p>
+         * <p>
+         *   For example, the binding below maps the DPAD right button to traverse the
+         *   current navigation axis once without firing an accessibility event and to
+         *   perform the same traversal again but to fire an event:
+         *   <code>
+         *     0x16=0x01000100:0x01000101;
+         *   </code>
+         * </p>
+         * <p>
+         *   The goal of this binding is to enable dynamic rebinding of keys to
+         *   navigation actions for web content without requiring a framework change.
+         * </p>
+         * <p>
+         *   This property represents a string value.
+         * </p>
+         * @hide
+         */
+        public static final String ACCESSIBILITY_WEB_CONTENT_KEY_BINDINGS =
+            "accessibility_web_content_key_bindings";
 
         /**
          * Setting to always use the default text-to-speech settings regardless
@@ -2565,19 +2760,11 @@ public final class Settings {
                 "wifi_networks_available_repeat_delay";
 
         /**
-         * Whether to nofity the user of WiMAX network.
-         * If WiMAX is connected or disconnected, we will put this notification up.
+         * 802.11 country code in ISO 3166 format
          * @hide
          */
-        public static final String WIMAX_NETWORKS_AVAILABLE_NOTIFICATION_ON =
-                "wimax_networks_available_notification_on";
+        public static final String WIFI_COUNTRY_CODE = "wifi_country_code";
 
-        /**
-         * The number of radio channels that are allowed in the local
-         * 802.11 regulatory domain.
-         * @hide
-         */
-        public static final String WIFI_NUM_ALLOWED_CHANNELS = "wifi_num_allowed_channels";
 
         /**
          * When the number of open networks exceeds this number, the
@@ -2598,6 +2785,27 @@ public final class Settings {
          * @hide
          */
         public static final String WIFI_SAVED_STATE = "wifi_saved_state";
+
+        /**
+         * AP SSID
+         *
+         * @hide
+         */
+        public static final String WIFI_AP_SSID = "wifi_ap_ssid";
+
+        /**
+         * AP security
+         *
+         * @hide
+         */
+        public static final String WIFI_AP_SECURITY = "wifi_ap_security";
+
+        /**
+         * AP passphrase
+         *
+         * @hide
+         */
+        public static final String WIFI_AP_PASSWD = "wifi_ap_passwd";
 
         /**
          * The acceptable packet loss percentage (range 0 - 100) before trying
@@ -2681,17 +2889,21 @@ public final class Settings {
         public static final String WIFI_MAX_DHCP_RETRY_COUNT = "wifi_max_dhcp_retry_count";
 
         /**
+         * The operational wifi frequency band
+         * Set to one of {@link WifiManager#WIFI_FREQUENCY_BAND_AUTO},
+         * {@link WifiManager#WIFI_FREQUENCY_BAND_5GHZ} or
+         * {@link WifiManager#WIFI_FREQUENCY_BAND_2GHZ}
+         *
+         * @hide
+         */
+        public static final String WIFI_FREQUENCY_BAND = "wifi_frequency_band";
+
+        /**
          * Maximum amount of time in milliseconds to hold a wakelock while waiting for mobile
          * data connectivity to be established after a disconnect from Wi-Fi.
          */
         public static final String WIFI_MOBILE_DATA_TRANSITION_WAKELOCK_TIMEOUT_MS =
             "wifi_mobile_data_transition_wakelock_timeout_ms";
-
-        /**
-         * Whether the Wimax should be on.  Only the WiMAX service should touch this.
-         * @hide
-         */
-        public static final String WIMAX_ON = "wimax_on";
 
         /**
          * Whether background data usage is allowed by the user. See
@@ -3049,13 +3261,23 @@ public final class Settings {
 
         /**
          * Minimum percentage of free storage on the device that is used to determine if
-         * the device is running low on storage.
-         * Say this value is set to 10, the device is considered running low on storage
+         * the device is running low on storage.  The default is 10.
+         * <p>Say this value is set to 10, the device is considered running low on storage
          * if 90% or more of the device storage is filled up.
          * @hide
          */
         public static final String SYS_STORAGE_THRESHOLD_PERCENTAGE =
                 "sys_storage_threshold_percentage";
+
+        /**
+         * Maximum byte size of the low storage threshold.  This is to ensure
+         * that {@link #SYS_STORAGE_THRESHOLD_PERCENTAGE} does not result in
+         * an overly large threshold for large storage devices.  Currently this
+         * must be less than 2GB.  This default is 500MB.
+         * @hide
+         */
+        public static final String SYS_STORAGE_THRESHOLD_MAX_BYTES =
+                "sys_storage_threshold_max_bytes";
 
         /**
          * Minimum bytes of free storage on the device before the data
@@ -3073,6 +3295,14 @@ public final class Settings {
          * @hide
          */
         public static final String WIFI_IDLE_MS = "wifi_idle_ms";
+
+        /**
+         * The interval in milliseconds to issue scans when the driver is
+         * started. This is necessary to allow wifi to connect to an
+         * access point when the driver is suspended.
+         * @hide
+         */
+        public static final String WIFI_SCAN_INTERVAL_MS = "wifi_scan_interval_ms";
 
         /**
          * The interval in milliseconds at which to check packet counts on the
@@ -3126,20 +3356,6 @@ public final class Settings {
          */
         public static final String PDP_WATCHDOG_MAX_PDP_RESET_FAIL_COUNT =
                 "pdp_watchdog_max_pdp_reset_fail_count";
-
-        /**
-         * Address to ping as a last sanity check before attempting any recovery.
-         * Unset or set to "0.0.0.0" to skip this check.
-         * @hide
-         */
-        public static final String PDP_WATCHDOG_PING_ADDRESS = "pdp_watchdog_ping_address";
-
-        /**
-         * The "-w deadline" parameter for the ping, ie, the max time in
-         * seconds to spend pinging.
-         * @hide
-         */
-        public static final String PDP_WATCHDOG_PING_DEADLINE = "pdp_watchdog_ping_deadline";
 
         /**
          * The interval in milliseconds at which to check gprs registration
@@ -3475,6 +3691,7 @@ public final class Settings {
             PARENTAL_CONTROL_REDIRECT_URL,
             USB_MASS_STORAGE_ENABLED,
             ACCESSIBILITY_ENABLED,
+            ACCESSIBILITY_SCRIPT_INJECTION,
             BACKUP_AUTO_RESTORE,
             ENABLED_ACCESSIBILITY_SERVICES,
             TTS_USE_DEFAULTS,
@@ -3486,7 +3703,6 @@ public final class Settings {
             TTS_ENABLED_PLUGINS,
             WIFI_NETWORKS_AVAILABLE_NOTIFICATION_ON,
             WIFI_NETWORKS_AVAILABLE_REPEAT_DELAY,
-            WIFI_NUM_ALLOWED_CHANNELS,
             WIFI_NUM_OPEN_NETWORKS_KEPT,
             MOUNT_PLAY_NOTIFICATION_SND,
             MOUNT_UMS_AUTOSTART,
@@ -3619,7 +3835,7 @@ public final class Settings {
                 while (intent == null && c.moveToNext()) {
                     try {
                         String intentURI = c.getString(c.getColumnIndexOrThrow(INTENT));
-                        intent = Intent.getIntent(intentURI);
+                        intent = Intent.parseUri(intentURI, 0);
                     } catch (java.net.URISyntaxException e) {
                         // The stored URL is bad...  ignore it.
                     } catch (IllegalArgumentException e) {
@@ -3658,26 +3874,14 @@ public final class Settings {
             // If a shortcut is supplied, and it is already defined for
             // another bookmark, then remove the old definition.
             if (shortcut != 0) {
-                Cursor c = cr.query(CONTENT_URI,
-                        sShortcutProjection, sShortcutSelection,
-                        new String[] { String.valueOf((int) shortcut) }, null);
-                try {
-                    if (c.moveToFirst()) {
-                        while (c.getCount() > 0) {
-                            if (!c.deleteRow()) {
-                                Log.w(TAG, "Could not delete existing shortcut row");
-                            }
-                        }
-                    }
-                } finally {
-                    if (c != null) c.close();
-                }
+                cr.delete(CONTENT_URI, sShortcutSelection,
+                        new String[] { String.valueOf((int) shortcut) });
             }
 
             ContentValues values = new ContentValues();
             if (title != null) values.put(TITLE, title);
             if (folder != null) values.put(FOLDER, folder);
-            values.put(INTENT, intent.toURI());
+            values.put(INTENT, intent.toUri(0));
             if (shortcut != 0) values.put(SHORTCUT, (int) shortcut);
             values.put(ORDERING, ordering);
             return cr.insert(CONTENT_URI, values);
@@ -3729,7 +3933,7 @@ public final class Settings {
 
             Intent intent;
             try {
-                intent = Intent.getIntent(intentUri);
+                intent = Intent.parseUri(intentUri, 0);
             } catch (URISyntaxException e) {
                 return "";
             }

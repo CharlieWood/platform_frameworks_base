@@ -21,6 +21,9 @@ import android.annotation.SdkConstant.SdkConstantType;
 import android.os.Binder;
 import android.os.RemoteException;
 
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+
 /**
  * Class that answers queries about the state of network connectivity. It also
  * notifies applications when network connectivity changes. Get an instance
@@ -209,19 +212,41 @@ public class ConnectivityManager
      * default connections.
      */
     public static final int TYPE_WIMAX       = 6;
+
     /**
-     * Bluetooth data connection.
+     * Bluetooth data connection. This is used for Bluetooth reverse tethering.
      * @hide
      */
     public static final int TYPE_BLUETOOTH   = 7;
+
     /** {@hide} */
     public static final int TYPE_DUMMY       = 8;
+
     /** {@hide} */
     public static final int TYPE_ETHERNET    = 9;
-    /** {@hide} TODO: Need to adjust this for WiMAX. */
-    public static final int MAX_RADIO_TYPE   = TYPE_ETHERNET;
-    /** {@hide} TODO: Need to adjust this for WiMAX. */
-    public static final int MAX_NETWORK_TYPE = TYPE_ETHERNET;
+    /**
+     * Over the air Adminstration.
+     * {@hide}
+     */
+    public static final int TYPE_MOBILE_FOTA = 10;
+
+    /**
+     * IP Multimedia Subsystem
+     * {@hide}
+     */
+    public static final int TYPE_MOBILE_IMS  = 11;
+
+    /**
+     * Carrier Branded Services
+     * {@hide}
+     */
+    public static final int TYPE_MOBILE_CBS  = 12;
+
+    /** {@hide} */
+    public static final int MAX_RADIO_TYPE   = TYPE_MOBILE_CBS;
+
+    /** {@hide} */
+    public static final int MAX_NETWORK_TYPE = TYPE_MOBILE_CBS;
 
     public static final int DEFAULT_NETWORK_PREFERENCE = TYPE_WIFI;
 
@@ -265,6 +290,24 @@ public class ConnectivityManager
     public NetworkInfo[] getAllNetworkInfo() {
         try {
             return mService.getAllNetworkInfo();
+        } catch (RemoteException e) {
+            return null;
+        }
+    }
+
+    /** @hide */
+    public LinkProperties getActiveLinkProperties() {
+        try {
+            return mService.getActiveLinkProperties();
+        } catch (RemoteException e) {
+            return null;
+        }
+    }
+
+    /** @hide */
+    public LinkProperties getLinkProperties(int networkType) {
+        try {
+            return mService.getLinkProperties(networkType);
         } catch (RemoteException e) {
             return null;
         }
@@ -337,8 +380,29 @@ public class ConnectivityManager
      * @return {@code true} on success, {@code false} on failure
      */
     public boolean requestRouteToHost(int networkType, int hostAddress) {
+        InetAddress inetAddress = NetworkUtils.intToInetAddress(hostAddress);
+
+        if (inetAddress == null) {
+            return false;
+        }
+
+        return requestRouteToHostAddress(networkType, inetAddress);
+    }
+
+    /**
+     * Ensure that a network route exists to deliver traffic to the specified
+     * host via the specified network interface. An attempt to add a route that
+     * already exists is ignored, but treated as successful.
+     * @param networkType the type of the network over which traffic to the specified
+     * host is to be routed
+     * @param hostAddress the IP address of the host to which the route is desired
+     * @return {@code true} on success, {@code false} on failure
+     * @hide
+     */
+    public boolean requestRouteToHostAddress(int networkType, InetAddress hostAddress) {
+        byte[] address = hostAddress.getAddress();
         try {
-            return mService.requestRouteToHost(networkType, hostAddress);
+            return mService.requestRouteToHostAddress(networkType, address);
         } catch (RemoteException e) {
             return false;
         }
@@ -352,14 +416,14 @@ public class ConnectivityManager
      * <p>
      * All applications that have background services that use the network
      * should listen to {@link #ACTION_BACKGROUND_DATA_SETTING_CHANGED}.
-     * 
+     *
      * @return Whether background data usage is allowed.
      */
     public boolean getBackgroundDataSetting() {
         try {
             return mService.getBackgroundDataSetting();
         } catch (RemoteException e) {
-            // Err on the side of safety 
+            // Err on the side of safety
             return false;
         }
     }
@@ -517,6 +581,17 @@ public class ConnectivityManager
         }
     }
 
+    /**
+     * {@hide}
+     */
+    public String[] getTetherableBluetoothRegexs() {
+        try {
+            return mService.getTetherableBluetoothRegexs();
+        } catch (RemoteException e) {
+            return new String[0];
+        }
+    }
+
     /** {@hide} */
     public static final int TETHER_ERROR_NO_ERROR           = 0;
     /** {@hide} */
@@ -555,6 +630,21 @@ public class ConnectivityManager
     }
 
     /**
+     * Ensure the device stays awake until we connect with the next network
+     * @param forWhome The name of the network going down for logging purposes
+     * @return {@code true} on success, {@code false} on failure
+     * {@hide}
+     */
+    public boolean requestNetworkTransitionWakelock(String forWhom) {
+        try {
+            mService.requestNetworkTransitionWakelock(forWhom);
+            return true;
+        } catch (RemoteException e) {
+            return false;
+        }
+    }
+
+    /**
      * @param networkType The type of network you want to report on
      * @param percentage The quality of the connection 0 is bad, 100 is good
      * {@hide}
@@ -563,6 +653,41 @@ public class ConnectivityManager
         try {
             mService.reportInetCondition(networkType, percentage);
         } catch (RemoteException e) {
+        }
+    }
+
+    /**
+     * @param proxyProperties The definition for the new global http proxy
+     * {@hide}
+     */
+    public void setGlobalProxy(ProxyProperties p) {
+        try {
+            mService.setGlobalProxy(p);
+        } catch (RemoteException e) {
+        }
+    }
+
+    /**
+     * @return proxyProperties for the current global proxy
+     * {@hide}
+     */
+    public ProxyProperties getGlobalProxy() {
+        try {
+            return mService.getGlobalProxy();
+        } catch (RemoteException e) {
+            return null;
+        }
+    }
+
+    /**
+     * @return proxyProperties for the current proxy (global if set, network specific if not)
+     * {@hide}
+     */
+    public ProxyProperties getProxy() {
+        try {
+            return mService.getProxy();
+        } catch (RemoteException e) {
+            return null;
         }
     }
 }

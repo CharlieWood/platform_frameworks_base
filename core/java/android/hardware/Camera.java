@@ -27,6 +27,7 @@ import android.util.Log;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.graphics.ImageFormat;
+import android.graphics.SurfaceTexture;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
@@ -324,8 +325,10 @@ public class Camera {
 
     /**
      * Sets the {@link Surface} to be used for live preview.
-     * A surface is necessary for preview, and preview is necessary to take
-     * pictures.  The same surface can be re-set without harm.
+     * Either a surface or surface texture is necessary for preview, and
+     * preview is necessary to take pictures.  The same surface can be re-set
+     * without harm.  Setting a preview surface will un-set any preview surface
+     * texture that was set via {@link #setPreviewTexture}.
      *
      * <p>The {@link SurfaceHolder} must already contain a surface when this
      * method is called.  If you are using {@link android.view.SurfaceView},
@@ -354,7 +357,30 @@ public class Camera {
         }
     }
 
-    private native final void setPreviewDisplay(Surface surface);
+    private native final void setPreviewDisplay(Surface surface) throws IOException;
+
+    /**
+     * Sets the {@link SurfaceTexture} to be used for live preview.
+     * Either a surface or surface texture is necessary for preview, and
+     * preview is necessary to take pictures.  The same surface texture can be
+     * re-set without harm.  Setting a preview surface texture will un-set any
+     * preview surface that was set via {@link #setPreviewDisplay}.
+     *
+     * <p>This method must be called before {@link #startPreview()}.  The
+     * one exception is that if the preview surface texture is not set (or set
+     * to null) before startPreview() is called, then this method may be called
+     * once with a non-null parameter to set the preview surface.  (This allows
+     * camera setup and surface creation to happen in parallel, saving time.)
+     * The preview surface texture may not otherwise change while preview is
+     * running.
+     *
+     * @param surfaceTexture the {@link SurfaceTexture} to which the preview
+     *     images are to be sent or null to remove the current preview surface
+     *     texture
+     * @throws IOException if the method fails (for example, if the surface
+     *     texture is unavailable or unsuitable).
+     */
+    public native final void setPreviewTexture(SurfaceTexture surfaceTexture) throws IOException;
 
     /**
      * Callback interface used to deliver copies of preview frames as
@@ -482,23 +508,86 @@ public class Camera {
      * finish processing the data in them.
      *
      * <p>The size of the buffer is determined by multiplying the preview
-     * image width, height, and bytes per pixel.  The width and height can be
-     * read from {@link Camera.Parameters#getPreviewSize()}.  Bytes per pixel
+     * image width, height, and bytes per pixel. The width and height can be
+     * read from {@link Camera.Parameters#getPreviewSize()}. Bytes per pixel
      * can be computed from
      * {@link android.graphics.ImageFormat#getBitsPerPixel(int)} / 8,
      * using the image format from {@link Camera.Parameters#getPreviewFormat()}.
      *
      * <p>This method is only necessary when
-     * {@link #setPreviewCallbackWithBuffer(PreviewCallback)} is used.  When
+     * {@link #setPreviewCallbackWithBuffer(PreviewCallback)} is used. When
      * {@link #setPreviewCallback(PreviewCallback)} or
      * {@link #setOneShotPreviewCallback(PreviewCallback)} are used, buffers
-     * are automatically allocated.
+     * are automatically allocated. When a supplied buffer is too small to
+     * hold the preview frame data, preview callback will return null and
+     * the buffer will be removed from the buffer queue.
      *
      * @param callbackBuffer the buffer to add to the queue.
      *     The size should be width * height * bits_per_pixel / 8.
      * @see #setPreviewCallbackWithBuffer(PreviewCallback)
      */
-    public native final void addCallbackBuffer(byte[] callbackBuffer);
+    public final void addCallbackBuffer(byte[] callbackBuffer)
+    {
+        _addCallbackBuffer(callbackBuffer, CAMERA_MSG_PREVIEW_FRAME);
+    }
+
+    /**
+     * Adds a pre-allocated buffer to the raw image callback buffer queue.
+     * Applications can add one or more buffers to the queue. When a raw image
+     * frame arrives and there is still at least one available buffer, the
+     * buffer will be used to hold the raw image data and removed from the
+     * queue. Then raw image callback is invoked with the buffer. If a raw
+     * image frame arrives but there is no buffer left, the frame is
+     * discarded. Applications should add buffers back when they finish
+     * processing the data in them by calling this method again in order
+     * to avoid running out of raw image callback buffers.
+     *
+     * <p>The size of the buffer is determined by multiplying the raw image
+     * width, height, and bytes per pixel. The width and height can be
+     * read from {@link Camera.Parameters#getPictureSize()}. Bytes per pixel
+     * can be computed from
+     * {@link android.graphics.ImageFormat#getBitsPerPixel(int)} / 8,
+     * using the image format from {@link Camera.Parameters#getPreviewFormat()}.
+     *
+     * <p>This method is only necessary when the PictureCallbck for raw image
+     * is used while calling {@link #takePicture(Camera.ShutterCallback,
+     * Camera.PictureCallback, Camera.PictureCallback, Camera.PictureCallback)}.
+     *
+     * Please note that by calling this method, the mode for application-managed
+     * callback buffers is triggered. If this method has never been called,
+     * null will be returned by the raw image callback since there is
+     * no image callback buffer available. Furthermore, When a supplied buffer
+     * is too small to hold the raw image data, raw image callback will return
+     * null and the buffer will be removed from the buffer queue.
+     *
+     * @param callbackBuffer the buffer to add to the raw image callback buffer
+     *     queue. The size should be width * height * (bits per pixel) / 8. An
+     *     null callbackBuffer will be ignored and won't be added to the queue.
+     *
+     * @see #takePicture(Camera.ShutterCallback,
+     * Camera.PictureCallback, Camera.PictureCallback, Camera.PictureCallback)}.
+     *
+     * {@hide}
+     */
+    public final void addRawImageCallbackBuffer(byte[] callbackBuffer)
+    {
+        addCallbackBuffer(callbackBuffer, CAMERA_MSG_RAW_IMAGE);
+    }
+
+    private final void addCallbackBuffer(byte[] callbackBuffer, int msgType)
+    {
+        // CAMERA_MSG_VIDEO_FRAME may be allowed in the future.
+        if (msgType != CAMERA_MSG_PREVIEW_FRAME &&
+            msgType != CAMERA_MSG_RAW_IMAGE) {
+            throw new IllegalArgumentException(
+                            "Unsupported message type: " + msgType);
+        }
+
+        _addCallbackBuffer(callbackBuffer, msgType);
+    }
+
+    private native final void _addCallbackBuffer(
+                                byte[] callbackBuffer, int msgType);
 
     private class EventHandler extends Handler
     {
@@ -709,7 +798,7 @@ public class Camera {
             PictureCallback jpeg) {
         takePicture(shutter, raw, null, jpeg);
     }
-    private native final void native_takePicture();
+    private native final void native_takePicture(int msgType);
 
     /**
      * Triggers an asynchronous image capture. The camera service will initiate
@@ -717,7 +806,8 @@ public class Camera {
      * The shutter callback occurs after the image is captured. This can be used
      * to trigger a sound to let the user know that image has been captured. The
      * raw callback occurs when the raw image data is available (NOTE: the data
-     * may be null if the hardware does not have enough memory to make a copy).
+     * will be null if there is no raw image callback buffer available or the
+     * raw image callback buffer is not large enough to hold the raw image).
      * The postview callback occurs when a scaled, fully processed postview
      * image is available (NOTE: not all hardware supports this). The jpeg
      * callback occurs when the compressed image is available. If the
@@ -736,6 +826,8 @@ public class Camera {
      * @param raw       the callback for raw (uncompressed) image data, or null
      * @param postview  callback with postview image data, may be null
      * @param jpeg      the callback for JPEG image data, or null
+     *
+     * @see #addRawImageCallbackBuffer(byte[])
      */
     public final void takePicture(ShutterCallback shutter, PictureCallback raw,
             PictureCallback postview, PictureCallback jpeg) {
@@ -743,7 +835,23 @@ public class Camera {
         mRawImageCallback = raw;
         mPostviewCallback = postview;
         mJpegCallback = jpeg;
-        native_takePicture();
+
+        // If callback is not set, do not send me callbacks.
+        int msgType = 0;
+        if (mShutterCallback != null) {
+            msgType |= CAMERA_MSG_SHUTTER;
+        }
+        if (mRawImageCallback != null) {
+            msgType |= CAMERA_MSG_RAW_IMAGE;
+        }
+        if (mPostviewCallback != null) {
+            msgType |= CAMERA_MSG_POSTVIEW_FRAME;
+        }
+        if (mJpegCallback != null) {
+            msgType |= CAMERA_MSG_COMPRESSED_IMAGE;
+        }
+
+        native_takePicture(msgType);
     }
 
     /**
@@ -1022,6 +1130,9 @@ public class Camera {
         private static final String KEY_ZOOM_SUPPORTED = "zoom-supported";
         private static final String KEY_SMOOTH_ZOOM_SUPPORTED = "smooth-zoom-supported";
         private static final String KEY_FOCUS_DISTANCES = "focus-distances";
+        private static final String KEY_VIDEO_SIZE = "video-size";
+        private static final String KEY_PREFERRED_PREVIEW_SIZE_FOR_VIDEO =
+                                            "preferred-preview-size-for-video";
 
         // Parameter key suffix for supported values.
         private static final String SUPPORTED_VALUES_SUFFIX = "-values";
@@ -1251,6 +1362,7 @@ public class Camera {
         private static final String PIXEL_FORMAT_YUV422SP = "yuv422sp";
         private static final String PIXEL_FORMAT_YUV420SP = "yuv420sp";
         private static final String PIXEL_FORMAT_YUV422I = "yuv422i-yuyv";
+        private static final String PIXEL_FORMAT_YUV420P = "yuv420p";
         private static final String PIXEL_FORMAT_RGB565 = "rgb565";
         private static final String PIXEL_FORMAT_JPEG = "jpeg";
 
@@ -1399,7 +1511,7 @@ public class Camera {
         /**
          * Returns the dimensions setting for preview pictures.
          *
-         * @return a Size object with the height and width setting
+         * @return a Size object with the width and height setting
          *          for the preview picture
          */
         public Size getPreviewSize() {
@@ -1416,6 +1528,46 @@ public class Camera {
         public List<Size> getSupportedPreviewSizes() {
             String str = get(KEY_PREVIEW_SIZE + SUPPORTED_VALUES_SUFFIX);
             return splitSize(str);
+        }
+
+        /**
+         * Gets the supported video frame sizes that can be used by
+         * MediaRecorder.
+         *
+         * If the returned list is not null, the returned list will contain at
+         * least one Size and one of the sizes in the returned list must be
+         * passed to MediaRecorder.setVideoSize() for camcorder application if
+         * camera is used as the video source. In this case, the size of the
+         * preview can be different from the resolution of the recorded video
+         * during video recording.
+         *
+         * @return a list of Size object if camera has separate preview and
+         *         video output; otherwise, null is returned.
+         * @see #getPreferredPreviewSizeForVideo()
+         */
+        public List<Size> getSupportedVideoSizes() {
+            String str = get(KEY_VIDEO_SIZE + SUPPORTED_VALUES_SUFFIX);
+            return splitSize(str);
+        }
+
+        /**
+         * Returns the preferred or recommended preview size (width and height)
+         * in pixels for video recording. Camcorder applications should
+         * set the preview size to a value that is not larger than the
+         * preferred preview size. In other words, the product of the width
+         * and height of the preview size should not be larger than that of
+         * the preferred preview size. In addition, we recommend to choose a
+         * preview size that has the same aspect ratio as the resolution of
+         * video to be recorded.
+         *
+         * @return the preferred preview size (width and height) in pixels for
+         *         video recording if getSupportedVideoSizes() does not return
+         *         null; otherwise, null is returned.
+         * @see #getSupportedVideoSizes()
+         */
+        public Size getPreferredPreviewSizeForVideo() {
+            String pair = get(KEY_PREFERRED_PREVIEW_SIZE_FOR_VIDEO);
+            return strToSize(pair);
         }
 
         /**
@@ -1624,7 +1776,9 @@ public class Camera {
         }
 
         /**
-         * Gets the supported preview formats.
+         * Gets the supported preview formats. {@link android.graphics.ImageFormat#NV21}
+         * is always supported. {@link android.graphics.ImageFormat#YV12}
+         * is always supported since API level 12.
          *
          * @return a list of supported preview formats. This method will always
          *         return a list with at least one element.
@@ -1731,6 +1885,7 @@ public class Camera {
             case ImageFormat.NV16:      return PIXEL_FORMAT_YUV422SP;
             case ImageFormat.NV21:      return PIXEL_FORMAT_YUV420SP;
             case ImageFormat.YUY2:      return PIXEL_FORMAT_YUV422I;
+            case ImageFormat.YV12:      return PIXEL_FORMAT_YUV420P;
             case ImageFormat.RGB_565:   return PIXEL_FORMAT_RGB565;
             case ImageFormat.JPEG:      return PIXEL_FORMAT_JPEG;
             default:                    return null;
@@ -1749,6 +1904,9 @@ public class Camera {
 
             if (format.equals(PIXEL_FORMAT_YUV422I))
                 return ImageFormat.YUY2;
+
+            if (format.equals(PIXEL_FORMAT_YUV420P))
+                return ImageFormat.YV12;
 
             if (format.equals(PIXEL_FORMAT_RGB565))
                 return ImageFormat.RGB_565;

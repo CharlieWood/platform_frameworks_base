@@ -240,10 +240,9 @@ public class AccessibilityManagerService extends IAccessibilityManager.Stub
                 public void onChange(boolean selfChange) {
                     super.onChange(selfChange);
 
-                    mIsEnabled = Settings.Secure.getInt(mContext.getContentResolver(),
-                        Settings.Secure.ACCESSIBILITY_ENABLED, 0) == 1;
-
                     synchronized (mLock) {
+                        mIsEnabled = Settings.Secure.getInt(mContext.getContentResolver(),
+                                Settings.Secure.ACCESSIBILITY_ENABLED, 0) == 1;
                         if (mIsEnabled) {
                             manageServicesLocked();
                         } else {
@@ -269,14 +268,10 @@ public class AccessibilityManagerService extends IAccessibilityManager.Stub
             });
     }
 
-    public void addClient(IAccessibilityManagerClient client) {
+    public boolean addClient(IAccessibilityManagerClient client) {
         synchronized (mLock) {
-            try {
-                client.setEnabled(mIsEnabled);
-                mClients.add(client);
-            } catch (RemoteException re) {
-                Slog.w(LOG_TAG, "Dead AccessibilityManagerClient: " + client, re);
-            }
+            mClients.add(client);
+            return mIsEnabled;
         }
     }
 
@@ -456,9 +451,7 @@ public class AccessibilityManagerService extends IAccessibilityManager.Stub
         } catch (RemoteException re) {
             if (re instanceof DeadObjectException) {
                 Slog.w(LOG_TAG, "Dead " + service.mService + ". Cleaning up.");
-                synchronized (mLock) {
-                    removeDeadServiceLocked(service);
-                }
+                removeDeadServiceLocked(service);
             } else {
                 Slog.e(LOG_TAG, "Error during sending " + event + " to " + service.mService, re);
             }
@@ -472,19 +465,11 @@ public class AccessibilityManagerService extends IAccessibilityManager.Stub
      * @return True if the service was removed, false otherwise.
      */
     private boolean removeDeadServiceLocked(Service service) {
-        mServices.remove(service);
-        mHandler.removeMessages(service.mId);
-
         if (Config.DEBUG) {
             Slog.i(LOG_TAG, "Dead service " + service.mService + " removed");
         }
-
-        if (mServices.isEmpty()) {
-            mIsEnabled = false;
-            updateClientsLocked();
-        }
-
-        return true;
+        mHandler.removeMessages(service.mId);
+        return mServices.remove(service);
     }
 
     /**
@@ -547,11 +532,11 @@ public class AccessibilityManagerService extends IAccessibilityManager.Stub
 
         for (int i = 0, count = services.size(); i < count; i++) {
             Service service = services.get(i);
-
-            service.unbind();
-            mComponentNameToServiceMap.remove(service.mComponentName);
+            if (service.unbind()) {
+                i--;
+                count--;
+            }
         }
-        services.clear();
     }
 
     /**
@@ -593,7 +578,6 @@ public class AccessibilityManagerService extends IAccessibilityManager.Stub
             Set<ComponentName> enabledServices) {
 
         Map<ComponentName, Service> componentNameToServiceMap = mComponentNameToServiceMap;
-        List<Service> services = mServices;
         boolean isEnabled = mIsEnabled;
 
         for (int i = 0, count = installedServices.size(); i < count; i++) {
@@ -602,15 +586,20 @@ public class AccessibilityManagerService extends IAccessibilityManager.Stub
                     intalledService.name);
             Service service = componentNameToServiceMap.get(componentName);
 
-            if (isEnabled && enabledServices.contains(componentName)) {
-                if (service == null) {
-                    new Service(componentName).bind();
+            if (isEnabled) {
+                if (enabledServices.contains(componentName)) {
+                    if (service == null) {
+                        service = new Service(componentName);
+                    }
+                    service.bind();
+                } else if (!enabledServices.contains(componentName)) {
+                    if (service != null) {
+                        service.unbind();
+                    }
                 }
             } else {
                 if (service != null) {
                     service.unbind();
-                    componentNameToServiceMap.remove(componentName);
-                    services.remove(service);
                 }
             }
         }
@@ -678,21 +667,31 @@ public class AccessibilityManagerService extends IAccessibilityManager.Stub
 
         /**
          * Binds to the accessibility service.
+         *
+         * @return True if binding is successful.
          */
-        public void bind() {
+        public boolean bind() {
             if (mService == null) {
-                mContext.bindService(mIntent, this, Context.BIND_AUTO_CREATE);
+                return mContext.bindService(mIntent, this, Context.BIND_AUTO_CREATE);
             }
+            return false;
         }
 
         /**
          * Unbinds form the accessibility service and removes it from the data
          * structures for service management.
+         *
+         * @return True if unbinding is successful.
          */
-        public void unbind() {
+        public boolean unbind() {
             if (mService != null) {
+                mService = null;
                 mContext.unbindService(this);
+                mComponentNameToServiceMap.remove(mComponentName);
+                mServices.remove(this);
+                return true;
             }
+            return false;
         }
 
         /**

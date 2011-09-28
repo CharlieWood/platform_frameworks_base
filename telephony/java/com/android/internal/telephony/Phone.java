@@ -17,18 +17,16 @@
 package com.android.internal.telephony;
 
 import android.content.Context;
-import android.content.SharedPreferences;
+import android.net.LinkCapabilities;
+import android.net.LinkProperties;
 import android.os.Handler;
 import android.os.Message;
-import android.preference.PreferenceManager;
 import android.telephony.CellLocation;
 import android.telephony.PhoneStateListener;
 import android.telephony.ServiceState;
 import android.telephony.SignalStrength;
 
 import com.android.internal.telephony.DataConnection;
-import com.android.internal.telephony.gsm.NetworkInfo;
-import com.android.internal.telephony.gsm.GsmDataConnection;
 import com.android.internal.telephony.test.SimulatedRadioControl;
 
 import java.util.List;
@@ -99,11 +97,12 @@ public interface Phone {
     static final String PHONE_NAME_KEY = "phoneName";
     static final String FAILURE_REASON_KEY = "reason";
     static final String STATE_CHANGE_REASON_KEY = "reason";
-    static final String DATA_APN_TYPES_KEY = "apnType";
+    static final String DATA_APN_TYPE_KEY = "apnType";
     static final String DATA_APN_KEY = "apn";
+    static final String DATA_LINK_PROPERTIES_KEY = "linkProperties";
+    static final String DATA_LINK_CAPABILITIES_KEY = "linkCapabilities";
 
     static final String DATA_IFACE_NAME_KEY = "iface";
-    static final String DATA_GATEWAY_KEY = "gateway";
     static final String NETWORK_UNAVAILABLE_KEY = "networkUnvailable";
     static final String PHONE_IN_ECM_STATE = "phoneinECMState";
 
@@ -126,12 +125,22 @@ public interface Phone {
     static final String APN_TYPE_DUN = "dun";
     /** APN type for HiPri traffic */
     static final String APN_TYPE_HIPRI = "hipri";
+    /** APN type for FOTA */
+    static final String APN_TYPE_FOTA = "fota";
+    /** APN type for IMS */
+    static final String APN_TYPE_IMS = "ims";
+    /** APN type for CBS */
+    static final String APN_TYPE_CBS = "cbs";
 
     // "Features" accessible through the connectivity manager
     static final String FEATURE_ENABLE_MMS = "enableMMS";
     static final String FEATURE_ENABLE_SUPL = "enableSUPL";
     static final String FEATURE_ENABLE_DUN = "enableDUN";
     static final String FEATURE_ENABLE_HIPRI = "enableHIPRI";
+    static final String FEATURE_ENABLE_DUN_ALWAYS = "enableDUNAlways";
+    static final String FEATURE_ENABLE_FOTA = "enableFOTA";
+    static final String FEATURE_ENABLE_IMS = "enableIMS";
+    static final String FEATURE_ENABLE_CBS = "enableCBS";
 
     /**
      * Return codes for <code>enableApnType()</code>
@@ -140,6 +149,7 @@ public interface Phone {
     static final int APN_REQUEST_STARTED    = 1;
     static final int APN_TYPE_NOT_AVAILABLE = 2;
     static final int APN_REQUEST_FAILED     = 3;
+    static final int APN_ALREADY_INACTIVE   = 4;
 
 
     /**
@@ -164,6 +174,7 @@ public interface Phone {
     static final String REASON_PS_RESTRICT_ENABLED = "psRestrictEnabled";
     static final String REASON_PS_RESTRICT_DISABLED = "psRestrictDisabled";
     static final String REASON_SIM_LOADED = "simLoaded";
+    static final String REASON_NW_TYPE_CHANGED = "nwTypeChanged";
 
     // Used for band mode selection methods
     static final int BM_UNSPECIFIED = 0; // selected by baseband automatically
@@ -193,6 +204,10 @@ public interface Phone {
     int NT_MODE_EVDO_NO_CDMA = RILConstants.NETWORK_MODE_EVDO_NO_CDMA;
     int NT_MODE_GLOBAL       = RILConstants.NETWORK_MODE_GLOBAL;
 
+    int NT_MODE_LTE_CDMA_EVDO  = RILConstants.NETWORK_MODE_LTE_CDMA_EVDO;
+    int NT_MODE_LTE_GSM_WCDMA  = RILConstants.NETWORK_MODE_LTE_GSM_WCDMA;
+    int NT_MODE_LTE_CMDA_EVDO_GSM_WCDMA = RILConstants.NETWORK_MODE_LTE_CMDA_EVDO_GSM_WCDMA;
+    int NT_MODE_LTE_ONLY     = RILConstants.NETWORK_MODE_LTE_ONLY;
     int PREFERRED_NT_MODE    = RILConstants.PREFERRED_NETWORK_MODE;
 
 
@@ -243,11 +258,19 @@ public interface Phone {
     CellLocation getCellLocation();
 
     /**
-     * Get the current DataState. No change notification exists at this
-     * interface -- use
+     * Get the current for the default apn DataState. No change notification
+     * exists at this interface -- use
      * {@link android.telephony.PhoneStateListener} instead.
      */
     DataState getDataConnectionState();
+
+    /**
+     * Get the current DataState. No change notification exists at this
+     * interface -- use
+     * {@link android.telephony.PhoneStateListener} instead.
+     * @param apnType specify for which apn to get connection state info.
+     */
+    DataState getDataConnectionState(String apnType);
 
     /**
      * Get the current DataActivityState. No change notification exists at this
@@ -301,16 +324,27 @@ public interface Phone {
 
     /**
      * Returns an array of string identifiers for the APN types serviced by the
-     * currently active or last connected APN.
-     *  @return The string array.
+     * currently active.
+     *  @return The string array will always return at least one entry, Phone.APN_TYPE_DEFAULT.
+     * TODO: Revisit if we always should return at least one entry.
      */
     String[] getActiveApnTypes();
 
     /**
-     * Returns a string identifier for currently active or last connected APN.
-     *  @return The string name.
+     * Returns string for the active APN host.
+     *  @return type as a string or null if none.
      */
-    String getActiveApn();
+    String getActiveApnHost();
+
+    /**
+     * Return the LinkProperties for the named apn or null if not available
+     */
+    LinkProperties getLinkProperties(String apnType);
+
+    /**
+     * Return the LinkCapabilities
+     */
+    LinkCapabilities getLinkCapabilities(String apnType);
 
     /**
      * Get current signal strength. No change notification available on this
@@ -1036,7 +1070,7 @@ public interface Phone {
      * one of the following members:.<p>
      *<ul>
      * <li><code>response.obj.result</code> will be a <code>List</code> of
-     * <code>com.android.internal.telephony.gsm.NetworkInfo</code> objects, or</li>
+     * <code>OperatorInfo</code> objects, or</li>
      * <li><code>response.obj.exception</code> will be set with an exception
      * on failure.</li>
      * </ul>
@@ -1050,8 +1084,7 @@ public interface Phone {
      * @param response The message to dispatch when the network selection
      * is complete.
      *
-     * @see #selectNetworkManually(com.android.internal.telephony.gsm.NetworkInfo,
-     * android.os.Message )
+     * @see #selectNetworkManually(OperatorInfo, android.os.Message )
      */
     void setNetworkSelectionModeAutomatic(Message response);
 
@@ -1063,7 +1096,7 @@ public interface Phone {
      *
      * @see #setNetworkSelectionModeAutomatic(Message)
      */
-    void selectNetworkManually(NetworkInfo network,
+    void selectNetworkManually(OperatorInfo network,
                             Message response);
 
     /**
@@ -1306,36 +1339,6 @@ public interface Phone {
     SimulatedRadioControl getSimulatedRadioControl();
 
     /**
-     * Allow mobile data connections.
-     * @return {@code true} if the operation started successfully
-     * <br/>{@code false} if it
-     * failed immediately.<br/>
-     * Even in the {@code true} case, it may still fail later
-     * during setup, in which case an asynchronous indication will
-     * be supplied.
-     */
-    boolean enableDataConnectivity();
-
-    /**
-     * Disallow mobile data connections, and terminate any that
-     * are in progress.
-     * @return {@code true} if the operation started successfully
-     * <br/>{@code false} if it
-     * failed immediately.<br/>
-     * Even in the {@code true} case, it may still fail later
-     * during setup, in which case an asynchronous indication will
-     * be supplied.
-     */
-    boolean disableDataConnectivity();
-
-    /**
-     * Report the current state of data connectivity (enabled or disabled)
-     * @return {@code false} if data connectivity has been explicitly disabled,
-     * {@code true} otherwise.
-     */
-    boolean isDataConnectivityEnabled();
-
-    /**
      * Enables the specified APN type. Only works for "special" APN types,
      * i.e., not the default APN.
      * @param type The desired APN type. Cannot be {@link #APN_TYPE_DEFAULT}.
@@ -1368,32 +1371,17 @@ public interface Phone {
     int disableApnType(String type);
 
     /**
+     * Set an APN type (for ex: "default") is enabled or disabled
+     * @param apnType specifies APN type the request pertains to
+     * @param enabled if true, enable the APN type
+     *                otherwise, disable the APN type
+     */
+    void apnDependenciesMet(String apnType, boolean enabled);
+
+    /**
      * Report on whether data connectivity is allowed.
      */
     boolean isDataConnectivityPossible();
-
-    /**
-     * Returns the name of the network interface used by the specified APN type.
-     */
-    String getInterfaceName(String apnType);
-
-    /**
-     * Returns the IP address of the network interface used by the specified
-     * APN type.
-     */
-    String getIpAddress(String apnType);
-
-    /**
-     * Returns the gateway for the network interface used by the specified APN
-     * type.
-     */
-    String getGateway(String apnType);
-
-    /**
-     * Returns the DNS servers for the network interface used by the specified
-     * APN type.
-     */
-    public String[] getDnsServers(String apnType);
 
     /**
      * Retrieves the unique device ID, e.g., IMEI for GSM phones and MEID for CDMA phones.
@@ -1540,6 +1528,11 @@ public interface Phone {
      * @return  true means the dialStr is OTA number, and false means the dialStr is not OTA number
      */
     boolean isOtaSpNumber(String dialStr);
+
+    /**
+     * Returns true if OTA Service Provisioning needs to be performed.
+     */
+    boolean needsOtaServiceProvisioning();
 
     /**
      * Register for notifications when CDMA call waiting comes
@@ -1717,4 +1710,15 @@ public interface Phone {
     void unsetOnEcbModeExitResponse(Handler h);
 
 
+    /**
+     * TODO: Adding a function for each property is not good.
+     * A fucntion of type getPhoneProp(propType) where propType is an
+     * enum of GSM+CDMA+LTE props would be a better approach.
+     *
+     * Get "Restriction of menu options for manual PLMN selection" bit
+     * status from EF_CSP data, this belongs to "Value Added Services Group".
+     * @return true if this bit is set or EF_CSP data is unavailable,
+     * false otherwise
+     */
+    boolean isCspPlmnEnabled();
 }

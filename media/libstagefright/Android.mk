@@ -4,15 +4,21 @@ include $(CLEAR_VARS)
 include frameworks/base/media/libstagefright/codecs/common/Config.mk
 
 LOCAL_SRC_FILES:=                         \
+        ACodec.cpp                        \
+        AACExtractor.cpp                  \
         AMRExtractor.cpp                  \
         AMRWriter.cpp                     \
         AudioPlayer.cpp                   \
         AudioSource.cpp                   \
         AwesomePlayer.cpp                 \
         CameraSource.cpp                  \
+        CameraSourceTimeLapse.cpp         \
+        VideoSourceDownSampler.cpp        \
         DataSource.cpp                    \
+        DRMExtractor.cpp                  \
         ESDS.cpp                          \
         FileSource.cpp                    \
+        FLACExtractor.cpp                 \
         HTTPStream.cpp                    \
         JPEGSource.cpp                    \
         MP3Extractor.cpp                  \
@@ -24,6 +30,7 @@ LOCAL_SRC_FILES:=                         \
         MediaDefs.cpp                     \
         MediaExtractor.cpp                \
         MediaSource.cpp                   \
+        MediaSourceSplitter.cpp           \
         MetaData.cpp                      \
         NuCachedSource2.cpp               \
         NuHTTPDataSource.cpp              \
@@ -40,15 +47,19 @@ LOCAL_SRC_FILES:=                         \
         TimeSource.cpp                    \
         TimedEventQueue.cpp               \
         Utils.cpp                         \
+        VBRISeeker.cpp                    \
         WAVExtractor.cpp                  \
+        WVMExtractor.cpp                  \
+        XINGSeeker.cpp                    \
         avc_utils.cpp                     \
-        string.cpp
 
 LOCAL_C_INCLUDES:= \
 	$(JNI_H_INCLUDE) \
         $(TOP)/frameworks/base/include/media/stagefright/openmax \
+        $(TOP)/external/flac/include \
         $(TOP)/external/tremolo \
-        $(TOP)/frameworks/base/media/libstagefright/rtsp
+        $(TOP)/frameworks/base/media/libstagefright/rtsp \
+        $(TOP)/external/openssl/include \
 
 LOCAL_SHARED_LIBRARIES := \
         libbinder         \
@@ -59,9 +70,15 @@ LOCAL_SHARED_LIBRARIES := \
         libsonivox        \
         libvorbisidec     \
         libsurfaceflinger_client \
-        libcamera_client
+        libstagefright_yuv \
+        libcamera_client \
+        libdrmframework  \
+        libcrypto        \
+        libssl           \
+        libgui
 
 LOCAL_STATIC_LIBRARIES := \
+        libstagefright_color_conversion \
         libstagefright_aacdec \
         libstagefright_aacenc \
         libstagefright_amrnbdec \
@@ -82,13 +99,13 @@ LOCAL_STATIC_LIBRARIES := \
         libstagefright_rtsp \
         libstagefright_id3 \
         libstagefright_g711dec \
+        libFLAC \
 
 LOCAL_SHARED_LIBRARIES += \
         libstagefright_amrnb_common \
         libstagefright_enc_common \
         libstagefright_avc_common \
         libstagefright_foundation \
-        libstagefright_color_conversion
 
 ifeq ($(TARGET_OS)-$(TARGET_SIMULATOR),linux-true)
         LOCAL_LDLIBS += -lpthread -ldl

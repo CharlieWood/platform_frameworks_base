@@ -33,7 +33,6 @@ status_t StagefrightPlayer::initCheck() {
 
 status_t StagefrightPlayer::setDataSource(
         const char *url, const KeyedVector<String8, String8> *headers) {
-    LOGI("setDataSource('%s')", url);
     return mPlayer->setDataSource(url, headers);
 }
 
@@ -44,10 +43,22 @@ status_t StagefrightPlayer::setDataSource(int fd, int64_t offset, int64_t length
     return mPlayer->setDataSource(dup(fd), offset, length);
 }
 
-status_t StagefrightPlayer::setVideoSurface(const sp<ISurface> &surface) {
+status_t StagefrightPlayer::setDataSource(const sp<IStreamSource> &source) {
+    return mPlayer->setDataSource(source);
+}
+
+status_t StagefrightPlayer::setVideoSurface(const sp<Surface> &surface) {
     LOGV("setVideoSurface");
 
-    mPlayer->setISurface(surface);
+    mPlayer->setSurface(surface);
+    return OK;
+}
+
+status_t StagefrightPlayer::setVideoSurfaceTexture(
+        const sp<ISurfaceTexture> &surfaceTexture) {
+    LOGV("setVideoSurfaceTexture");
+
+    mPlayer->setSurfaceTexture(surfaceTexture);
     return OK;
 }
 
@@ -138,16 +149,6 @@ status_t StagefrightPlayer::setLooping(int loop) {
 player_type StagefrightPlayer::playerType() {
     LOGV("playerType");
     return STAGEFRIGHT_PLAYER;
-}
-
-status_t StagefrightPlayer::suspend() {
-    LOGV("suspend");
-    return mPlayer->suspend();
-}
-
-status_t StagefrightPlayer::resume() {
-    LOGV("resume");
-    return mPlayer->resume();
 }
 
 status_t StagefrightPlayer::invoke(const Parcel &request, Parcel *reply) {

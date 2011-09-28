@@ -79,12 +79,9 @@ static jobject doBuildTileIndex(JNIEnv* env, SkStream* stream) {
         return nullObjectReturn("SkImageDecoder::Factory returned null");
     }
 
-    JavaPixelAllocator *javaAllocator = new JavaPixelAllocator(env, true);
+    JavaPixelAllocator *javaAllocator = new JavaPixelAllocator(env);
     decoder->setAllocator(javaAllocator);
-    JavaMemoryUsageReporter *javaMemoryReporter = new JavaMemoryUsageReporter(env);
-    decoder->setReporter(javaMemoryReporter);
     javaAllocator->unref();
-    javaMemoryReporter->unref();
 
     if (!decoder->buildTileIndex(stream, &width, &height)) {
         char msg[100];
@@ -241,15 +238,16 @@ static jobject nativeDecodeRegion(JNIEnv* env, jobject, SkBitmapRegionDecoder *b
                             getMimeTypeString(env, decoder->getFormat()));
     }
 
-    // detach bitmap from its autotdeleter, since we want to own it now
+    // detach bitmap from its autodeleter, since we want to own it now
     adb.detach();
 
-    SkPixelRef* pr;
-    pr = bitmap->pixelRef();
+    SkPixelRef* pr = bitmap->pixelRef();
     // promise we will never change our pixels (great for sharing and pictures)
     pr->setImmutable();
-    // now create the java bitmap
-    return GraphicsJNI::createBitmap(env, bitmap, false, NULL);
+
+    JavaPixelAllocator* allocator = (JavaPixelAllocator*) decoder->getAllocator();
+    jbyteArray buff = allocator->getStorageObjAndReset();
+    return GraphicsJNI::createBitmap(env, bitmap, buff, false, NULL, -1);
 }
 
 static int nativeGetHeight(JNIEnv* env, jobject, SkBitmapRegionDecoder *brd) {

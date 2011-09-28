@@ -204,8 +204,9 @@ public:
     // set audio mode in audio hardware (see AudioSystem::audio_mode)
     static status_t setMode(int mode);
 
-    // returns true in *state if tracks are active on the specified stream
-    static status_t isStreamActive(int stream, bool *state);
+    // returns true in *state if tracks are active on the specified stream or has been active
+    // in the past inPastMs milliseconds
+    static status_t isStreamActive(int stream, bool *state, uint32_t inPastMs = 0);
 
     // set/get audio hardware parameters. The function accepts a list of parameters
     // key value pairs in the form: key1=value1;key2=value2;...
@@ -263,11 +264,15 @@ public:
         DEVICE_OUT_BLUETOOTH_A2DP_HEADPHONES = 0x100,
         DEVICE_OUT_BLUETOOTH_A2DP_SPEAKER = 0x200,
         DEVICE_OUT_AUX_DIGITAL = 0x400,
+        DEVICE_OUT_ANLG_DOCK_HEADSET = 0x800,
+        DEVICE_OUT_DGTL_DOCK_HEADSET = 0x1000,
         DEVICE_OUT_DEFAULT = 0x8000,
         DEVICE_OUT_ALL = (DEVICE_OUT_EARPIECE | DEVICE_OUT_SPEAKER | DEVICE_OUT_WIRED_HEADSET |
                 DEVICE_OUT_WIRED_HEADPHONE | DEVICE_OUT_BLUETOOTH_SCO | DEVICE_OUT_BLUETOOTH_SCO_HEADSET |
                 DEVICE_OUT_BLUETOOTH_SCO_CARKIT | DEVICE_OUT_BLUETOOTH_A2DP | DEVICE_OUT_BLUETOOTH_A2DP_HEADPHONES |
-                DEVICE_OUT_BLUETOOTH_A2DP_SPEAKER | DEVICE_OUT_AUX_DIGITAL | DEVICE_OUT_DEFAULT),
+                DEVICE_OUT_BLUETOOTH_A2DP_SPEAKER | DEVICE_OUT_AUX_DIGITAL |
+                DEVICE_OUT_ANLG_DOCK_HEADSET | DEVICE_OUT_DGTL_DOCK_HEADSET |
+                DEVICE_OUT_DEFAULT),
         DEVICE_OUT_ALL_A2DP = (DEVICE_OUT_BLUETOOTH_A2DP | DEVICE_OUT_BLUETOOTH_A2DP_HEADPHONES |
                 DEVICE_OUT_BLUETOOTH_A2DP_SPEAKER),
 
@@ -310,6 +315,8 @@ public:
         FORCE_WIRED_ACCESSORY,
         FORCE_BT_CAR_DOCK,
         FORCE_BT_DESK_DOCK,
+        FORCE_ANALOG_DOCK,
+        FORCE_DIGITAL_DOCK,
         NUM_FORCE_CONFIG,
         FORCE_DEFAULT = FORCE_NONE
     };
@@ -385,6 +392,7 @@ public:
     static status_t getStreamVolumeIndex(stream_type stream, int *index);
 
     static uint32_t getStrategyForStream(stream_type stream);
+    static uint32_t getDevicesForStream(stream_type stream);
 
     static audio_io_handle_t getOutputForEffect(effect_descriptor_t *desc);
     static status_t registerEffect(effect_descriptor_t *desc,

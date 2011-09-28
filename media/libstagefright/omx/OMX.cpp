@@ -24,14 +24,11 @@
 #include <sys/resource.h>
 
 #include "../include/OMX.h"
-#include "OMXRenderer.h"
 
 #include "../include/OMXNodeInstance.h"
-#include "../include/SoftwareRenderer.h"
 
 #include <binder/IMemory.h>
 #include <media/stagefright/MediaDebug.h>
-#include <media/stagefright/VideoRenderer.h>
 #include <utils/threads.h>
 
 #include "OMXMaster.h"
@@ -295,11 +292,28 @@ status_t OMX::setConfig(
             index, params, size);
 }
 
+status_t OMX::enableGraphicBuffers(
+        node_id node, OMX_U32 port_index, OMX_BOOL enable) {
+    return findInstance(node)->enableGraphicBuffers(port_index, enable);
+}
+
+status_t OMX::storeMetaDataInBuffers(
+        node_id node, OMX_U32 port_index, OMX_BOOL enable) {
+    return findInstance(node)->storeMetaDataInBuffers(port_index, enable);
+}
+
 status_t OMX::useBuffer(
         node_id node, OMX_U32 port_index, const sp<IMemory> &params,
         buffer_id *buffer) {
     return findInstance(node)->useBuffer(
             port_index, params, buffer);
+}
+
+status_t OMX::useGraphicBuffer(
+        node_id node, OMX_U32 port_index,
+        const sp<GraphicBuffer> &graphicBuffer, buffer_id *buffer) {
+    return findInstance(node)->useGraphicBuffer(
+            port_index, graphicBuffer, buffer);
 }
 
 status_t OMX::allocateBuffer(
@@ -431,135 +445,4 @@ void OMX::invalidateNodeID_l(node_id node) {
     mNodeIDToInstance.removeItem(node);
 }
 
-////////////////////////////////////////////////////////////////////////////////
-
-struct SharedVideoRenderer : public VideoRenderer {
-    SharedVideoRenderer(void *libHandle, VideoRenderer *obj)
-        : mLibHandle(libHandle),
-          mObj(obj) {
-    }
-
-    virtual ~SharedVideoRenderer() {
-        delete mObj;
-        mObj = NULL;
-
-        dlclose(mLibHandle);
-        mLibHandle = NULL;
-    }
-
-    virtual void render(
-            const void *data, size_t size, void *platformPrivate) {
-        return mObj->render(data, size, platformPrivate);
-    }
-
-private:
-    void *mLibHandle;
-    VideoRenderer *mObj;
-
-    SharedVideoRenderer(const SharedVideoRenderer &);
-    SharedVideoRenderer &operator=(const SharedVideoRenderer &);
-};
-
-sp<IOMXRenderer> OMX::createRenderer(
-        const sp<ISurface> &surface,
-        const char *componentName,
-        OMX_COLOR_FORMATTYPE colorFormat,
-        size_t encodedWidth, size_t encodedHeight,
-        size_t displayWidth, size_t displayHeight,
-        int32_t rotationDegrees) {
-    Mutex::Autolock autoLock(mLock);
-
-    VideoRenderer *impl = NULL;
-
-    void *libHandle = dlopen("libstagefrighthw.so", RTLD_NOW);
-
-    if (libHandle) {
-        typedef VideoRenderer *(*CreateRendererWithRotationFunc)(
-                const sp<ISurface> &surface,
-                const char *componentName,
-                OMX_COLOR_FORMATTYPE colorFormat,
-                size_t displayWidth, size_t displayHeight,
-                size_t decodedWidth, size_t decodedHeight,
-                int32_t rotationDegrees);
-
-        typedef VideoRenderer *(*CreateRendererFunc)(
-                const sp<ISurface> &surface,
-                const char *componentName,
-                OMX_COLOR_FORMATTYPE colorFormat,
-                size_t displayWidth, size_t displayHeight,
-                size_t decodedWidth, size_t decodedHeight);
-
-        CreateRendererWithRotationFunc funcWithRotation =
-            (CreateRendererWithRotationFunc)dlsym(
-                    libHandle,
-                    "_Z26createRendererWithRotationRKN7android2spINS_8"
-                    "ISurfaceEEEPKc20OMX_COLOR_FORMATTYPEjjjji");
-
-        if (funcWithRotation) {
-            impl = (*funcWithRotation)(
-                    surface, componentName, colorFormat,
-                    displayWidth, displayHeight, encodedWidth, encodedHeight,
-                    rotationDegrees);
-        } else {
-            CreateRendererFunc func =
-                (CreateRendererFunc)dlsym(
-                        libHandle,
-                        "_Z14createRendererRKN7android2spINS_8ISurfaceEEEPKc20"
-                        "OMX_COLOR_FORMATTYPEjjjj");
-
-            if (func) {
-                impl = (*func)(surface, componentName, colorFormat,
-                        displayWidth, displayHeight, encodedWidth, encodedHeight);
-            }
-        }
-
-        if (impl) {
-            impl = new SharedVideoRenderer(libHandle, impl);
-            libHandle = NULL;
-        }
-
-        if (libHandle) {
-            dlclose(libHandle);
-            libHandle = NULL;
-        }
-    }
-
-    if (!impl) {
-        LOGW("Using software renderer.");
-        impl = new SoftwareRenderer(
-                colorFormat,
-                surface,
-                displayWidth, displayHeight,
-                encodedWidth, encodedHeight);
-
-        if (((SoftwareRenderer *)impl)->initCheck() != OK) {
-            delete impl;
-            impl = NULL;
-
-            return NULL;
-        }
-    }
-
-    return new OMXRenderer(impl);
-}
-
-OMXRenderer::OMXRenderer(VideoRenderer *impl)
-    : mImpl(impl) {
-}
-
-OMXRenderer::~OMXRenderer() {
-    delete mImpl;
-    mImpl = NULL;
-}
-
-void OMXRenderer::render(IOMX::buffer_id buffer) {
-    OMX_BUFFERHEADERTYPE *header = (OMX_BUFFERHEADERTYPE *)buffer;
-
-    mImpl->render(
-            header->pBuffer + header->nOffset,
-            header->nFilledLen,
-            header->pPlatformPrivate);
-}
-
 }  // namespace android
-

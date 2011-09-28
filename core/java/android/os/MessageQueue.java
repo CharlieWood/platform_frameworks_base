@@ -129,6 +129,7 @@ public class MessageQueue {
                         mMessages = msg.next;
                         msg.next = null;
                         if (Config.LOGV) Log.v("MessageQueue", "Returning message: " + msg);
+                        msg.markInUse();
                         return msg;
                     } else {
                         nextPollTimeoutMillis = (int) Math.min(when - now, Integer.MAX_VALUE);
@@ -183,7 +184,7 @@ public class MessageQueue {
     }
 
     final boolean enqueueMessage(Message msg, long when) {
-        if (msg.when != 0) {
+        if (msg.isInUse()) {
             throw new AndroidRuntimeException(msg
                     + " This message is already in use.");
         }

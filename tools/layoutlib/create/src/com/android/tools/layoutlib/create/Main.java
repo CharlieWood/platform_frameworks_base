@@ -68,6 +68,7 @@ public class Main {
             AsmAnalyzer aa = new AsmAnalyzer(log, osJarPath, agen,
                     new String[] {                          // derived from
                         "android.view.View",
+                        "android.app.Fragment"
                     },
                     new String[] {                          // include classes
                         "android.*", // for android.R

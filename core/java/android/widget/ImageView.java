@@ -34,8 +34,7 @@ import android.util.AttributeSet;
 import android.util.Log;
 import android.view.RemotableViewMethod;
 import android.view.View;
-import android.view.accessibility.AccessibilityEvent;
-import android.view.accessibility.AccessibilityManager;
+import android.view.ViewDebug;
 import android.widget.RemoteViews.RemoteView;
 
 
@@ -86,7 +85,8 @@ public class ImageView extends View {
 
     private boolean mCropToPadding;
 
-    private boolean mBaselineAligned = false;
+    private int mBaseline = -1;
+    private boolean mBaselineAlignBottom = false;
 
     private static final ScaleType[] sScaleTypeArray = {
         ScaleType.MATRIX,
@@ -120,9 +120,12 @@ public class ImageView extends View {
             setImageDrawable(d);
         }
 
-        mBaselineAligned = a.getBoolean(
+        mBaselineAlignBottom = a.getBoolean(
                 com.android.internal.R.styleable.ImageView_baselineAlignBottom, false);
-        
+
+        mBaseline = a.getDimensionPixelSize(
+                com.android.internal.R.styleable.ImageView_baseline, -1);
+
         setAdjustViewBounds(
             a.getBoolean(com.android.internal.R.styleable.ImageView_adjustViewBounds,
             false));
@@ -162,6 +165,12 @@ public class ImageView extends View {
     }
     
     @Override
+    public void jumpDrawablesToCurrentState() {
+        super.jumpDrawablesToCurrentState();
+        if (mDrawable != null) mDrawable.jumpToCurrentState();
+    }
+
+    @Override
     public void invalidateDrawable(Drawable dr) {
         if (dr == mDrawable) {
             /* we invalidate the whole view in this case because it's very
@@ -176,7 +185,7 @@ public class ImageView extends View {
             super.invalidateDrawable(dr);
         }
     }
-    
+
     @Override
     protected boolean onSetAlpha(int alpha) {
         if (getBackground() == null) {
@@ -687,7 +696,7 @@ public class ImageView extends View {
                                             / desiredAspect) + ptop + pbottom;
                         if (newHeight <= heightSize) {
                             heightSize = newHeight;
-                        } 
+                        }
                     }
                 }
             }
@@ -702,8 +711,8 @@ public class ImageView extends View {
             w = Math.max(w, getSuggestedMinimumWidth());
             h = Math.max(h, getSuggestedMinimumHeight());
 
-            widthSize = resolveSize(w, widthMeasureSpec);
-            heightSize = resolveSize(h, heightMeasureSpec);
+            widthSize = resolveSizeAndState(w, widthMeasureSpec, 0);
+            heightSize = resolveSizeAndState(h, heightMeasureSpec, 0);
         }
 
         setMeasuredDimension(widthSize, heightSize);
@@ -874,9 +883,63 @@ public class ImageView extends View {
         }
     }
 
+    /**
+     * <p>Return the offset of the widget's text baseline from the widget's top
+     * boundary. </p>
+     *
+     * @return the offset of the baseline within the widget's bounds or -1
+     *         if baseline alignment is not supported.
+     */
     @Override
+    @ViewDebug.ExportedProperty(category = "layout")
     public int getBaseline() {
-        return mBaselineAligned ? getMeasuredHeight() : -1;
+        if (mBaselineAlignBottom) {
+            return getMeasuredHeight();
+        } else {
+            return mBaseline;
+        }
+    }
+
+    /**
+     * <p>Set the offset of the widget's text baseline from the widget's top
+     * boundary.  This value is overridden by the {@link #setBaselineAlignBottom}
+     * property.</p>
+     *
+     * @param baseline The baseline to use, or -1 if none is to be provided.
+     *
+     * @see #setBaseline
+     * @attr ref android.R.styleable#ImageView_baseline
+     */
+    public void setBaseline(int baseline) {
+        if (mBaseline != baseline) {
+            mBaseline = baseline;
+            requestLayout();
+        }
+    }
+
+    /**
+     * Set whether to set the baseline of this view to the bottom of the view.
+     * Setting this value overrides any calls to setBaseline.
+     *
+     * @param aligned If true, the image view will be baseline aligned with
+     *      based on its bottom edge.
+     *
+     * @attr ref android.R.styleable#ImageView_baselineAlignBottom
+     */
+    public void setBaselineAlignBottom(boolean aligned) {
+        if (mBaselineAlignBottom != aligned) {
+            mBaselineAlignBottom = aligned;
+            requestLayout();
+        }
+    }
+
+    /**
+     * Return whether this view's baseline will be considered the bottom of the view.
+     *
+     * @see #setBaselineAlignBottom(boolean)
+     */
+    public boolean getBaselineAlignBottom() {
+        return mBaselineAlignBottom;
     }
 
     /**

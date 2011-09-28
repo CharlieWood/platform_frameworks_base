@@ -30,15 +30,14 @@ import android.content.pm.InstrumentationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageItemInfo;
 import android.content.pm.PackageManager;
-import android.content.pm.ParceledListSlice;
 import android.content.pm.PermissionGroupInfo;
 import android.content.pm.PermissionInfo;
 import android.content.res.AssetManager;
 import android.content.res.Resources;
 import android.net.Uri;
-import android.os.Parcel;
 import android.os.RemoteException;
 import android.os.ServiceManager;
+import android.provider.Settings;
 
 import java.io.File;
 import java.lang.reflect.Field;
@@ -224,7 +223,7 @@ public final class Pm {
         String filter = nextArg();
 
         try {
-            final List<PackageInfo> packages = getInstalledPackages(mPm, getFlags);
+            List<PackageInfo> packages = mPm.getInstalledPackages(getFlags);
 
             int count = packages.size();
             for (int p = 0 ; p < count ; p++) {
@@ -248,22 +247,6 @@ public final class Pm {
         }
     }
 
-    @SuppressWarnings("unchecked")
-    private List<PackageInfo> getInstalledPackages(IPackageManager pm, int flags)
-            throws RemoteException {
-        final List<PackageInfo> packageInfos = new ArrayList<PackageInfo>();
-        PackageInfo lastItem = null;
-        ParceledListSlice<PackageInfo> slice;
-
-        do {
-            final String lastKey = lastItem != null ? lastItem.packageName : null;
-            slice = pm.getInstalledPackages(flags, lastKey);
-            lastItem = slice.populateList(packageInfos, PackageInfo.CREATOR);
-        } while (!slice.isLastSlice());
-
-        return packageInfos;
-    }
-
     /**
      * Lists all of the features supported by the current device.
      *
@@ -276,7 +259,7 @@ public final class Pm {
             for (int i=0; i<rawList.length; i++) {
                 list.add(rawList[i]);
             }
-                    
+
 
             // Sort by name
             Collections.sort(list, new Comparator<FeatureInfo>() {
@@ -420,9 +403,11 @@ public final class Pm {
         if (nonLocalized != null) {
             return nonLocalized.toString();
         }
-        Resources r = getResources(pii);
-        if (r != null) {
-            return r.getString(res);
+        if (res != 0) {
+            Resources r = getResources(pii);
+            if (r != null) {
+                return r.getString(res);
+            }
         }
         return null;
     }
@@ -1043,6 +1028,9 @@ public final class Pm {
         System.err.println("The list instrumentation command prints all instrumentations,");
         System.err.println("or only those that target a specified package.  Options:");
         System.err.println("  -f: see their associated file.");
+        System.err.println("(Use this command to list all test packages, or use <TARGET-PACKAGE> ");
+        System.err.println(" to list the test packages for a particular application. The -f ");
+        System.err.println(" option lists the .apk file for the test package.)");
         System.err.println("");
         System.err.println("The list features command prints all features of the system.");
         System.err.println("");

@@ -45,7 +45,7 @@ public interface TelephonyProperties
      *  CDMA networks.
      */
     static final String PROPERTY_OPERATOR_ALPHA = "gsm.operator.alpha";
-    //TODO: most of these proprieties are generic, substitute gsm. with phone. bug 1856959
+    //TODO: most of these properties are generic, substitute gsm. with phone. bug 1856959
 
     /** Numeric name (MCC+MNC) of current registered operator.<p>
      *  Availability: when registered to a network. Result may be unreliable on
@@ -83,12 +83,12 @@ public interface TelephonyProperties
 
     /** The MCC+MNC (mobile country code+mobile network code) of the
      *  provider of the SIM. 5 or 6 decimal digits.
-     *  Availablity: SIM state must be "READY"
+     *  Availability: SIM state must be "READY"
      */
     static String PROPERTY_ICC_OPERATOR_NUMERIC = "gsm.sim.operator.numeric";
 
     /** PROPERTY_ICC_OPERATOR_ALPHA is also known as the SPN, or Service Provider Name.
-     *  Availablity: SIM state must be "READY"
+     *  Availability: SIM state must be "READY"
      */
     static String PROPERTY_ICC_OPERATOR_ALPHA = "gsm.sim.operator.alpha";
 
@@ -127,9 +127,14 @@ public interface TelephonyProperties
         "ro.telephony.call_ring.multiple";
 
     /**
-     * The number of milli-seconds between CALL_RING notifications.
+     * The number of milliseconds between CALL_RING notifications.
      */
     static final String PROPERTY_CALL_RING_DELAY = "ro.telephony.call_ring.delay";
+
+    /**
+     * The switch of APN dependency. default is false.
+     */
+    static final String PROPERTY_APN_DEPENDENCY_ON = "ro.telephony.apn_dependency_on";
 
     /**
      * Track CDMA SMS message id numbers to ensure they increment
@@ -147,4 +152,16 @@ public interface TelephonyProperties
      * when there is a radio technology change.
      */
     static final String PROPERTY_RESET_ON_RADIO_TECH_CHANGE = "persist.radio.reset_on_switch";
+
+    /**
+     * Set to false to disable SMS receiving, default is
+     * the value of config_sms_capable
+     */
+    static final String PROPERTY_SMS_RECEIVE = "telephony.sms.receive";
+
+    /**
+     * Set to false to disable SMS sending, default is
+     * the value of config_sms_capable
+     */
+    static final String PROPERTY_SMS_SEND = "telephony.sms.send";
 }

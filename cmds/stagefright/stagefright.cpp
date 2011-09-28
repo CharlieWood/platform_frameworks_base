@@ -31,7 +31,7 @@
 #include <media/IMediaPlayerService.h>
 #include <media/stagefright/foundation/ALooper.h>
 #include "include/ARTSPController.h"
-#include "include/LiveSource.h"
+#include "include/LiveSession.h"
 #include "include/NuCachedSource2.h"
 #include <media/stagefright/AudioPlayer.h>
 #include <media/stagefright/DataSource.h>
@@ -49,6 +49,10 @@
 #include <media/stagefright/MPEG2TSWriter.h>
 #include <media/stagefright/MPEG4Writer.h>
 
+#include <private/media/VideoFrame.h>
+#include <SkBitmap.h>
+#include <SkImageEncoder.h>
+
 #include <fcntl.h>
 
 using namespace android;
@@ -59,6 +63,7 @@ static long gReproduceBug;  // if not -1.
 static bool gPreferSoftwareCodec;
 static bool gPlaybackAudio;
 static bool gWriteMP4;
+static bool gDisplayHistogram;
 static String8 gWriteMP4Filename;
 
 static int64_t getNowUs() {
@@ -66,6 +71,58 @@ static int64_t getNowUs() {
     gettimeofday(&tv, NULL);
 
     return (int64_t)tv.tv_usec + tv.tv_sec * 1000000ll;
+}
+
+static int CompareIncreasing(const int64_t *a, const int64_t *b) {
+    return (*a) < (*b) ? -1 : (*a) > (*b) ? 1 : 0;
+}
+
+static void displayDecodeHistogram(Vector<int64_t> *decodeTimesUs) {
+    printf("decode times:\n");
+
+    decodeTimesUs->sort(CompareIncreasing);
+
+    size_t n = decodeTimesUs->size();
+    int64_t minUs = decodeTimesUs->itemAt(0);
+    int64_t maxUs = decodeTimesUs->itemAt(n - 1);
+
+    printf("min decode time %lld us (%.2f secs)\n", minUs, minUs / 1E6);
+    printf("max decode time %lld us (%.2f secs)\n", maxUs, maxUs / 1E6);
+
+    size_t counts[100];
+    for (size_t i = 0; i < 100; ++i) {
+        counts[i] = 0;
+    }
+
+    for (size_t i = 0; i < n; ++i) {
+        int64_t x = decodeTimesUs->itemAt(i);
+
+        size_t slot = ((x - minUs) * 100) / (maxUs - minUs);
+        if (slot == 100) { slot = 99; }
+
+        ++counts[slot];
+    }
+
+    for (size_t i = 0; i < 100; ++i) {
+        int64_t slotUs = minUs + (i * (maxUs - minUs) / 100);
+
+        double fps = 1E6 / slotUs;
+        printf("[%.2f fps]: %d\n", fps, counts[i]);
+    }
+}
+
+static void displayAVCProfileLevelIfPossible(const sp<MetaData>& meta) {
+    uint32_t type;
+    const void *data;
+    size_t size;
+    if (meta->findData(kKeyAVCC, &type, &data, &size)) {
+        const uint8_t *ptr = (const uint8_t *)data;
+        CHECK(size >= 7);
+        CHECK(ptr[0] == 1);  // configurationVersion == 1
+        uint8_t profile = ptr[1];
+        uint8_t level = ptr[3];
+        fprintf(stderr, "AVC video profile %d and level %d\n", profile, level);
+    }
 }
 
 static void playSource(OMXClient *client, sp<MediaSource> &source) {
@@ -87,6 +144,7 @@ static void playSource(OMXClient *client, sp<MediaSource> &source) {
             fprintf(stderr, "Failed to instantiate decoder for '%s'.\n", mime);
             return;
         }
+        displayAVCProfileLevelIfPossible(meta);
     }
 
     source.clear();
@@ -201,6 +259,8 @@ static void playSource(OMXClient *client, sp<MediaSource> &source) {
     int64_t sumDecodeUs = 0;
     int64_t totalBytes = 0;
 
+    Vector<int64_t> decodeTimesUs;
+
     while (numIterationsLeft-- > 0) {
         long numFrames = 0;
 
@@ -224,9 +284,17 @@ static void playSource(OMXClient *client, sp<MediaSource> &source) {
                 break;
             }
 
-            if (buffer->range_length() > 0 && (n++ % 16) == 0) {
-                printf(".");
-                fflush(stdout);
+            if (buffer->range_length() > 0) {
+                if (gDisplayHistogram && n > 0) {
+                    // Ignore the first time since it includes some setup
+                    // cost.
+                    decodeTimesUs.push(delayDecodeUs);
+                }
+
+                if ((n++ % 16) == 0) {
+                    printf(".");
+                    fflush(stdout);
+                }
             }
 
             sumDecodeUs += delayDecodeUs;
@@ -266,6 +334,10 @@ static void playSource(OMXClient *client, sp<MediaSource> &source) {
                (double)sumDecodeUs / n);
 
         printf("decoded a total of %d frame(s).\n", n);
+
+        if (gDisplayHistogram) {
+            displayDecodeHistogram(&decodeTimesUs);
+        }
     } else if (!strncasecmp("audio/", mime, 6)) {
         // Frame count makes less sense for audio, as the output buffer
         // sizes may be different across decoders.
@@ -466,6 +538,8 @@ static void usage(const char *me) {
     fprintf(stderr, "       -o playback audio\n");
     fprintf(stderr, "       -w(rite) filename (write to .mp4 file)\n");
     fprintf(stderr, "       -k seek test\n");
+    fprintf(stderr, "       -x display a histogram of decoding times/fps "
+                    "(video only)\n");
 }
 
 int main(int argc, char **argv) {
@@ -482,12 +556,14 @@ int main(int argc, char **argv) {
     gPreferSoftwareCodec = false;
     gPlaybackAudio = false;
     gWriteMP4 = false;
+    gDisplayHistogram = false;
 
     sp<ALooper> looper;
     sp<ARTSPController> rtspController;
+    sp<LiveSession> liveSession;
 
     int res;
-    while ((res = getopt(argc, argv, "han:lm:b:ptsow:k")) >= 0) {
+    while ((res = getopt(argc, argv, "han:lm:b:ptsow:kx")) >= 0) {
         switch (res) {
             case 'a':
             {
@@ -560,6 +636,12 @@ int main(int argc, char **argv) {
                 break;
             }
 
+            case 'x':
+            {
+                gDisplayHistogram = true;
+                break;
+            }
+
             case '?':
             case 'h':
             default:
@@ -602,6 +684,19 @@ int main(int argc, char **argv) {
 
             if (mem != NULL) {
                 printf("getFrameAtTime(%s) => OK\n", filename);
+
+                VideoFrame *frame = (VideoFrame *)mem->pointer();
+
+                SkBitmap bitmap;
+                bitmap.setConfig(
+                        SkBitmap::kRGB_565_Config, frame->mWidth, frame->mHeight);
+
+                bitmap.setPixels((uint8_t *)frame + sizeof(VideoFrame));
+
+                CHECK(SkImageEncoder::EncodeFile(
+                            "/sdcard/out.jpg", bitmap,
+                            SkImageEncoder::kJPEG_Type,
+                            SkImageEncoder::kDefaultQuality));
             } else {
                 mem = retriever->extractAlbumArt();
 
@@ -754,8 +849,15 @@ int main(int argc, char **argv) {
                 String8 uri("http://");
                 uri.append(filename + 11);
 
-                dataSource = new LiveSource(uri.string());
-                dataSource = new NuCachedSource2(dataSource);
+                if (looper == NULL) {
+                    looper = new ALooper;
+                    looper->start();
+                }
+                liveSession = new LiveSession;
+                looper->registerHandler(liveSession);
+
+                liveSession->connect(uri.string());
+                dataSource = liveSession->getDataSource();
 
                 extractor =
                     MediaExtractor::Create(

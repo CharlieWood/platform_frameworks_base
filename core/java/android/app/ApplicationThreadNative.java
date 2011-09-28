@@ -97,6 +97,15 @@ public abstract class ApplicationThreadNative extends Binder
             return true;
         }
 
+        case SCHEDULE_SLEEPING_TRANSACTION:
+        {
+            data.enforceInterface(IApplicationThread.descriptor);
+            IBinder b = data.readStrongBinder();
+            boolean sleeping = data.readInt() != 0;
+            scheduleSleeping(b, sleeping);
+            return true;
+        }
+
         case SCHEDULE_RESUME_ACTIVITY_TRANSACTION:
         {
             data.enforceInterface(IApplicationThread.descriptor);
@@ -276,7 +285,7 @@ public abstract class ApplicationThreadNative extends Binder
             requestThumbnail(b);
             return true;
         }
-        
+
         case SCHEDULE_CONFIGURATION_CHANGED_TRANSACTION:
         {
             data.enforceInterface(IApplicationThread.descriptor);
@@ -291,12 +300,27 @@ public abstract class ApplicationThreadNative extends Binder
             return true;
         }
 
+        case CLEAR_DNS_CACHE_TRANSACTION: {
+            data.enforceInterface(IApplicationThread.descriptor);
+            clearDnsCache();
+            return true;
+        }
+
+        case SET_HTTP_PROXY_TRANSACTION: {
+            data.enforceInterface(IApplicationThread.descriptor);
+            final String proxy = data.readString();
+            final String port = data.readString();
+            final String exclList = data.readString();
+            setHttpProxy(proxy, port, exclList);
+            return true;
+        }
+
         case PROCESS_IN_BACKGROUND_TRANSACTION: {
             data.enforceInterface(IApplicationThread.descriptor);
             processInBackground();
             return true;
         }
-        
+
         case DUMP_SERVICE_TRANSACTION: {
             data.enforceInterface(IApplicationThread.descriptor);
             ParcelFileDescriptor fd = data.readFileDescriptor();
@@ -403,6 +427,33 @@ public abstract class ApplicationThreadNative extends Binder
             scheduleCrash(msg);
             return true;
         }
+
+        case DUMP_HEAP_TRANSACTION:
+        {
+            data.enforceInterface(IApplicationThread.descriptor);
+            boolean managed = data.readInt() != 0;
+            String path = data.readString();
+            ParcelFileDescriptor fd = data.readInt() != 0
+                    ? data.readFileDescriptor() : null;
+            dumpHeap(managed, path, fd);
+            return true;
+        }
+
+        case DUMP_ACTIVITY_TRANSACTION: {
+            data.enforceInterface(IApplicationThread.descriptor);
+            ParcelFileDescriptor fd = data.readFileDescriptor();
+            final IBinder activity = data.readStrongBinder();
+            final String prefix = data.readString();
+            final String[] args = data.readStringArray();
+            if (fd != null) {
+                dumpActivity(fd.getFileDescriptor(), activity, prefix, args);
+                try {
+                    fd.close();
+                } catch (IOException e) {
+                }
+            }
+            return true;
+        }
         }
 
         return super.onTransact(code, data, reply, flags);
@@ -457,6 +508,17 @@ class ApplicationThreadProxy implements IApplicationThread {
         data.writeStrongBinder(token);
         data.writeInt(showWindow ? 1 : 0);
         mRemote.transact(SCHEDULE_WINDOW_VISIBILITY_TRANSACTION, data, null,
+                IBinder.FLAG_ONEWAY);
+        data.recycle();
+    }
+
+    public final void scheduleSleeping(IBinder token,
+            boolean sleeping) throws RemoteException {
+        Parcel data = Parcel.obtain();
+        data.writeInterfaceToken(IApplicationThread.descriptor);
+        data.writeStrongBinder(token);
+        data.writeInt(sleeping ? 1 : 0);
+        mRemote.transact(SCHEDULE_SLEEPING_TRANSACTION, data, null,
                 IBinder.FLAG_ONEWAY);
         data.recycle();
     }
@@ -718,6 +780,24 @@ class ApplicationThreadProxy implements IApplicationThread {
         data.recycle();
     }
 
+    public void clearDnsCache() throws RemoteException {
+        Parcel data = Parcel.obtain();
+        data.writeInterfaceToken(IApplicationThread.descriptor);
+        mRemote.transact(CLEAR_DNS_CACHE_TRANSACTION, data, null,
+                IBinder.FLAG_ONEWAY);
+        data.recycle();
+    }
+
+    public void setHttpProxy(String proxy, String port, String exclList) throws RemoteException {
+        Parcel data = Parcel.obtain();
+        data.writeInterfaceToken(IApplicationThread.descriptor);
+        data.writeString(proxy);
+        data.writeString(port);
+        data.writeString(exclList);
+        mRemote.transact(SET_HTTP_PROXY_TRANSACTION, data, null, IBinder.FLAG_ONEWAY);
+        data.recycle();
+    }
+
     public void processInBackground() throws RemoteException {
         Parcel data = Parcel.obtain();
         data.writeInterfaceToken(IApplicationThread.descriptor);
@@ -829,5 +909,33 @@ class ApplicationThreadProxy implements IApplicationThread {
         data.recycle();
         
     }
-}
 
+    public void dumpHeap(boolean managed, String path,
+            ParcelFileDescriptor fd) throws RemoteException {
+        Parcel data = Parcel.obtain();
+        data.writeInterfaceToken(IApplicationThread.descriptor);
+        data.writeInt(managed ? 1 : 0);
+        data.writeString(path);
+        if (fd != null) {
+            data.writeInt(1);
+            fd.writeToParcel(data, Parcelable.PARCELABLE_WRITE_RETURN_VALUE);
+        } else {
+            data.writeInt(0);
+        }
+        mRemote.transact(DUMP_HEAP_TRANSACTION, data, null,
+                IBinder.FLAG_ONEWAY);
+        data.recycle();
+    }
+
+    public void dumpActivity(FileDescriptor fd, IBinder token, String prefix, String[] args)
+            throws RemoteException {
+        Parcel data = Parcel.obtain();
+        data.writeInterfaceToken(IApplicationThread.descriptor);
+        data.writeFileDescriptor(fd);
+        data.writeStrongBinder(token);
+        data.writeString(prefix);
+        data.writeStringArray(args);
+        mRemote.transact(DUMP_ACTIVITY_TRANSACTION, data, null, 0);
+        data.recycle();
+    }
+}

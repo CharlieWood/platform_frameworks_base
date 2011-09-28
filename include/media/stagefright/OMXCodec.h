@@ -18,6 +18,7 @@
 
 #define OMX_CODEC_H_
 
+#include <android/native_window.h>
 #include <media/IOMX.h>
 #include <media/stagefright/MediaBuffer.h>
 #include <media/stagefright/MediaSource.h>
@@ -38,13 +39,25 @@ struct OMXCodec : public MediaSource,
         // The client wants to access the output buffer's video
         // data for example for thumbnail extraction.
         kClientNeedsFramebuffer  = 4,
+
+        // Request for software or hardware codecs. If request
+        // can not be fullfilled, Create() returns NULL.
+        kSoftwareCodecsOnly      = 8,
+        kHardwareCodecsOnly      = 16,
+
+        // Store meta data in video buffers
+        kStoreMetaDataInVideoBuffers = 32,
+
+        // Only submit one input buffer at one time.
+        kOnlySubmitOneInputBufferAtOneTime = 64,
     };
     static sp<MediaSource> Create(
             const sp<IOMX> &omx,
             const sp<MetaData> &meta, bool createEncoder,
             const sp<MediaSource> &source,
             const char *matchComponentName = NULL,
-            uint32_t flags = 0);
+            uint32_t flags = 0,
+            const sp<ANativeWindow> &nativeWindow = NULL);
 
     static void setComponentRole(
             const sp<IOMX> &omx, IOMX::node_id node, bool isEncoder,
@@ -114,12 +127,18 @@ private:
         kAvoidMemcopyInputRecordingFrames     = 2048,
         kRequiresLargerEncoderOutputBuffer    = 4096,
         kOutputBuffersAreUnreadable           = 8192,
-        kStoreMetaDataInInputVideoBuffers     = 16384,
+    };
+
+    enum BufferStatus {
+        OWNED_BY_US,
+        OWNED_BY_COMPONENT,
+        OWNED_BY_NATIVE_WINDOW,
+        OWNED_BY_CLIENT,
     };
 
     struct BufferInfo {
         IOMX::buffer_id mBuffer;
-        bool mOwnedByComponent;
+        BufferStatus mStatus;
         sp<IMemory> mMem;
         size_t mSize;
         void *mData;
@@ -156,7 +175,7 @@ private:
     int64_t mSeekTimeUs;
     ReadOptions::SeekMode mSeekMode;
     int64_t mTargetTimeUs;
-    int64_t mSkipTimeUs;
+    bool mOutputPortSettingsChangedPending;
 
     MediaBuffer *mLeftOverBuffer;
 
@@ -165,13 +184,24 @@ private:
 
     bool mPaused;
 
+    sp<ANativeWindow> mNativeWindow;
+
+    // The index in each of the mPortBuffers arrays of the buffer that will be
+    // submitted to OMX next.  This only applies when using buffers from a
+    // native window.
+    size_t mNextNativeBufferIndex[2];
+
     // A list of indices into mPortStatus[kPortIndexOutput] filled with data.
     List<size_t> mFilledBuffers;
     Condition mBufferFilled;
 
+    bool mIsMetaDataStoredInVideoBuffers;
+    bool mOnlySubmitOneBufferAtOneTime;
+
     OMXCodec(const sp<IOMX> &omx, IOMX::node_id node, uint32_t quirks,
              bool isEncoder, const char *mime, const char *componentName,
-             const sp<MediaSource> &source);
+             const sp<MediaSource> &source,
+             const sp<ANativeWindow> &nativeWindow);
 
     void addCodecSpecificData(const void *data, size_t size);
     void clearCodecSpecificData();
@@ -222,13 +252,20 @@ private:
 
     status_t allocateBuffers();
     status_t allocateBuffersOnPort(OMX_U32 portIndex);
+    status_t allocateOutputBuffersFromNativeWindow();
+
+    status_t queueBufferToNativeWindow(BufferInfo *info);
+    status_t cancelBufferToNativeWindow(BufferInfo *info);
+    BufferInfo* dequeueBufferFromNativeWindow();
 
     status_t freeBuffersOnPort(
             OMX_U32 portIndex, bool onlyThoseWeOwn = false);
 
-    void drainInputBuffer(IOMX::buffer_id buffer);
+    status_t freeBuffer(OMX_U32 portIndex, size_t bufIndex);
+
+    bool drainInputBuffer(IOMX::buffer_id buffer);
     void fillOutputBuffer(IOMX::buffer_id buffer);
-    void drainInputBuffer(BufferInfo *info);
+    bool drainInputBuffer(BufferInfo *info);
     void fillOutputBuffer(BufferInfo *info);
 
     void drainInputBuffers();
@@ -256,6 +293,7 @@ private:
 
     status_t init();
     void initOutputFormat(const sp<MetaData> &inputFormat);
+    status_t initNativeWindow();
 
     void dumpPortStatus(OMX_U32 portIndex);
 
@@ -270,6 +308,10 @@ private:
             uint32_t flags,
             Vector<String8> *matchingCodecs);
 
+    void restorePatchedDataPointer(BufferInfo *info);
+
+    status_t applyRotation();
+
     OMXCodec(const OMXCodec &);
     OMXCodec &operator=(const OMXCodec &);
 };
@@ -282,6 +324,7 @@ struct CodecProfileLevel {
 struct CodecCapabilities {
     String8 mComponentName;
     Vector<CodecProfileLevel> mProfileLevels;
+    Vector<OMX_U32> mColorFormats;
 };
 
 // Return a vector of componentNames with supported profile/level pairs

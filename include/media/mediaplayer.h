@@ -28,6 +28,7 @@
 namespace android {
 
 class Surface;
+class ISurfaceTexture;
 
 enum media_event_type {
     MEDIA_NOP               = 0, // interface test message
@@ -146,6 +147,8 @@ public:
 
             status_t        setDataSource(int fd, int64_t offset, int64_t length);
             status_t        setVideoSurface(const sp<Surface>& surface);
+            status_t        setVideoSurfaceTexture(
+                                    const sp<ISurfaceTexture>& surfaceTexture);
             status_t        setListener(const sp<MediaPlayerListener>& listener);
             status_t        prepare();
             status_t        prepareAsync();
@@ -169,8 +172,6 @@ public:
             status_t        invoke(const Parcel& request, Parcel *reply);
             status_t        setMetadataFilter(const Parcel& filter);
             status_t        getMetadata(bool update_only, bool apply_filter, Parcel *metadata);
-            status_t        suspend();
-            status_t        resume();
             status_t        setAudioSessionId(int sessionId);
             int             getAudioSessionId();
             status_t        setAuxEffectSendLevel(float level);

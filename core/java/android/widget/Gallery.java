@@ -814,7 +814,7 @@ public class Gallery extends AbsSpinner implements GestureDetector.OnGestureList
      * @return Where the top of the child should be
      */
     private int calculateTop(View child, boolean duringLayout) {
-        int myHeight = duringLayout ? mMeasuredHeight : getHeight();
+        int myHeight = duringLayout ? getMeasuredHeight() : getHeight();
         int childHeight = duringLayout ? child.getMeasuredHeight() : child.getHeight(); 
         
         int childTop = 0;
@@ -1210,7 +1210,7 @@ public class Gallery extends AbsSpinner implements GestureDetector.OnGestureList
 
         // We unfocus the old child down here so the above hasFocus check
         // returns true
-        if (oldSelectedChild != null) {
+        if (oldSelectedChild != null && oldSelectedChild != child) {
 
             // Make sure its drawable state doesn't contain 'selected'
             oldSelectedChild.setSelected(false);
@@ -1266,6 +1266,7 @@ public class Gallery extends AbsSpinner implements GestureDetector.OnGestureList
          */
         if (gainFocus && mSelectedChild != null) {
             mSelectedChild.requestFocus(direction);
+            mSelectedChild.setSelected(true);
         }
 
     }

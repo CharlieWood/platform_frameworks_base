@@ -25,11 +25,6 @@ import com.android.mediaframeworktest.MediaNames;
 import com.android.mediaframeworktest.MediaProfileReader;
 import android.test.suitebuilder.annotation.*;
 
-/**
- * WARNING:
- * Currently, captureFrame() does not work, due to hardware access permission problem.
- * We are currently only testing the metadata/album art retrieval features.
- */
 public class MediaMetadataRetrieverTest extends AndroidTestCase {
     
     private static final String TAG         = "MediaMetadataRetrieverTest";
@@ -100,6 +95,7 @@ public class MediaMetadataRetrieverTest extends AndroidTestCase {
                 } catch (Exception e) {
                     Log.e(TAG, "Fails to convert the bitmap to a JPEG file for " + MediaNames.THUMBNAIL_CAPTURE_TEST_FILES[i]);
                     hasFailed = true;
+                    Log.e(TAG, e.toString());
                 }
             } catch(Exception e) {
                 Log.e(TAG, "Fails to setDataSource for file " + MediaNames.THUMBNAIL_CAPTURE_TEST_FILES[i]);
@@ -243,9 +239,6 @@ public class MediaMetadataRetrieverTest extends AndroidTestCase {
         assertTrue(!hasFailed);
     }
 
-    // Due to the lack of permission to access hardware decoder, any calls
-    // attempting to capture a frame will fail. These are commented out for now
-    // until we find a solution to this access permission problem.
     @MediumTest
     public static void testIntendedUsage() {
         // By default, capture frame and retrieve metadata

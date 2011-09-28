@@ -18,7 +18,8 @@ package android.media;
 
 
 /* IF YOU CHANGE ANY OF THE CONSTANTS IN THIS FILE, DO NOT FORGET
- * TO UPDATE THE CORRESPONDING NATIVE GLUE.  THANK YOU FOR YOUR COOPERATION
+ * TO UPDATE THE CORRESPONDING NATIVE GLUE AND AudioManager.java.
+ * THANK YOU FOR YOUR COOPERATION.
  */
 
 /**
@@ -29,7 +30,7 @@ public class AudioSystem
     /* FIXME: Need to finalize this and correlate with native layer */
     /*
      * If these are modified, please also update Settings.System.VOLUME_SETTINGS
-     * and attrs.xml
+     * and attrs.xml and AudioManager.java.
      */
     /* The audio stream for phone calls */
     public static final int STREAM_VOICE_CALL = 0;
@@ -158,7 +159,7 @@ public class AudioSystem
      *
      * return true if any track playing on this stream is active.
      */
-    public static native boolean isStreamActive(int stream);
+    public static native boolean isStreamActive(int stream, int inPastMs);
 
     /*
      * Sets a group generic audio configuration parameters. The use of these parameters
@@ -218,13 +219,26 @@ public class AudioSystem
      */
     public static void setErrorCallback(ErrorCallback cb)
     {
-        mErrorCallback = cb;
+        synchronized (AudioSystem.class) {
+            mErrorCallback = cb;
+        }
+        // Calling a method on AudioFlinger here makes sure that we bind to IAudioFlinger
+        // binder interface death. Not doing that would result in not being notified of
+        // media_server process death if no other method is called on AudioSystem that reaches
+        // to AudioFlinger.
+        isMicrophoneMuted();
     }
 
     private static void errorCallbackFromNative(int error)
     {
-        if (mErrorCallback != null) {
-            mErrorCallback.onError(error);
+        ErrorCallback errorCallback = null;
+        synchronized (AudioSystem.class) {
+            if (mErrorCallback != null) {
+                errorCallback = mErrorCallback;
+            }
+        }
+        if (errorCallback != null) {
+            errorCallback.onError(error);
         }
     }
 
@@ -232,7 +246,7 @@ public class AudioSystem
      * AudioPolicyService methods
      */
 
-    // output devices
+    // output devices, be sure to update AudioManager.java also
     public static final int DEVICE_OUT_EARPIECE = 0x1;
     public static final int DEVICE_OUT_SPEAKER = 0x2;
     public static final int DEVICE_OUT_WIRED_HEADSET = 0x4;
@@ -244,6 +258,8 @@ public class AudioSystem
     public static final int DEVICE_OUT_BLUETOOTH_A2DP_HEADPHONES = 0x100;
     public static final int DEVICE_OUT_BLUETOOTH_A2DP_SPEAKER = 0x200;
     public static final int DEVICE_OUT_AUX_DIGITAL = 0x400;
+    public static final int DEVICE_OUT_ANLG_DOCK_HEADSET = 0x800;
+    public static final int DEVICE_OUT_DGTL_DOCK_HEADSET = 0x1000;
     public static final int DEVICE_OUT_DEFAULT = 0x8000;
     // input devices
     public static final int DEVICE_IN_COMMUNICATION = 0x10000;
@@ -274,6 +290,8 @@ public class AudioSystem
     public static final int FORCE_WIRED_ACCESSORY = 5;
     public static final int FORCE_BT_CAR_DOCK = 6;
     public static final int FORCE_BT_DESK_DOCK = 7;
+    public static final int FORCE_ANALOG_DOCK = 8;
+    public static final int FORCE_DIGITAL_DOCK = 9;
     public static final int FORCE_DEFAULT = FORCE_NONE;
 
     // usage for serForceUse
@@ -291,4 +309,5 @@ public class AudioSystem
     public static native int initStreamVolume(int stream, int indexMin, int indexMax);
     public static native int setStreamVolumeIndex(int stream, int index);
     public static native int getStreamVolumeIndex(int stream);
+    public static native int getDevicesForStream(int stream);
 }

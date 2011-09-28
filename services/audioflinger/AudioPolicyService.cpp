@@ -68,6 +68,8 @@ AudioPolicyService::AudioPolicyService()
 {
     char value[PROPERTY_VALUE_MAX];
 
+    Mutex::Autolock _l(mLock);
+
     // start tone playback thread
     mTonePlaybackThread = new AudioCommandThread(String8(""));
     // start audio commands thread
@@ -88,9 +90,18 @@ AudioPolicyService::AudioPolicyService()
     }
 #endif
 
-    // load properties
-    property_get("ro.camera.sound.forced", value, "0");
-    mpPolicyManager->setSystemProperty("ro.camera.sound.forced", value);
+    if ((mpPolicyManager != NULL) && (mpPolicyManager->initCheck() != NO_ERROR)) {
+        delete mpPolicyManager;
+        mpPolicyManager = NULL;
+    }
+
+    if (mpPolicyManager == NULL) {
+        LOGE("Could not create AudioPolicyManager");
+    } else {
+        // load properties
+        property_get("ro.camera.sound.forced", value, "0");
+        mpPolicyManager->setSystemProperty("ro.camera.sound.forced", value);
+    }
 }
 
 AudioPolicyService::~AudioPolicyService()
@@ -354,6 +365,14 @@ uint32_t AudioPolicyService::getStrategyForStream(AudioSystem::stream_type strea
     return mpPolicyManager->getStrategyForStream(stream);
 }
 
+uint32_t AudioPolicyService::getDevicesForStream(AudioSystem::stream_type stream)
+{
+    if (mpPolicyManager == NULL) {
+        return 0;
+    }
+    return mpPolicyManager->getDevicesForStream(stream);
+}
+
 audio_io_handle_t AudioPolicyService::getOutputForEffect(effect_descriptor_t *desc)
 {
     if (mpPolicyManager == NULL) {
@@ -381,6 +400,15 @@ status_t AudioPolicyService::unregisterEffect(int id)
         return NO_INIT;
     }
     return mpPolicyManager->unregisterEffect(id);
+}
+
+bool AudioPolicyService::isStreamActive(int stream, uint32_t inPastMs) const
+{
+    if (mpPolicyManager == NULL) {
+        return 0;
+    }
+    Mutex::Autolock _l(mLock);
+    return mpPolicyManager->isStreamActive(stream, inPastMs);
 }
 
 void AudioPolicyService::binderDied(const wp<IBinder>& who) {
@@ -464,13 +492,6 @@ status_t AudioPolicyService::onTransact(
         uint32_t code, const Parcel& data, Parcel* reply, uint32_t flags)
 {
     return BnAudioPolicyService::onTransact(code, data, reply, flags);
-}
-
-
-// ----------------------------------------------------------------------------
-void AudioPolicyService::instantiate() {
-    defaultServiceManager()->addService(
-            String16("media.audio_policy"), new AudioPolicyService());
 }
 
 

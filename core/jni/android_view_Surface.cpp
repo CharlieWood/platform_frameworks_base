@@ -19,7 +19,9 @@
 #include <stdio.h>
 
 #include "android_util_Binder.h"
+#include "android/graphics/GraphicsJNI.h"
 
+#include <binder/IMemory.h>
 #include <surfaceflinger/SurfaceComposerClient.h>
 #include <surfaceflinger/Surface.h>
 #include <ui/Region.h>
@@ -30,6 +32,7 @@
 #include <SkCanvas.h>
 #include <SkBitmap.h>
 #include <SkRegion.h>
+#include <SkPixelRef.h>
 
 #include "jni.h"
 #include <android_runtime/AndroidRuntime.h>
@@ -58,6 +61,7 @@ static sso_t sso;
 
 struct so_t {
     jfieldID surfaceControl;
+    jfieldID surfaceGenerationId;
     jfieldID surface;
     jfieldID saveCount;
     jfieldID canvas;
@@ -90,15 +94,6 @@ struct no_t {
 };
 static no_t no;
 
-
-static __attribute__((noinline))
-void doThrow(JNIEnv* env, const char* exc, const char* msg = NULL)
-{
-    if (!env->ExceptionOccurred()) {
-        jclass npeClazz = env->FindClass(exc);
-        env->ThrowNew(npeClazz, msg);
-    }
-}
 
 // ----------------------------------------------------------------------------
 // ----------------------------------------------------------------------------
@@ -195,6 +190,12 @@ static void setSurface(JNIEnv* env, jobject clazz, const sp<Surface>& surface)
         p->decStrong(clazz);
     }
     env->SetIntField(clazz, so.surface, (int)surface.get());
+    // This test is conservative and it would be better to compare the ISurfaces
+    if (p && p != surface.get()) {
+        jint generationId = env->GetIntField(clazz, so.surfaceGenerationId);
+        generationId++;
+        env->SetIntField(clazz, so.surfaceGenerationId, generationId);
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -295,8 +296,10 @@ static inline SkBitmap::Config convertPixelFormat(PixelFormat format)
 static jobject Surface_lockCanvas(JNIEnv* env, jobject clazz, jobject dirtyRect)
 {
     const sp<Surface>& surface(getSurface(env, clazz));
-    if (!Surface::isValid(surface))
+    if (!Surface::isValid(surface)) {
+        doThrow(env, "java/lang/IllegalArgumentException", NULL);
         return 0;
+    }
 
     // get dirty region
     Region dirtyRegion;
@@ -442,6 +445,107 @@ static void Surface_unfreezeDisplay(
     if (err < 0) {
         doThrow(env, "java/lang/IllegalArgumentException", NULL);
     }
+}
+
+class ScreenshotPixelRef : public SkPixelRef {
+public:
+    ScreenshotPixelRef(SkColorTable* ctable) {
+        fCTable = ctable;
+        SkSafeRef(ctable);
+        setImmutable();
+    }
+    virtual ~ScreenshotPixelRef() {
+        SkSafeUnref(fCTable);
+    }
+
+    status_t update(int width, int height, int minLayer, int maxLayer, bool allLayers) {
+        status_t res = (width > 0 && height > 0)
+                ? (allLayers
+                        ? mScreenshot.update(width, height)
+                        : mScreenshot.update(width, height, minLayer, maxLayer))
+                : mScreenshot.update();
+        if (res != NO_ERROR) {
+            return res;
+        }
+
+        return NO_ERROR;
+    }
+
+    uint32_t getWidth() const {
+        return mScreenshot.getWidth();
+    }
+
+    uint32_t getHeight() const {
+        return mScreenshot.getHeight();
+    }
+
+    uint32_t getStride() const {
+        return mScreenshot.getStride();
+    }
+
+    uint32_t getFormat() const {
+        return mScreenshot.getFormat();
+    }
+
+protected:
+    // overrides from SkPixelRef
+    virtual void* onLockPixels(SkColorTable** ct) {
+        *ct = fCTable;
+        return (void*)mScreenshot.getPixels();
+    }
+
+    virtual void onUnlockPixels() {
+    }
+
+private:
+    ScreenshotClient mScreenshot;
+    SkColorTable*    fCTable;
+
+    typedef SkPixelRef INHERITED;
+};
+
+static jobject doScreenshot(JNIEnv* env, jobject clazz, jint width, jint height,
+        jint minLayer, jint maxLayer, bool allLayers)
+{
+    ScreenshotPixelRef* pixels = new ScreenshotPixelRef(NULL);
+    if (pixels->update(width, height, minLayer, maxLayer, allLayers) != NO_ERROR) {
+        delete pixels;
+        return 0;
+    }
+
+    uint32_t w = pixels->getWidth();
+    uint32_t h = pixels->getHeight();
+    uint32_t s = pixels->getStride();
+    uint32_t f = pixels->getFormat();
+    ssize_t bpr = s * android::bytesPerPixel(f);
+
+    SkBitmap* bitmap = new SkBitmap();
+    bitmap->setConfig(convertPixelFormat(f), w, h, bpr);
+    if (f == PIXEL_FORMAT_RGBX_8888) {
+        bitmap->setIsOpaque(true);
+    }
+
+    if (w > 0 && h > 0) {
+        bitmap->setPixelRef(pixels)->unref();
+        bitmap->lockPixels();
+    } else {
+        // be safe with an empty bitmap.
+        delete pixels;
+        bitmap->setPixels(NULL);
+    }
+
+    return GraphicsJNI::createBitmap(env, bitmap, false, NULL);
+}
+
+static jobject Surface_screenshotAll(JNIEnv* env, jobject clazz, jint width, jint height)
+{
+    return doScreenshot(env, clazz, width, height, 0, 0, true);
+}
+
+static jobject Surface_screenshot(JNIEnv* env, jobject clazz, jint width, jint height,
+        jint minLayer, jint maxLayer, bool allLayers)
+{
+    return doScreenshot(env, clazz, width, height, minLayer, maxLayer, false);
 }
 
 static void Surface_setLayer(
@@ -669,6 +773,8 @@ static JNINativeMethod gSurfaceMethods[] = {
     {"setOrientation",      "(III)V", (void*)Surface_setOrientation },
     {"freezeDisplay",       "(I)V", (void*)Surface_freezeDisplay },
     {"unfreezeDisplay",     "(I)V", (void*)Surface_unfreezeDisplay },
+    {"screenshot",          "(II)Landroid/graphics/Bitmap;", (void*)Surface_screenshotAll },
+    {"screenshot",          "(IIII)Landroid/graphics/Bitmap;", (void*)Surface_screenshot },
     {"setLayer",            "(I)V", (void*)Surface_setLayer },
     {"setPosition",         "(II)V",(void*)Surface_setPosition },
     {"setSize",             "(II)V",(void*)Surface_setSize },
@@ -688,6 +794,7 @@ static JNINativeMethod gSurfaceMethods[] = {
 void nativeClassInit(JNIEnv* env, jclass clazz)
 {
     so.surface = env->GetFieldID(clazz, ANDROID_VIEW_SURFACE_JNI_ID, "I");
+    so.surfaceGenerationId = env->GetFieldID(clazz, "mSurfaceGenerationId", "I");
     so.surfaceControl = env->GetFieldID(clazz, "mSurfaceControl", "I");
     so.saveCount = env->GetFieldID(clazz, "mSaveCount", "I");
     so.canvas    = env->GetFieldID(clazz, "mCanvas", "Landroid/graphics/Canvas;");

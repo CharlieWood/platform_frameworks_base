@@ -153,6 +153,28 @@ public class ParcelFileDescriptor implements Parcelable {
     private static native int createPipeNative(FileDescriptor[] outFds);
 
     /**
+     * @hide Please use createPipe() or ContentProvider.openPipeHelper().
+     * Gets a file descriptor for a read-only copy of the given data.
+     *
+     * @param data Data to copy.
+     * @param name Name for the shared memory area that may back the file descriptor.
+     *        This is purely informative and may be {@code null}.
+     * @return A ParcelFileDescriptor.
+     * @throws IOException if there is an error while creating the shared memory area.
+     */
+    @Deprecated
+    public static ParcelFileDescriptor fromData(byte[] data, String name) throws IOException {
+        if (data == null) return null;
+        MemoryFile file = new MemoryFile(name, data.length);
+        if (data.length > 0) {
+            file.writeBytes(data, 0, 0, data.length);
+        }
+        file.deactivate();
+        FileDescriptor fd = file.getFileDescriptor();
+        return fd != null ? new ParcelFileDescriptor(fd) : null;
+    }
+
+    /**
      * Retrieve the actual FileDescriptor associated with this object.
      * 
      * @return Returns the FileDescriptor associated with this object.
@@ -210,7 +232,11 @@ public class ParcelFileDescriptor implements Parcelable {
 
         @Override
         public void close() throws IOException {
-            mFd.close();
+            try {
+                mFd.close();
+            } finally {
+                super.close();
+            }
         }
     }
     
@@ -229,7 +255,11 @@ public class ParcelFileDescriptor implements Parcelable {
 
         @Override
         public void close() throws IOException {
-            mFd.close();
+            try {
+                mFd.close();
+            } finally {
+                super.close();
+            }
         }
     }
     

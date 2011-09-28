@@ -20,9 +20,7 @@
 <!-- These resources are around just to allow their values to be customized
      for different hardware and product builds. -->
 <resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
-    <!-- Component to be used as the status bar service.  Must implement the IStatusBar
-         interface.  This name is in the ComponentName flattened format (package/class)  -->
-    <string name="config_statusBarComponent">com.android.systemui/com.android.systemui.statusbar.StatusBarService</string>
+    <bool name="config_statusBarCanHide">true</bool>
 
     <!-- Do not translate. Defines the slots for the right-hand side icons.  That is to say, the
          icons in the status bar that are not notifications. -->
@@ -53,6 +51,11 @@
          manager will disable alpha trasformation in animations where not
          strictly needed. -->
     <bool name="config_sf_limitedAlpha">false</bool>
+
+    <!-- Default value used to block data calls if ims is not
+         connected.  If you use the ims apn DCT will block
+         any other apn from connecting until ims apn is connected-->
+    <bool name="ImsConnectedDefaultValue">false</bool>
     
     <!-- Flag indicating whether the surface flinger is inefficient
          at performing a blur.  Used by parts of the UI to turn off
@@ -60,18 +63,48 @@
     <bool name="config_sf_slowBlur">false</bool>
     
     <!-- The duration (in milliseconds) of a short animation. -->
-    <integer name="config_shortAnimTime">150</integer>
+    <integer name="config_shortAnimTime">200</integer>
     
     <!-- The duration (in milliseconds) of a medium-length animation. -->
-    <integer name="config_mediumAnimTime">300</integer>
+    <integer name="config_mediumAnimTime">400</integer>
     
     <!-- The duration (in milliseconds) of a long animation. -->
-    <integer name="config_longAnimTime">400</integer>
+    <integer name="config_longAnimTime">500</integer>
 
+    <!-- The duration (in milliseconds) of the activity open/close and fragment open/close animations. -->
+    <integer name="config_activityShortDur">150</integer>
+    <integer name="config_activityDefaultDur">220</integer>
+    
+    <!-- Duration for the dim animation behind a dialog.  This may be either
+         a percentage, which is relative to the duration of the enter/open
+         animation of the window being shown that is dimming behind, or it may
+         be an integer for a constant duration. -->
+    <fraction name="config_dimBehindFadeDuration">100%</fraction>
+
+    <!-- The maximum width we would prefer dialogs to be.  0 if there is no
+         maximum (let them grow as large as the screen).  Actual values are
+         specified for -large and -xlarge configurations. -->
+    <dimen name="config_prefDialogWidth">0px</dimen>
+    
+    <!-- Whether dialogs should close automatically when the user touches outside
+         of them.  This should not normally be modified. -->
+    <bool name="config_closeDialogWhenTouchOutside">false</bool>
+    
     <!-- The duration (in milliseconds) that the radio will scan for a signal
          when there's no network connection. If the scan doesn't timeout, use zero -->
     <integer name="config_radioScanningTimeout">0</integer>
 
+    <!-- Set to true if the location returned Environment.getExternalStorageDirectory()
+         is actually a subdirectory of the internal storage.
+         If this is set then Environment.getExternalStorageState() will always return
+         MEDIA_MOUNTED and Intent.ACTION_MEDIA_MOUNTED will be broadcast at boot time
+         for backward compatibility with apps that require external storage. -->
+    <bool name="config_emulateExternalStorage">false</bool>
+
+    <!-- Set to true if external storage is case sensitive.
+         Typically external storage is FAT, which is case insensitive. -->
+    <bool name="config_caseSensitiveExternalStorage">false</bool>
+    
     <!-- A product with no SD card == not removable. -->
     <bool name="config_externalStorageRemovable" product="nosdcard">false</bool>
     <!-- Configures whether the primary external storage device is
@@ -80,6 +113,16 @@
          The default product has external storage on an SD card, which is
          removable. -->
     <bool name="config_externalStorageRemovable" product="default">true</bool>
+
+    <!-- Number of megabytes of space to leave unallocated by MTP.
+         MTP will subtract this value from the free space it reports back
+         to the host via GetStorageInfo, and will not allow new files to
+         be added via MTP if there is less than this amount left free in the storage.
+         If MTP has dedicated storage this value should be zero, but if MTP is
+         sharing storage with the rest of the system, set this to a positive value
+         to ensure that MTP activity does not result in the storage being
+         too close to full. -->
+    <integer name="config_mtpReserveSpaceMegabytes">0</integer>
 
     <!-- XXXXX NOTE THE FOLLOWING RESOURCES USE THE WRONG NAMING CONVENTION.
          Please don't copy them, copy anything else. -->
@@ -95,6 +138,9 @@
         <item>"mobile_mms,2,0,2"</item>
         <item>"mobile_supl,3,0,2"</item>
         <item>"mobile_hipri,5,0,3"</item>
+        <item>"mobile_fota,10,0,2"</item>
+        <item>"mobile_ims,11,0,2"</item>
+        <item>"mobile_cbs,12,0,2"</item>
     </string-array>
 
     <!-- This string array should be overridden by the device to present a list of radio
@@ -106,6 +152,9 @@
         <item>"1,1"</item>
         <item>"0,1"</item>
     </string-array>
+
+    <!-- The maximum duration (in milliseconds) we expect a network transition to take -->
+    <integer name="config_networkTransitionTimeout">60000</integer>
 
     <!-- List of regexpressions describing the interface (if any) that represent tetherable
          USB interfaces.  If the device doesn't want to support tething over USB this should
@@ -119,13 +168,22 @@
     <string-array translatable="false" name="config_tether_wifi_regexs">
     </string-array>
 
+    <!-- List of regexpressions describing the interface (if any) that represent tetherable
+         bluetooth interfaces.  If the device doesn't want to support tethering over bluetooth this
+         should be empty. -->
+    <string-array translatable="false" name="config_tether_bluetooth_regexs">
+    </string-array>
+
+    <!-- Max number of Bluetooth tethering connections allowed. If this is
+         updated config_tether_dhcp_range has to be updated appropriately. -->
+    <integer translateable="false" name="config_max_pan_devices">5</integer>
+
     <!-- Dhcp range (min, max) to use for tethering purposes -->
     <string-array translatable="false" name="config_tether_dhcp_range">
     </string-array>
 
     <!-- Regex array of allowable upstream ifaces for tethering - for example if you want
          tethering on a new interface called "foo2" add <item>"foo\\d"</item> to the array -->
-    <!-- Interfaces will be prioritized according to the order listed -->
     <string-array translatable="false" name="config_tether_upstream_regexs">
     </string-array>
 
@@ -141,6 +199,15 @@
          note that empty fields can be ommitted: "name,apn,,,,,,,,,310,260,,DUN" -->
     <string translatable="false" name="config_tether_apndata"></string>
 
+    <!-- Boolean indicating whether the wifi chipset has dual frequency band support -->
+    <bool translatable="false" name="config_wifi_dual_band_support">false</bool>
+
+    <!-- Boolean indicating whether the wifi chipset supports background scanning mechanism.
+         This mechanism allows the host to remain in suspend state and the dongle to actively
+         scan and wake the host when a configured SSID is detected by the dongle. This chipset
+         capability can provide power savings when wifi needs to be always kept on.
+         The driver commands needed to support the feature are BGSCAN-START and BGSCAN-STOP -->
+    <bool translatable="false" name="config_wifi_background_scan_support">false</bool>
 
     <!-- Flag indicating whether the keyguard should be bypassed when
          the slider is open.  This can be set or unset depending how easily
@@ -161,6 +228,18 @@
     <bool name="config_animateScreenLights">true</bool>
     
     <!-- XXXXXX END OF RESOURCES USING WRONG NAMING CONVENTION -->
+
+    <!-- If true, the screen can be rotated via the accelerometer in all 4
+         rotations as the default behavior. -->
+    <bool name="config_allowAllRotations">true</bool>
+
+    <!-- If true, the direction rotation is applied to get to an application's requested
+         orientation is reversed.  Normally, the model is that landscape is
+         clockwise from portrait; thus on a portrait device an app requesting
+         landscape will cause a clockwise rotation, and on a landscape device an
+         app requesting portrait will cause a counter-clockwise rotation.  Setting
+         true here reverses that logic. -->
+    <bool name="config_reverseDefaultRotation">false</bool>
 
     <!-- The number of degrees to rotate the display when the keyboard is open. -->
     <integer name="config_lidOpenRotation">90</integer>
@@ -207,8 +286,26 @@
          closed.  The default is 0. -->
     <integer name="config_lidNavigationAccessibility">0</integer>
 
+    <!-- Control the behavior when the user long presses the power button.
+            0 - Nothing
+            1 - Global actions menu
+            2 - Power off (with confirmation)
+    -->
+    <integer name="config_longPressOnPowerBehavior">1</integer>
+
     <!-- Indicate whether the SD card is accessible without removing the battery. -->
     <bool name="config_batterySdCardAccessibility">false</bool>
+
+    <!-- Indicate whether the device has USB host support. -->
+    <bool name="config_hasUsbHostSupport">false</bool>
+
+    <!-- List of file paths for USB host busses to exclude from USB host support.
+         For example, if the first USB bus on the device is used to communicate
+         with the modem or some other restricted hardware, add "/dev/bus/usb/001/"
+         to this list.  If this is empty, no parts of the host USB bus will be excluded.
+    -->
+    <string-array name="config_usbHostBlacklist">
+    </string-array>
 
     <!-- Vibrator pattern for feedback about a long screen/key press -->
     <integer-array name="config_longPressVibePattern">
@@ -259,6 +356,11 @@
 
     <bool name="config_use_strict_phone_number_comparation">false</bool>
 
+    <!-- Display low battery warning when battery level dips to this value.
+         Also, the battery stats are flushed to disk when we hit this level.  -->
+    <integer name="config_criticalBatteryWarningLevel">4</integer>
+
+    <!-- Display low battery warning when battery level dips to this value -->
     <!-- Display low battery warning when battery level dips to this value -->
     <integer name="config_lowBatteryWarningLevel">15</integer>
 
@@ -274,8 +376,36 @@
     <!-- Default LED off time for notification LED in milliseconds. -->
     <integer name="config_defaultNotificationLedOff">2000</integer>
 
+    <!-- Default value for led color when battery is low on charge -->
+    <integer name="config_notificationsBatteryLowARGB">0xFFFF0000</integer>
+
+    <!-- Default value for led color when battery is medium charged -->
+    <integer name="config_notificationsBatteryMediumARGB">0xFFFFFF00</integer>
+
+    <!-- Default value for led color when battery is fully charged -->
+    <integer name="config_notificationsBatteryFullARGB">0xFF00FF00</integer>
+
+    <!-- Default value for LED on time when the battery is low on charge in miliseconds -->
+    <integer name="config_notificationsBatteryLedOn">125</integer>
+
+    <!-- Default value for LED off time when the battery is low on charge in miliseconds -->
+    <integer name="config_notificationsBatteryLedOff">2875</integer>
+
     <!-- Allow the menu hard key to be disabled in LockScreen on some devices -->
     <bool name="config_disableMenuKeyInLockScreen">false</bool>
+
+    <!-- Show sliding tab before lockscreen -->
+    <bool name="config_enableSlidingTabFirst">true</bool>
+
+    <!-- Diable lockscreen rotation by default -->
+    <bool name="config_enableLockScreenRotation">false</bool>
+
+    <!-- Control the behavior when the user long presses the power button.
+            0 - Nothing
+            1 - Recent apps dialog
+            2 - Recent apps activity in SystemUI
+    -->
+    <integer name="config_longPressOnHomeBehavior">1</integer>
 
     <!-- Array of light sensor LUX values to define our levels for auto backlight brightness support.
          The N entries of this array define N + 1 zones as follows:
@@ -368,12 +498,75 @@
     <!-- 2 means give warning -->
     <integer name="config_datause_notification_type">2</integer>
 
+    <!-- Flag indicating whether the current device is "voice capable".
+         If true, this means that the device supports circuit-switched
+         (i.e. voice) phone calls over the telephony network, and is
+         allowed to display the in-call UI while a cellular voice call is
+         active.  This can be overridden to false for "data only" devices
+         which can't make voice calls and don't support any in-call UI.
+
+         Note: this flag is subtly different from the
+         PackageManager.FEATURE_TELEPHONY system feature, which is
+         available on *any* device with a telephony radio, even if the
+         device is data-only. -->
+    <bool name="config_voice_capable">true</bool>
+
+    <!-- Flag indicating whether the current device allows sms service.
+         If true, this means that the device supports both sending and
+         receiving sms via the telephony network.
+         This can be overridden to false for "data only" devices
+         which can't send and receive sms message.
+
+         Note: Disable SMS also disable voicemail waiting sms,
+               cell broadcasting sms, and MMS. -->
+    <bool name="config_sms_capable">true</bool>
+
+    <!-- IP address of the dns server to use if nobody else suggests one -->
+    <string name="config_default_dns_server">8.8.8.8</string>
+
+    <!-- The default character set for GsmAlphabet -->
+    <!-- Empty string means MBCS is not considered -->
+    <string name="gsm_alphabet_default_charset"></string>
+
     <!-- Enables SIP on WIFI only -->
     <bool name="config_sip_wifi_only">true</bool>
+
+    <!-- Enables built-in SIP phone capability -->
+    <bool name="config_built_in_sip_phone">false</bool>
 
     <!-- Boolean indicating if restoring network selection should be skipped -->
     <!-- The restoring is handled by modem if it is true-->
     <bool translatable="false" name="skip_restoring_network_selection">false</bool>
+
+    <!-- Number of database connections opened and managed by framework layer
+         to handle queries on each database. -->
+    <integer name="db_connection_pool_size">1</integer>
+
+    <!-- Max space (in MB) allocated to DownloadManager to store the downloaded
+         files if they are to be stored in DownloadManager's data dir,
+         which typically is /data/data/com.android.providers.downloads/files -->
+    <integer name="config_downloadDataDirSize">100</integer>
+
+    <!-- When the free space available in DownloadManager's data dir falls
+         below the percentage value specified by this param, DownloadManager
+         starts removing files to try to make percentage of available
+         free space above this threshold value. -->
+    <integer name="config_downloadDataDirLowSpaceThreshold">10</integer>
+
+    <!-- The URL that should be sent in an x-wap-profile header with an HTTP request,
+         as defined in the Open Mobile Alliance User Agent Profile specification
+         OMA-TS-UAProf-V2_0-20060206-A Section 8.1.1.1. If the URL contains a '%s'
+         format string then that substring will be replaced with the value of
+         Build.MODEL. The format string shall not be escaped. -->
+    <string name="config_useragentprofile_url"></string>
+
+    <!-- When a database query is executed, the results retuned are paginated
+         in pages of size (in KB) indicated by this value -->
+    <integer name="config_cursorWindowSize">2048</integer>
+
+    <!-- Sets whether menu shortcuts should be displayed on panel menus when
+         a keyboard is present. -->
+    <bool name="config_showMenuShortcutsWhenKeyboardPresent">false</bool>
 
     <!-- Do not translate. Defines the slots is Two Digit Number for dialing normally not USSD -->
     <string-array name="config_twoDigitNumberPattern">
@@ -381,91 +574,4 @@
 
     <!-- The VoiceMail default value is displayed to my own number if it is true -->
     <bool name="config_telephony_use_own_number_for_voicemail">false</bool>
-
-    <!-- If this value is true, Sms encoded as octet is decoded by utf8 decoder.
-         If false, decoded by Latin decoder. -->
-    <bool name="config_sms_utf8_support">false</bool>
-
-    <!-- If this value is true, The mms content-disposition field is supported correctly.
-         If false, Content-disposition fragments are ignored -->
-    <bool name="config_mms_content_disposition_support">true</bool>
-
-    <!-- If this value is true, the carrier supports sms delivery reports.
-         If false, sms delivery reports are not supported and the preference
-         option to enable/disable delivery reports is removed in the Messaging app. -->
-    <bool name="config_sms_delivery_reports_support">true</bool>
-
-    <!-- If this value is true, the carrier supports mms delivery reports.
-         If false, mms delivery reports are not supported and the preference
-         option to enable/disable delivery reports is removed in the Messaging app. -->
-    <bool name="config_mms_delivery_reports_support">true</bool>
-
-    <!-- If this value is true, the carrier supports mms read reports.
-         If false, mms read reports are not supported and the preference
-         option to enable/disable read reports is removed in the Messaging app. -->
-    <bool name="config_mms_read_reports_support">true</bool>
-
-    <!-- National Language Identifier codes for the following two config items.
-         (from 3GPP TS 23.038 V9.1.1 Table 6.2.1.2.4.1):
-          0  - reserved
-          1  - Turkish
-          2  - Spanish (single shift table only)
-          3  - Portuguese
-          4  - Bengali
-          5  - Gujarati
-          6  - Hindi
-          7  - Kannada
-          8  - Malayalam
-          9  - Oriya
-         10  - Punjabi
-         11  - Tamil
-         12  - Telugu
-         13  - Urdu
-         14+ - reserved -->
-
-    <!-- National language single shift tables to enable for SMS encoding.
-         Decoding is always enabled. 3GPP TS 23.038 states that this feature
-         should not be enabled until a formal request is issued by the relevant
-         national regulatory body. Array elements are codes from the table above.
-         Example 1: devices sold in Turkey must include table 1 to conform with
-           By-Law Number 27230. (http://www.btk.gov.tr/eng/pdf/2009/BY-LAW_SMS.pdf)
-         Example 2: devices sold in India should include tables 4 through 13
-           to enable use of the new Release 9 tables for Indic languages. -->
-    <integer-array name="config_sms_enabled_single_shift_tables"></integer-array>
-
-    <!-- National language locking shift tables to enable for SMS encoding.
-         Decoding is always enabled. 3GPP TS 23.038 states that this feature
-         should not be enabled until a formal request is issued by the relevant
-         national regulatory body. Array elements are codes from the table above.
-         Example 1: devices sold in Turkey must include table 1 after the
-           Turkish Telecommunication Authority requires locking shift encoding
-           to be enabled (est. July 2012). (http://www.btk.gov.tr/eng/pdf/2009/BY-LAW_SMS.pdf)
-           See also: http://www.mobitech.com.tr/tr/ersanozturkblog_en/index.php?entry=entry090223-160014
-         Example 2: devices sold in India should include tables 4 through 13
-         to enable use of the new Release 9 tables for Indic languages. -->
-    <integer-array name="config_sms_enabled_locking_shift_tables"></integer-array>
-
-    <!-- Set and Unsets WiMAX -->
-    <bool name="config_wimaxEnabled">false</bool>
-    <!-- Location of the wimax framwork jar location -->
-    <string name="config_wimaxServiceJarLocation"></string>
-    <!-- Location of the wimax native library locaiton -->
-    <string name="config_wimaxNativeLibLocation"></string>
-    <!-- Name of the wimax manager class -->
-    <string name="config_wimaxManagerClassname"></string>
-    <!-- Name of the wimax service class -->
-    <string name="config_wimaxServiceClassname"></string>
-    <!-- Name of the wimax state tracker clas -->
-    <string name="config_wimaxStateTrackerClassname"></string>
-
-    <!-- Set to true if the RSSI should always display CDMA signal strength
-         even on EVDO -->
-    <bool name="config_alwaysUseCdmaRssi">false</bool>
-
-    <!-- If this value is true, duplicate Source/Destination port fields
-         in WDP header of some carriers OMADM wap push are supported.
-         ex: MSGTYPE-TotalSegments-CurrentSegment
-             -SourcePortDestPort-SourcePortDestPort-OMADM PDU
-         If false, not supported. -->
-    <bool name="config_duplicate_port_omadm_wappush">false</bool>
 </resources>

@@ -64,10 +64,10 @@ android_media_AudioSystem_isMicrophoneMuted(JNIEnv *env, jobject thiz)
 }
 
 static jboolean
-android_media_AudioSystem_isStreamActive(JNIEnv *env, jobject thiz, jint stream)
+android_media_AudioSystem_isStreamActive(JNIEnv *env, jobject thiz, jint stream, jint inPastMs)
 {
     bool state = false;
-    AudioSystem::isStreamActive(stream, &state);
+    AudioSystem::isStreamActive(stream, &state, inPastMs);
     return state;
 }
 
@@ -192,6 +192,12 @@ android_media_AudioSystem_getStreamVolumeIndex(JNIEnv *env, jobject thiz, jint s
     return index;
 }
 
+static jint
+android_media_AudioSystem_getDevicesForStream(JNIEnv *env, jobject thiz, jint stream)
+{
+    return (jint) AudioSystem::getDevicesForStream(static_cast <AudioSystem::stream_type>(stream));
+}
+
 // ----------------------------------------------------------------------------
 
 static JNINativeMethod gMethods[] = {
@@ -199,7 +205,7 @@ static JNINativeMethod gMethods[] = {
     {"getParameters",        "(Ljava/lang/String;)Ljava/lang/String;", (void *)android_media_AudioSystem_getParameters},
     {"muteMicrophone",      "(Z)I",     (void *)android_media_AudioSystem_muteMicrophone},
     {"isMicrophoneMuted",   "()Z",      (void *)android_media_AudioSystem_isMicrophoneMuted},
-    {"isStreamActive",      "(I)Z",     (void *)android_media_AudioSystem_isStreamActive},
+    {"isStreamActive",      "(II)Z",     (void *)android_media_AudioSystem_isStreamActive},
     {"setDeviceConnectionState", "(IILjava/lang/String;)I", (void *)android_media_AudioSystem_setDeviceConnectionState},
     {"getDeviceConnectionState", "(ILjava/lang/String;)I",  (void *)android_media_AudioSystem_getDeviceConnectionState},
     {"setPhoneState",       "(I)I",     (void *)android_media_AudioSystem_setPhoneState},
@@ -208,7 +214,8 @@ static JNINativeMethod gMethods[] = {
     {"getForceUse",         "(I)I",     (void *)android_media_AudioSystem_getForceUse},
     {"initStreamVolume",    "(III)I",   (void *)android_media_AudioSystem_initStreamVolume},
     {"setStreamVolumeIndex","(II)I",    (void *)android_media_AudioSystem_setStreamVolumeIndex},
-    {"getStreamVolumeIndex","(I)I",     (void *)android_media_AudioSystem_getStreamVolumeIndex}
+    {"getStreamVolumeIndex","(I)I",     (void *)android_media_AudioSystem_getStreamVolumeIndex},
+    {"getDevicesForStream", "(I)I",     (void *)android_media_AudioSystem_getDevicesForStream},
 };
 
 const char* const kClassPathName = "android/media/AudioSystem";

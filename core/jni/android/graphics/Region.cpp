@@ -1,8 +1,30 @@
+/*
+ * Copyright (C) 2011 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include "SkRegion.h"
 #include "SkPath.h"
 #include "GraphicsJNI.h"
 
+#include <binder/Parcel.h>
+#include "android_util_Binder.h"
+
 #include <jni.h>
+#include <android_runtime/AndroidRuntime.h>
+
+namespace android {
 
 static jfieldID gRegion_nativeInstanceFieldID;
 
@@ -132,10 +154,17 @@ static void Region_scale(JNIEnv* env, jobject region, jfloat scale, jobject dst)
         scale_rgn(rgn, *rgn, scale);
 }
 
-////////////////////////////////////////////////////////////////////////////////////////////////////////////
+static jstring Region_toString(JNIEnv* env, jobject clazz, SkRegion* region) {
+    char* str = region->toString();
+    if (str == NULL) {
+        return NULL;
+    }
+    jstring result = env->NewStringUTF(str);
+    free(str);
+    return result;
+}
 
-#include <binder/Parcel.h>
-#include "android_util_Binder.h"
+////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 static SkRegion* Region_createFromParcel(JNIEnv* env, jobject clazz, jobject parcel)
 {
@@ -215,8 +244,6 @@ static jboolean RegionIter_next(JNIEnv* env, jobject, RgnIterPair* pair, jobject
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-#include <android_runtime/AndroidRuntime.h>
-
 static JNINativeMethod gRegionIterMethods[] = {
     { "nativeConstructor",  "(I)I",                         (void*)RegionIter_constructor   },
     { "nativeDestructor",   "(I)V",                         (void*)RegionIter_destructor    },
@@ -245,6 +272,7 @@ static JNINativeMethod gRegionMethods[] = {
     { "quickReject",            "(Landroid/graphics/Region;)Z",     (void*)Region_quickRejectRgn    },
     { "scale",                  "(FLandroid/graphics/Region;)V",    (void*)Region_scale             },
     { "translate",              "(IILandroid/graphics/Region;)V",   (void*)Region_translate         },
+    { "nativeToString",         "(I)Ljava/lang/String;",            (void*)Region_toString          },
     // parceling methods
     { "nativeCreateFromParcel", "(Landroid/os/Parcel;)I",           (void*)Region_createFromParcel  },
     { "nativeWriteToParcel",    "(ILandroid/os/Parcel;)Z",          (void*)Region_writeToParcel     },
@@ -268,3 +296,9 @@ int register_android_graphics_Region(JNIEnv* env)
     return android::AndroidRuntime::registerNativeMethods(env, "android/graphics/RegionIterator",
                                                        gRegionIterMethods, SK_ARRAY_COUNT(gRegionIterMethods));
 }
+
+SkRegion* android_graphics_Region_getSkRegion(JNIEnv* env, jobject regionObj) {
+    return GetSkRegion(env, regionObj);
+}
+
+} // namespace android

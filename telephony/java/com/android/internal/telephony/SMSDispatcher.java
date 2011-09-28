@@ -32,9 +32,12 @@ import android.database.Cursor;
 import android.database.SQLException;
 import android.net.Uri;
 import android.os.AsyncResult;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Message;
 import android.os.PowerManager;
+import android.os.StatFs;
+import android.os.SystemProperties;
 import android.provider.Telephony;
 import android.provider.Telephony.Sms.Intents;
 import android.provider.Settings;
@@ -155,6 +158,11 @@ public abstract class SMSDispatcher extends Handler {
     protected boolean mStorageAvailable = true;
     protected boolean mReportMemoryStatusPending = false;
 
+    /* Flags indicating whether the current device allows sms service */
+    protected boolean mSmsCapable = true;
+    protected boolean mSmsReceiveDisabled;
+    protected boolean mSmsSendDisabled;
+
     protected static int mRemainingMessages = -1;
 
     protected static int getNextConcatenatedRef() {
@@ -250,6 +258,16 @@ public abstract class SMSDispatcher extends Handler {
         filter.addAction(Intent.ACTION_DEVICE_STORAGE_FULL);
         filter.addAction(Intent.ACTION_DEVICE_STORAGE_NOT_FULL);
         mContext.registerReceiver(mResultReceiver, filter);
+
+        mSmsCapable = mContext.getResources().getBoolean(
+                com.android.internal.R.bool.config_sms_capable);
+        mSmsReceiveDisabled = !SystemProperties.getBoolean(
+                                TelephonyProperties.PROPERTY_SMS_RECEIVE, mSmsCapable);
+        mSmsSendDisabled = !SystemProperties.getBoolean(
+                                TelephonyProperties.PROPERTY_SMS_SEND, mSmsCapable);
+        Log.d(TAG, "SMSDispatcher: ctor mSmsCapable=" + mSmsCapable
+                + " mSmsReceiveDisabled=" + mSmsReceiveDisabled
+                + " mSmsSendDisabled=" + mSmsSendDisabled);
     }
 
     public void dispose() {
@@ -259,6 +277,7 @@ public abstract class SMSDispatcher extends Handler {
         mCm.unregisterForOn(this);
     }
 
+    @Override
     protected void finalize() {
         Log.d(TAG, "SMSDispatcher finalized");
     }
@@ -563,7 +582,7 @@ public abstract class SMSDispatcher extends Handler {
      *         {@link Activity#RESULT_OK} if the message has been broadcast
      *         to applications
      */
-    protected abstract int dispatchMessage(SmsMessageBase sms);
+    public abstract int dispatchMessage(SmsMessageBase sms);
 
 
     /**
@@ -700,6 +719,7 @@ public abstract class SMSDispatcher extends Handler {
      *  <code>RESULT_ERROR_GENERIC_FAILURE</code><br>
      *  <code>RESULT_ERROR_RADIO_OFF</code><br>
      *  <code>RESULT_ERROR_NULL_PDU</code><br>
+     *  <code>RESULT_ERROR_NO_SERVICE</code><br>.
      *  For <code>RESULT_ERROR_GENERIC_FAILURE</code> the sentIntent may include
      *  the extra "errorCode" containing a radio technology specific value,
      *  generally only useful for troubleshooting.<br>
@@ -727,6 +747,7 @@ public abstract class SMSDispatcher extends Handler {
      *  <code>RESULT_ERROR_GENERIC_FAILURE</code><br>
      *  <code>RESULT_ERROR_RADIO_OFF</code><br>
      *  <code>RESULT_ERROR_NULL_PDU</code><br>
+     *  <code>RESULT_ERROR_NO_SERVICE</code><br>.
      *  For <code>RESULT_ERROR_GENERIC_FAILURE</code> the sentIntent may include
      *  the extra "errorCode" containing a radio technology specific value,
      *  generally only useful for troubleshooting.<br>
@@ -755,7 +776,8 @@ public abstract class SMSDispatcher extends Handler {
      *   or one of these errors:
      *   <code>RESULT_ERROR_GENERIC_FAILURE</code>
      *   <code>RESULT_ERROR_RADIO_OFF</code>
-     *   <code>RESULT_ERROR_NULL_PDU</code>.
+     *   <code>RESULT_ERROR_NULL_PDU</code>
+     *   <code>RESULT_ERROR_NO_SERVICE</code>.
      *  The per-application based SMS control checks sentIntent. If sentIntent
      *  is NULL the caller will be checked against all unknown applications,
      *  which cause smaller number of SMS to be sent in checking period.
@@ -781,7 +803,8 @@ public abstract class SMSDispatcher extends Handler {
      *  or one of these errors:
      *  <code>RESULT_ERROR_GENERIC_FAILURE</code>
      *  <code>RESULT_ERROR_RADIO_OFF</code>
-     *  <code>RESULT_ERROR_NULL_PDU</code>.
+     *  <code>RESULT_ERROR_NULL_PDU</code>
+     *  <code>RESULT_ERROR_NO_SERVICE</code>.
      *  The per-application based SMS control checks sentIntent. If sentIntent
      *  is NULL the caller will be checked against all unknown applications,
      *  which cause smaller number of SMS to be sent in checking period.
@@ -791,6 +814,16 @@ public abstract class SMSDispatcher extends Handler {
      */
     protected void sendRawPdu(byte[] smsc, byte[] pdu, PendingIntent sentIntent,
             PendingIntent deliveryIntent) {
+        if (mSmsSendDisabled) {
+            if (sentIntent != null) {
+                try {
+                    sentIntent.send(RESULT_ERROR_NO_SERVICE);
+                } catch (CanceledException ex) {}
+            }
+            Log.d(TAG, "Device does not support sending sms.");
+            return;
+        }
+
         if (pdu == null) {
             if (sentIntent != null) {
                 try {
@@ -876,6 +909,37 @@ public abstract class SMSDispatcher extends Handler {
     protected abstract void sendMultipartSms (SmsTracker tracker);
 
     /**
+     * Activate or deactivate cell broadcast SMS.
+     *
+     * @param activate
+     *            0 = activate, 1 = deactivate
+     * @param response
+     *            Callback message is empty on completion
+     */
+    public abstract void activateCellBroadcastSms(int activate, Message response);
+
+    /**
+     * Query the current configuration of cell broadcast SMS.
+     *
+     * @param response
+     *            Callback message contains the configuration from the modem on completion
+     *            @see #setCellBroadcastConfig
+     */
+    public abstract void getCellBroadcastSmsConfig(Message response);
+
+    /**
+     * Configure cell broadcast SMS.
+     *
+     * @param configValuesArray
+     *          The first element defines the number of triples that follow.
+     *          A triple is made up of the service category, the language identifier
+     *          and a boolean that specifies whether the category is set active.
+     * @param response
+     *            Callback message is empty on completion
+     */
+    public abstract void setCellBroadcastConfig(int[] configValuesArray, Message response);
+
+    /**
      * Send an acknowledge message.
      * @param success indicates that last message was successfully received.
      * @param result result code indicating any error
@@ -921,14 +985,14 @@ public abstract class SMSDispatcher extends Handler {
      */
     static protected class SmsTracker {
         // fields need to be public for derived SmsDispatchers
-        public HashMap mData;
+        public HashMap<String, Object> mData;
         public int mRetryCount;
         public int mMessageRef;
 
         public PendingIntent mSentIntent;
         public PendingIntent mDeliveryIntent;
 
-        SmsTracker(HashMap data, PendingIntent sentIntent,
+        SmsTracker(HashMap<String, Object> data, PendingIntent sentIntent,
                 PendingIntent deliveryIntent) {
             mData = data;
             mSentIntent = sentIntent;
@@ -937,9 +1001,30 @@ public abstract class SMSDispatcher extends Handler {
         }
     }
 
-    protected SmsTracker SmsTrackerFactory(HashMap data, PendingIntent sentIntent,
+    protected SmsTracker SmsTrackerFactory(HashMap<String, Object> data, PendingIntent sentIntent,
             PendingIntent deliveryIntent) {
         return new SmsTracker(data, sentIntent, deliveryIntent);
+    }
+
+    public void initSipStack(boolean isObg) {
+        // This function should be overridden by the classes that support
+        // switching modes such as the CdmaSMSDispatcher.
+        // Not implemented in GsmSMSDispatcher.
+        Log.e(TAG, "Error! This function should never be executed.");
+    }
+
+    public void switchToCdma() {
+        // This function should be overridden by the classes that support
+        // switching modes such as the CdmaSMSDispatcher.
+        // Not implemented in GsmSMSDispatcher.
+        Log.e(TAG, "Error! This function should never be executed.");
+    }
+
+    public void switchToGsm() {
+        // This function should be overridden by the classes that support
+        // switching modes such as the CdmaSMSDispatcher.
+        // Not implemented in GsmSMSDispatcher.
+        Log.e(TAG, "Error! This function should never be executed.");
     }
 
     private DialogInterface.OnClickListener mListener =
@@ -981,21 +1066,14 @@ public abstract class SMSDispatcher extends Handler {
 
     protected abstract void handleBroadcastSms(AsyncResult ar);
 
-    protected void dispatchBroadcastPdus(byte[][] pdus, boolean isEmergencyMessage) {
-        if (isEmergencyMessage) {
-            Intent intent = new Intent(Intents.SMS_EMERGENCY_CB_RECEIVED_ACTION);
-            intent.putExtra("pdus", pdus);
-            if (Config.LOGD)
-                Log.d(TAG, "Dispatching " + pdus.length + " emergency SMS CB pdus");
+    protected void dispatchBroadcastPdus(byte[][] pdus) {
+        Intent intent = new Intent("android.provider.telephony.SMS_CB_RECEIVED");
+        intent.putExtra("pdus", pdus);
 
-            dispatch(intent, "android.permission.RECEIVE_EMERGENCY_BROADCAST");
-        } else {
-            Intent intent = new Intent(Intents.SMS_CB_RECEIVED_ACTION);
-            intent.putExtra("pdus", pdus);
-            if (Config.LOGD)
-                Log.d(TAG, "Dispatching " + pdus.length + " SMS CB pdus");
+        if (Config.LOGD)
+            Log.d(TAG, "Dispatching " + pdus.length + " SMS CB pdus");
 
-            dispatch(intent, "android.permission.RECEIVE_SMS");
-        }
+        dispatch(intent, "android.permission.RECEIVE_SMS");
     }
+
 }

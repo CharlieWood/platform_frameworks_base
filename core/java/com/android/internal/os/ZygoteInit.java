@@ -22,6 +22,7 @@ import android.content.res.TypedArray;
 import android.graphics.drawable.Drawable;
 import android.net.LocalServerSocket;
 import android.os.Debug;
+import android.os.FileUtils;
 import android.os.SystemClock;
 import android.os.SystemProperties;
 import android.util.Config;
@@ -494,6 +495,9 @@ public class ZygoteInit {
 
         closeServerSocket();
 
+        // set umask to 0077 so new files and directories will default to owner-only permissions.
+        FileUtils.setUMask(FileUtils.S_IRWXG | FileUtils.S_IRWXO);
+
         /*
          * Pass the remaining arguments to SystemServer.
          * "--nice-name=system_server com.android.server.SystemServer"
@@ -553,8 +557,6 @@ public class ZygoteInit {
 
     public static void main(String argv[]) {
         try {
-            VMRuntime.getRuntime().setMinimumHeapSize(5 * 1024 * 1024);
-
             // Start profiling the zygote initialization.
             SamplingProfilerIntegration.start();
 

@@ -20,18 +20,22 @@ import java.io.File;
 
 import android.content.res.Resources;
 import android.os.storage.IMountService;
+import android.util.Log;
 
 /**
  * Provides access to environment variables.
  */
 public class Environment {
+    private static final String TAG = "Environment";
 
     private static final File ROOT_DIRECTORY
             = getDirectory("ANDROID_ROOT", "/system");
 
     private static final String SYSTEM_PROPERTY_EFS_ENABLED = "persist.security.efs.enabled";
 
-    private static IMountService mMntSvc = null;
+    private static final Object mLock = new Object();
+
+    private volatile static Boolean mIsExternalStorageEmulated = null;
 
     /**
      * Gets the Android root directory.
@@ -99,6 +103,10 @@ public class Environment {
     private static final File EXTERNAL_STORAGE_ANDROID_MEDIA_DIRECTORY
             = new File (new File(getDirectory("EXTERNAL_STORAGE", "/sdcard"),
                     "Android"), "media");
+
+    private static final File EXTERNAL_STORAGE_ANDROID_OBB_DIRECTORY
+            = new File (new File(getDirectory("EXTERNAL_STORAGE", "/sdcard"),
+                    "Android"), "obb");
 
     private static final File DOWNLOAD_CACHE_DIRECTORY
             = getDirectory("DOWNLOAD_CACHE", "/cache");
@@ -297,6 +305,14 @@ public class Environment {
     }
     
     /**
+     * Generates the raw path to an application's OBB files
+     * @hide
+     */
+    public static File getExternalStorageAppObbDirectory(String packageName) {
+        return new File(EXTERNAL_STORAGE_ANDROID_OBB_DIRECTORY, packageName);
+    }
+    
+    /**
      * Generates the path to an application's files.
      * @hide
      */
@@ -382,11 +398,10 @@ public class Environment {
      */
     public static String getExternalStorageState() {
         try {
-            if (mMntSvc == null) {
-                mMntSvc = IMountService.Stub.asInterface(ServiceManager
-                                                         .getService("mount"));
-            }
-            return mMntSvc.getVolumeState(getExternalStorageDirectory().toString());
+            IMountService mountService = IMountService.Stub.asInterface(ServiceManager
+                    .getService("mount"));
+            return mountService.getVolumeState(getExternalStorageDirectory()
+                    .toString());
         } catch (Exception rex) {
             return Environment.MEDIA_REMOVED;
         }
@@ -401,8 +416,35 @@ public class Environment {
      * <p>See {@link #getExternalStorageDirectory()} for more information.
      */
     public static boolean isExternalStorageRemovable() {
+        if (isExternalStorageEmulated()) return false;
         return Resources.getSystem().getBoolean(
                 com.android.internal.R.bool.config_externalStorageRemovable);
+    }
+
+    /**
+     * Returns whether the device has an external storage device which is
+     * emulated. If true, the device does not have real external storage
+     * and certain system services such as the package manager use this
+     * to determine where to install an application.
+     */
+    public static boolean isExternalStorageEmulated() {
+        if (mIsExternalStorageEmulated == null) {
+            synchronized (mLock) {
+                if (mIsExternalStorageEmulated == null) {
+                    boolean externalStorageEmulated;
+                    try {
+                        IMountService mountService = IMountService.Stub.asInterface(ServiceManager
+                                .getService("mount"));
+                        externalStorageEmulated = mountService.isExternalStorageEmulated();
+                        mIsExternalStorageEmulated = Boolean.valueOf(externalStorageEmulated);
+                    } catch (Exception e) {
+                        Log.e(TAG, "couldn't talk to MountService", e);
+                        return false;
+                    }
+                }
+            }
+        }
+        return mIsExternalStorageEmulated;
     }
 
     static File getDirectory(String variableName, String defaultPath) {

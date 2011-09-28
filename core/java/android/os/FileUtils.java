@@ -76,7 +76,12 @@ public class FileUtils
      * @return true if the file exists and false if it does not exist. If you do not have 
      * permission to stat the file, then this method will return false.
      */
-    public static native boolean getFileStatus(String path, FileStatus status);
+    public static boolean getFileStatus(String path, FileStatus status) {
+        StrictMode.noteDiskRead();
+        return getFileStatusNative(path, status);
+    }
+
+    private static native boolean getFileStatusNative(String path, FileStatus status);
 
     /** Regular expression for safe filenames: no spaces or metacharacters */
     private static final Pattern SAFE_FILENAME_PATTERN = Pattern.compile("[\\w%+,./=_-]+");
@@ -84,6 +89,8 @@ public class FileUtils
     public static native int setPermissions(String file, int mode, int uid, int gid);
 
     public static native int getPermissions(String file, int[] outPermissions);
+
+    public static native int setUMask(int mask);
 
     /** returns the FAT file system volume ID for the volume mounted 
      * at the given mount point, or -1 for failure

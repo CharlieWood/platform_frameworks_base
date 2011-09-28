@@ -22,10 +22,12 @@ import com.android.ide.common.rendering.api.RenderParams;
 import com.android.ide.common.rendering.api.RenderSession;
 import com.android.ide.common.rendering.api.Result;
 import com.android.ide.common.rendering.api.ViewInfo;
+import com.android.ide.common.rendering.api.Result.Status;
 import com.android.layoutlib.bridge.impl.RenderSessionImpl;
 
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewParent;
 
 import java.awt.image.BufferedImage;
 import java.util.List;
@@ -81,6 +83,31 @@ public class BridgeRenderSession extends RenderSession {
     }
 
     @Override
+    public Result getViewParent(Object viewObject) {
+        if (viewObject instanceof View) {
+            return Status.SUCCESS.createResult(((View)viewObject).getParent());
+        }
+
+        throw new IllegalArgumentException("viewObject is not a View");
+    }
+
+    @Override
+    public Result getViewIndex(Object viewObject) {
+        if (viewObject instanceof View) {
+            View view = (View) viewObject;
+            ViewParent parentView = view.getParent();
+
+            if (parentView instanceof ViewGroup) {
+                Status.SUCCESS.createResult(((ViewGroup) parentView).indexOfChild(view));
+            }
+
+            return Status.SUCCESS.createResult();
+        }
+
+        throw new IllegalArgumentException("viewObject is not a View");
+    }
+
+    @Override
     public Result render(long timeout) {
         try {
             Bridge.prepareThread();
@@ -99,8 +126,19 @@ public class BridgeRenderSession extends RenderSession {
     @Override
     public Result animate(Object targetObject, String animationName,
             boolean isFrameworkAnimation, IAnimationListener listener) {
-        // Animation is only supported in API 11+
-        return super.animate(targetObject, animationName, isFrameworkAnimation, listener);
+        try {
+            Bridge.prepareThread();
+            mLastResult = mSession.acquire(RenderParams.DEFAULT_TIMEOUT);
+            if (mLastResult.isSuccess()) {
+                mLastResult = mSession.animate(targetObject, animationName, isFrameworkAnimation,
+                        listener);
+            }
+        } finally {
+            mSession.release();
+            Bridge.cleanupThread();
+        }
+
+        return mLastResult;
     }
 
     @Override

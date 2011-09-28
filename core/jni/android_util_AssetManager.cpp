@@ -149,7 +149,7 @@ static jint android_content_AssetManager_openAsset(JNIEnv* env, jobject clazz,
 
 static jobject returnParcelFileDescriptor(JNIEnv* env, Asset* a, jlongArray outOffsets)
 {
-    off_t startOffset, length;
+    off64_t startOffset, length;
     int fd = a->openFileDescriptor(&startOffset, &length);
     delete a;
     
@@ -701,6 +701,7 @@ static jstring android_content_AssetManager_getResourceEntryName(JNIEnv* env, jo
 
 static jint android_content_AssetManager_loadResourceValue(JNIEnv* env, jobject clazz,
                                                            jint ident,
+                                                           jshort density,
                                                            jobject outValue,
                                                            jboolean resolve)
 {
@@ -713,7 +714,7 @@ static jint android_content_AssetManager_loadResourceValue(JNIEnv* env, jobject 
     Res_value value;
     ResTable_config config;
     uint32_t typeSpecFlags;
-    ssize_t block = res.getResource(ident, &value, false, &typeSpecFlags, &config);
+    ssize_t block = res.getResource(ident, &value, false, density, &typeSpecFlags, &config);
 #if THROW_ON_BAD_ID
     if (block == BAD_INDEX) {
         jniThrowException(env, "java/lang/IllegalStateException", "Bad resource!");
@@ -1110,6 +1111,7 @@ static jboolean android_content_AssetManager_applyStyle(JNIEnv* env, jobject cla
         if (value.dataType == Res_value::TYPE_REFERENCE && value.data == 0) {
             DEBUG_STYLES(LOGI("-> Setting to @null!"));
             value.dataType = Res_value::TYPE_NULL;
+            block = kXmlBlock;
         }
 
         DEBUG_STYLES(LOGI("Attribute 0x%08x: type=0x%x, data=0x%08x",
@@ -1295,7 +1297,7 @@ static jint android_content_AssetManager_getArraySize(JNIEnv* env, jobject clazz
 {
     AssetManager* am = assetManagerForJavaObject(env, clazz);
     if (am == NULL) {
-        return NULL;
+        return 0;
     }
     const ResTable& res(am->getResources());
     
@@ -1703,7 +1705,7 @@ static JNINativeMethod gAssetManagerMethods[] = {
         (void*) android_content_AssetManager_getResourceTypeName },
     { "getResourceEntryName","(I)Ljava/lang/String;",
         (void*) android_content_AssetManager_getResourceEntryName },
-    { "loadResourceValue","(ILandroid/util/TypedValue;Z)I",
+    { "loadResourceValue","(ISLandroid/util/TypedValue;Z)I",
         (void*) android_content_AssetManager_loadResourceValue },
     { "loadResourceBagValue","(IILandroid/util/TypedValue;Z)I",
         (void*) android_content_AssetManager_loadResourceBagValue },

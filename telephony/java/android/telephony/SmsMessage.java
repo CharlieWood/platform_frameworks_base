@@ -20,7 +20,6 @@ import android.os.Parcel;
 import android.util.Log;
 
 import com.android.internal.telephony.GsmAlphabet;
-import com.android.internal.telephony.EncodeException;
 import com.android.internal.telephony.SmsHeader;
 import com.android.internal.telephony.SmsMessageBase;
 import com.android.internal.telephony.SmsMessageBase.SubmitPduBase;
@@ -54,6 +53,10 @@ public class SmsMessage {
     public static final int ENCODING_7BIT = 1;
     public static final int ENCODING_8BIT = 2;
     public static final int ENCODING_16BIT = 3;
+    /**
+     * @hide This value is not defined in global standard. Only in Korea, this is used.
+     */
+    public static final int ENCODING_KSC5601 = 4;
 
     /** The maximum number of payload bytes per message */
     public static final int MAX_USER_DATA_BYTES = 140;
@@ -121,7 +124,7 @@ public class SmsMessage {
      */
     public static SmsMessage createFromPdu(byte[] pdu) {
         SmsMessageBase wrappedMessage;
-        int activePhone = TelephonyManager.getDefault().getPhoneType();
+        int activePhone = TelephonyManager.getDefault().getCurrentPhoneType();
 
         if (PHONE_TYPE_CDMA == activePhone) {
             wrappedMessage = com.android.internal.telephony.cdma.SmsMessage.createFromPdu(pdu);
@@ -143,7 +146,7 @@ public class SmsMessage {
      */
     public static SmsMessage newFromCMT(String[] lines){
         SmsMessageBase wrappedMessage;
-        int activePhone = TelephonyManager.getDefault().getPhoneType();
+        int activePhone = TelephonyManager.getDefault().getCurrentPhoneType();
 
         if (PHONE_TYPE_CDMA == activePhone) {
             wrappedMessage = com.android.internal.telephony.cdma.SmsMessage.newFromCMT(lines);
@@ -157,7 +160,7 @@ public class SmsMessage {
     /** @hide */
     protected static SmsMessage newFromCMTI(String line) {
         SmsMessageBase wrappedMessage;
-        int activePhone = TelephonyManager.getDefault().getPhoneType();
+        int activePhone = TelephonyManager.getDefault().getCurrentPhoneType();
 
         if (PHONE_TYPE_CDMA == activePhone) {
             wrappedMessage = com.android.internal.telephony.cdma.SmsMessage.newFromCMTI(line);
@@ -171,7 +174,7 @@ public class SmsMessage {
     /** @hide */
     public static SmsMessage newFromCDS(String line) {
         SmsMessageBase wrappedMessage;
-        int activePhone = TelephonyManager.getDefault().getPhoneType();
+        int activePhone = TelephonyManager.getDefault().getCurrentPhoneType();
 
         if (PHONE_TYPE_CDMA == activePhone) {
             wrappedMessage = com.android.internal.telephony.cdma.SmsMessage.newFromCDS(line);
@@ -185,7 +188,7 @@ public class SmsMessage {
     /** @hide */
     public static SmsMessage newFromParcel(Parcel p) {
         SmsMessageBase wrappedMessage;
-        int activePhone = TelephonyManager.getDefault().getPhoneType();
+        int activePhone = TelephonyManager.getDefault().getCurrentPhoneType();
 
         if (PHONE_TYPE_CDMA == activePhone) {
             wrappedMessage = com.android.internal.telephony.cdma.SmsMessage.newFromParcel(p);
@@ -208,7 +211,7 @@ public class SmsMessage {
      */
     public static SmsMessage createFromEfRecord(int index, byte[] data) {
         SmsMessageBase wrappedMessage;
-        int activePhone = TelephonyManager.getDefault().getPhoneType();
+        int activePhone = TelephonyManager.getDefault().getCurrentPhoneType();
 
         if (PHONE_TYPE_CDMA == activePhone) {
             wrappedMessage = com.android.internal.telephony.cdma.SmsMessage.createFromEfRecord(
@@ -226,7 +229,7 @@ public class SmsMessage {
      * length in bytes (not hex chars) less the SMSC header
      */
     public static int getTPLayerLengthForPDU(String pdu) {
-        int activePhone = TelephonyManager.getDefault().getPhoneType();
+        int activePhone = TelephonyManager.getDefault().getCurrentPhoneType();
 
         if (PHONE_TYPE_CDMA == activePhone) {
             return com.android.internal.telephony.cdma.SmsMessage.getTPLayerLengthForPDU(pdu);
@@ -262,7 +265,7 @@ public class SmsMessage {
      *         class).
      */
     public static int[] calculateLength(CharSequence msgBody, boolean use7bitOnly) {
-        int activePhone = TelephonyManager.getDefault().getPhoneType();
+        int activePhone = TelephonyManager.getDefault().getCurrentPhoneType();
         TextEncodingDetails ted = (PHONE_TYPE_CDMA == activePhone) ?
             com.android.internal.telephony.cdma.SmsMessage.calculateLength(msgBody, use7bitOnly) :
             com.android.internal.telephony.gsm.SmsMessage.calculateLength(msgBody, use7bitOnly);
@@ -285,7 +288,7 @@ public class SmsMessage {
      * @hide
      */
     public static ArrayList<String> fragmentText(String text) {
-        int activePhone = TelephonyManager.getDefault().getPhoneType();
+        int activePhone = TelephonyManager.getDefault().getCurrentPhoneType();
         TextEncodingDetails ted = (PHONE_TYPE_CDMA == activePhone) ?
             com.android.internal.telephony.cdma.SmsMessage.calculateLength(text, false) :
             com.android.internal.telephony.gsm.SmsMessage.calculateLength(text, false);
@@ -314,8 +317,7 @@ public class SmsMessage {
                     nextPos = pos + Math.min(limit, textLen - pos);
                 } else {
                     // For multi-segment messages, CDMA 7bit equals GSM 7bit encoding (EMS mode).
-                    nextPos = GsmAlphabet.findGsmSeptetLimitIndex(text, pos, limit,
-                            ted.languageTable, ted.languageShiftTable);
+                    nextPos = GsmAlphabet.findGsmSeptetLimitIndex(text, pos, limit);
                 }
             } else {  // Assume unicode.
                 nextPos = pos + Math.min(limit / 2, textLen - pos);
@@ -371,8 +373,7 @@ public class SmsMessage {
      */
 
     /**
-     * Get an SMS-SUBMIT PDU for a destination address and a message.
-     * This method will not attempt to use any GSM national language 7 bit encodings.
+     * Get an SMS-SUBMIT PDU for a destination address and a message
      *
      * @param scAddress Service Centre address.  Null means use default.
      * @return a <code>SubmitPdu</code> containing the encoded SC
@@ -384,7 +385,7 @@ public class SmsMessage {
             String destinationAddress, String message,
             boolean statusReportRequested, byte[] header) {
         SubmitPduBase spb;
-        int activePhone = TelephonyManager.getDefault().getPhoneType();
+        int activePhone = TelephonyManager.getDefault().getCurrentPhoneType();
 
         if (PHONE_TYPE_CDMA == activePhone) {
             spb = com.android.internal.telephony.cdma.SmsMessage.getSubmitPdu(scAddress,
@@ -399,8 +400,7 @@ public class SmsMessage {
     }
 
     /**
-     * Get an SMS-SUBMIT PDU for a destination address and a message.
-     * This method will not attempt to use any GSM national language 7 bit encodings.
+     * Get an SMS-SUBMIT PDU for a destination address and a message
      *
      * @param scAddress Service Centre address.  Null means use default.
      * @return a <code>SubmitPdu</code> containing the encoded SC
@@ -410,7 +410,7 @@ public class SmsMessage {
     public static SubmitPdu getSubmitPdu(String scAddress,
             String destinationAddress, String message, boolean statusReportRequested) {
         SubmitPduBase spb;
-        int activePhone = TelephonyManager.getDefault().getPhoneType();
+        int activePhone = TelephonyManager.getDefault().getCurrentPhoneType();
 
         if (PHONE_TYPE_CDMA == activePhone) {
             spb = com.android.internal.telephony.cdma.SmsMessage.getSubmitPdu(scAddress,
@@ -424,8 +424,7 @@ public class SmsMessage {
     }
 
     /**
-     * Get an SMS-SUBMIT PDU for a data message to a destination address &amp; port.
-     * This method will not attempt to use any GSM national language 7 bit encodings.
+     * Get an SMS-SUBMIT PDU for a data message to a destination address &amp; port
      *
      * @param scAddress Service Centre address. null == use default
      * @param destinationAddress the address of the destination for the message
@@ -440,7 +439,7 @@ public class SmsMessage {
             String destinationAddress, short destinationPort, byte[] data,
             boolean statusReportRequested) {
         SubmitPduBase spb;
-        int activePhone = TelephonyManager.getDefault().getPhoneType();
+        int activePhone = TelephonyManager.getDefault().getCurrentPhoneType();
 
         if (PHONE_TYPE_CDMA == activePhone) {
             spb = com.android.internal.telephony.cdma.SmsMessage.getSubmitPdu(scAddress,
@@ -709,7 +708,7 @@ public class SmsMessage {
      * @hide
      */
     private static final SmsMessageBase getSmsFacility(){
-        int activePhone = TelephonyManager.getDefault().getPhoneType();
+        int activePhone = TelephonyManager.getDefault().getCurrentPhoneType();
         if (PHONE_TYPE_CDMA == activePhone) {
             return new com.android.internal.telephony.cdma.SmsMessage();
         } else {

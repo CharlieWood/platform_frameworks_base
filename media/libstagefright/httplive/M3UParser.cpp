@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+//#define LOG_NDEBUG 0
+#define LOG_TAG "M3UParser"
+#include <utils/Log.h>
+
 #include "include/M3UParser.h"
 
 #include <media/stagefright/foundation/AMessage.h>
@@ -80,14 +84,18 @@ static bool MakeURL(const char *baseURL, const char *url, AString *out) {
     out->clear();
 
     if (strncasecmp("http://", baseURL, 7)
+            && strncasecmp("https://", baseURL, 8)
             && strncasecmp("file://", baseURL, 7)) {
         // Base URL must be absolute
         return false;
     }
 
-    if (!strncasecmp("http://", url, 7)) {
+    if (!strncasecmp("http://", url, 7) || !strncasecmp("https://", url, 8)) {
         // "url" is already an absolute URL, ignore base URL.
         out->setTo(url);
+
+        LOGV("base:'%s', url:'%s' => '%s'", baseURL, url, out->c_str());
+
         return true;
     }
 
@@ -96,7 +104,7 @@ static bool MakeURL(const char *baseURL, const char *url, AString *out) {
         out->setTo(baseURL);
         out->append(url);
     } else {
-        char *slashPos = strrchr(baseURL, '/');
+        const char *slashPos = strrchr(baseURL, '/');
 
         if (slashPos > &baseURL[6]) {
             out->setTo(baseURL, slashPos - baseURL);
@@ -107,6 +115,8 @@ static bool MakeURL(const char *baseURL, const char *url, AString *out) {
         out->append("/");
         out->append(url);
     }
+
+    LOGV("base:'%s', url:'%s' => '%s'", baseURL, url, out->c_str());
 
     return true;
 }
@@ -158,6 +168,11 @@ status_t M3UParser::parse(const void *_data, size_t size) {
                     return ERROR_MALFORMED;
                 }
                 err = parseMetaData(line, &mMeta, "media-sequence");
+            } else if (line.startsWith("#EXT-X-KEY")) {
+                if (mIsVariantPlaylist) {
+                    return ERROR_MALFORMED;
+                }
+                err = parseCipherInfo(line, &itemMeta, mBaseURI);
             } else if (line.startsWith("#EXT-X-ENDLIST")) {
                 mIsComplete = true;
             } else if (line.startsWith("#EXTINF")) {
@@ -285,6 +300,75 @@ status_t M3UParser::parseStreamInf(
                 *meta = new AMessage;
             }
             (*meta)->setInt32("bandwidth", x);
+        }
+    }
+
+    return OK;
+}
+
+// static
+status_t M3UParser::parseCipherInfo(
+        const AString &line, sp<AMessage> *meta, const AString &baseURI) {
+    ssize_t colonPos = line.find(":");
+
+    if (colonPos < 0) {
+        return ERROR_MALFORMED;
+    }
+
+    size_t offset = colonPos + 1;
+
+    while (offset < line.size()) {
+        ssize_t end = line.find(",", offset);
+        if (end < 0) {
+            end = line.size();
+        }
+
+        AString attr(line, offset, end - offset);
+        attr.trim();
+
+        offset = end + 1;
+
+        ssize_t equalPos = attr.find("=");
+        if (equalPos < 0) {
+            continue;
+        }
+
+        AString key(attr, 0, equalPos);
+        key.trim();
+
+        AString val(attr, equalPos + 1, attr.size() - equalPos - 1);
+        val.trim();
+
+        LOGV("key=%s value=%s", key.c_str(), val.c_str());
+
+        key.tolower();
+
+        if (key == "method" || key == "uri" || key == "iv") {
+            if (meta->get() == NULL) {
+                *meta = new AMessage;
+            }
+
+            if (key == "uri") {
+                if (val.size() >= 2
+                        && val.c_str()[0] == '"'
+                        && val.c_str()[val.size() - 1] == '"') {
+                    // Remove surrounding quotes.
+                    AString tmp(val, 1, val.size() - 2);
+                    val = tmp;
+                }
+
+                AString absURI;
+                if (MakeURL(baseURI.c_str(), val.c_str(), &absURI)) {
+                    val = absURI;
+                } else {
+                    LOGE("failed to make absolute url for '%s'.",
+                         val.c_str());
+                }
+            }
+
+            key.insert(AString("cipher-"), 0);
+
+            (*meta)->setString(key.c_str(), val.c_str(), val.size());
         }
     }
 

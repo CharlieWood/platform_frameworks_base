@@ -26,7 +26,7 @@ import android.os.RemoteException;
  * WARNING! Update IMountService.h and IMountService.cpp if you change this
  * file. In particular, the ordering of the methods below must match the
  * _TRANSACTION enum in IMountService.cpp
- * 
+ *
  * @hide - Applications should use android.os.storage.StorageManager to access
  *       storage functions.
  */
@@ -567,6 +567,76 @@ public interface IMountService extends IInterface {
                 }
                 return _result;
             }
+
+            /**
+             * Returns whether the external storage is emulated.
+             */
+            public boolean isExternalStorageEmulated() throws RemoteException {
+                Parcel _data = Parcel.obtain();
+                Parcel _reply = Parcel.obtain();
+                boolean _result;
+                try {
+                    _data.writeInterfaceToken(DESCRIPTOR);
+                    mRemote.transact(Stub.TRANSACTION_isExternalStorageEmulated, _data, _reply, 0);
+                    _reply.readException();
+                    _result = 0 != _reply.readInt();
+                } finally {
+                    _reply.recycle();
+                    _data.recycle();
+                }
+                return _result;
+            }
+
+            public int decryptStorage(String password) throws RemoteException {
+                Parcel _data = Parcel.obtain();
+                Parcel _reply = Parcel.obtain();
+                int _result;
+                try {
+                    _data.writeInterfaceToken(DESCRIPTOR);
+                    _data.writeString(password);
+                    mRemote.transact(Stub.TRANSACTION_decryptStorage, _data, _reply, 0);
+                    _reply.readException();
+                    _result = _reply.readInt();
+                } finally {
+                    _reply.recycle();
+                    _data.recycle();
+                }
+                return _result;
+            }
+
+            public int encryptStorage(String password) throws RemoteException {
+                Parcel _data = Parcel.obtain();
+                Parcel _reply = Parcel.obtain();
+                int _result;
+                try {
+                    _data.writeInterfaceToken(DESCRIPTOR);
+                    _data.writeString(password);
+                    mRemote.transact(Stub.TRANSACTION_encryptStorage, _data, _reply, 0);
+                    _reply.readException();
+                    _result = _reply.readInt();
+                } finally {
+                    _reply.recycle();
+                    _data.recycle();
+                }
+                return _result;
+            }
+
+            public int changeEncryptionPassword(String password) throws RemoteException {
+                Parcel _data = Parcel.obtain();
+                Parcel _reply = Parcel.obtain();
+                int _result;
+                try {
+                    _data.writeInterfaceToken(DESCRIPTOR);
+                    _data.writeString(password);
+                    mRemote.transact(Stub.TRANSACTION_changeEncryptionPassword, _data, _reply, 0);
+                    _reply.readException();
+                    _result = _reply.readInt();
+                } finally {
+                    _reply.recycle();
+                    _data.recycle();
+                }
+                return _result;
+            }
         }
 
         private static final String DESCRIPTOR = "IMountService";
@@ -620,6 +690,14 @@ public interface IMountService extends IInterface {
         static final int TRANSACTION_isObbMounted = IBinder.FIRST_CALL_TRANSACTION + 23;
 
         static final int TRANSACTION_getMountedObbPath = IBinder.FIRST_CALL_TRANSACTION + 24;
+
+        static final int TRANSACTION_isExternalStorageEmulated = IBinder.FIRST_CALL_TRANSACTION + 25;
+
+        static final int TRANSACTION_decryptStorage = IBinder.FIRST_CALL_TRANSACTION + 26;
+
+        static final int TRANSACTION_encryptStorage = IBinder.FIRST_CALL_TRANSACTION + 27;
+
+        static final int TRANSACTION_changeEncryptionPassword = IBinder.FIRST_CALL_TRANSACTION + 28;
 
         /**
          * Cast an IBinder object into an IMountService interface, generating a
@@ -895,6 +973,37 @@ public interface IMountService extends IInterface {
                     reply.writeString(mountedPath);
                     return true;
                 }
+                case TRANSACTION_isExternalStorageEmulated: {
+                    data.enforceInterface(DESCRIPTOR);
+                    boolean emulated = isExternalStorageEmulated();
+                    reply.writeNoException();
+                    reply.writeInt(emulated ? 1 : 0);
+                    return true;
+                }
+                case TRANSACTION_decryptStorage: {
+                    data.enforceInterface(DESCRIPTOR);
+                    String password = data.readString();
+                    int result = decryptStorage(password);
+                    reply.writeNoException();
+                    reply.writeInt(result);
+                    return true;
+                }
+                case TRANSACTION_encryptStorage: {
+                    data.enforceInterface(DESCRIPTOR);
+                    String password = data.readString();
+                    int result = encryptStorage(password);
+                    reply.writeNoException();
+                    reply.writeInt(result);
+                    return true;
+                }
+                case TRANSACTION_changeEncryptionPassword: {
+                    data.enforceInterface(DESCRIPTOR);
+                    String password = data.readString();
+                    int result = changeEncryptionPassword(password);
+                    reply.writeNoException();
+                    reply.writeInt(result);
+                    return true;
+                }
             }
             return super.onTransact(code, data, reply, flags);
         }
@@ -1049,4 +1158,25 @@ public interface IMountService extends IInterface {
      * Unregisters an IMountServiceListener
      */
     public void unregisterListener(IMountServiceListener listener) throws RemoteException;
+
+    /**
+     * Returns whether or not the external storage is emulated.
+     */
+    public boolean isExternalStorageEmulated() throws RemoteException;
+
+    /**
+     * Decrypts any encrypted volumes.
+     */
+    public int decryptStorage(String password) throws RemoteException;
+
+    /**
+     * Encrypts storage.
+     */
+    public int encryptStorage(String password) throws RemoteException;
+
+    /**
+     * Changes the encryption password.
+     */
+    public int changeEncryptionPassword(String password) throws RemoteException;
+
 }

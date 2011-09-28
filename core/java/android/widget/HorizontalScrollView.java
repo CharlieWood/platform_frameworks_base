@@ -18,22 +18,24 @@ package android.widget;
 
 import com.android.internal.R;
 
-import android.util.AttributeSet;
-import android.graphics.Canvas;
-import android.graphics.Rect;
-import android.graphics.drawable.Drawable;
-import android.view.View;
-import android.view.VelocityTracker;
-import android.view.ViewConfiguration;
-import android.view.ViewGroup;
-import android.view.KeyEvent;
-import android.view.FocusFinder;
-import android.view.MotionEvent;
-import android.view.ViewParent;
-import android.view.animation.AnimationUtils;
 import android.content.Context;
 import android.content.res.Resources;
 import android.content.res.TypedArray;
+import android.graphics.Canvas;
+import android.graphics.Rect;
+import android.graphics.drawable.Drawable;
+import android.util.AttributeSet;
+import android.view.FocusFinder;
+import android.view.InputDevice;
+import android.view.KeyEvent;
+import android.view.MotionEvent;
+import android.view.VelocityTracker;
+import android.view.View;
+import android.view.ViewConfiguration;
+import android.view.ViewDebug;
+import android.view.ViewGroup;
+import android.view.ViewParent;
+import android.view.animation.AnimationUtils;
 
 import java.util.List;
 
@@ -58,6 +60,8 @@ import java.util.List;
  * within a larger container.
  *
  * <p>HorizontalScrollView only supports horizontal scrolling.
+ *
+ * @attr ref android.R.styleable#HorizontalScrollView_fillViewport
  */
 public class HorizontalScrollView extends FrameLayout {
     private static final int ANIMATED_SCROLL_GAP = ScrollView.ANIMATED_SCROLL_GAP;
@@ -71,13 +75,6 @@ public class HorizontalScrollView extends FrameLayout {
     private OverScroller mScroller;
     private EdgeGlow mEdgeGlowLeft;
     private EdgeGlow mEdgeGlowRight;
-
-    /**
-     * Flag to indicate that we are moving focus ourselves. This is so the
-     * code that watches for focus changes initiated outside this ScrollView
-     * knows that it does not have to do anything.
-     */
-    private boolean mScrollViewMovedFocus;
 
     /**
      * Position of the last motion event.
@@ -113,6 +110,7 @@ public class HorizontalScrollView extends FrameLayout {
      * When set to true, the scroll view measure its child to make it fill the currently
      * visible area.
      */
+    @ViewDebug.ExportedProperty(category = "layout")
     private boolean mFillViewport;
 
     /**
@@ -123,7 +121,7 @@ public class HorizontalScrollView extends FrameLayout {
     private int mTouchSlop;
     private int mMinimumVelocity;
     private int mMaximumVelocity;
-    
+
     private int mOverscrollDistance;
     private int mOverflingDistance;
 
@@ -132,13 +130,13 @@ public class HorizontalScrollView extends FrameLayout {
      * drags/flings if multiple pointers are used.
      */
     private int mActivePointerId = INVALID_POINTER;
-    
+
     /**
      * Sentinel value for no current active pointer.
      * Used by {@link #mActivePointerId}.
      */
     private static final int INVALID_POINTER = -1;
-    
+
     public HorizontalScrollView(Context context) {
         this(context, null);
     }
@@ -260,20 +258,25 @@ public class HorizontalScrollView extends FrameLayout {
     }
 
     /**
-     * Indicates whether this ScrollView's content is stretched to fill the viewport.
+     * Indicates whether this HorizontalScrollView's content is stretched to
+     * fill the viewport.
      *
      * @return True if the content fills the viewport, false otherwise.
+     *
+     * @attr ref android.R.styleable#HorizontalScrollView_fillViewport
      */
     public boolean isFillViewport() {
         return mFillViewport;
     }
 
     /**
-     * Indicates this ScrollView whether it should stretch its content width to fill
-     * the viewport or not.
+     * Indicates this HorizontalScrollView whether it should stretch its content width
+     * to fill the viewport or not.
      *
      * @param fillViewport True to stretch the content's width to the viewport's
      *        boundaries, false otherwise.
+     *
+     * @attr ref android.R.styleable#HorizontalScrollView_fillViewport
      */
     public void setFillViewport(boolean fillViewport) {
         if (fillViewport != mFillViewport) {
@@ -315,13 +318,13 @@ public class HorizontalScrollView extends FrameLayout {
             int width = getMeasuredWidth();
             if (child.getMeasuredWidth() < width) {
                 final FrameLayout.LayoutParams lp = (LayoutParams) child.getLayoutParams();
-    
+
                 int childHeightMeasureSpec = getChildMeasureSpec(heightMeasureSpec, mPaddingTop
                         + mPaddingBottom, lp.height);
                 width -= mPaddingLeft;
                 width -= mPaddingRight;
                 int childWidthMeasureSpec = MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY);
-    
+
                 child.measure(childWidthMeasureSpec, childHeightMeasureSpec);
             }
         }
@@ -393,7 +396,7 @@ public class HorizontalScrollView extends FrameLayout {
         }
         return false;
     }
-    
+
     @Override
     public boolean onInterceptTouchEvent(MotionEvent ev) {
         /*
@@ -446,7 +449,7 @@ public class HorizontalScrollView extends FrameLayout {
                     mIsBeingDragged = false;
                     break;
                 }
-                
+
                 /*
                  * Remember location of down touch.
                  * ACTION_DOWN always refers to pointer index 0.
@@ -576,7 +579,7 @@ public class HorizontalScrollView extends FrameLayout {
                             }
                         }
                     }
-                    
+
                     mActivePointerId = INVALID_POINTER;
                     mIsBeingDragged = false;
 
@@ -613,7 +616,7 @@ public class HorizontalScrollView extends FrameLayout {
         }
         return true;
     }
-    
+
     private void onSecondaryPointerUp(MotionEvent ev) {
         final int pointerIndex = (ev.getAction() & MotionEvent.ACTION_POINTER_INDEX_MASK) >>
                 MotionEvent.ACTION_POINTER_INDEX_SHIFT;
@@ -630,7 +633,41 @@ public class HorizontalScrollView extends FrameLayout {
             }
         }
     }
-    
+
+    @Override
+    public boolean onGenericMotionEvent(MotionEvent event) {
+        if ((event.getSource() & InputDevice.SOURCE_CLASS_POINTER) != 0) {
+            switch (event.getAction()) {
+                case MotionEvent.ACTION_SCROLL: {
+                    if (!mIsBeingDragged) {
+                        final float hscroll;
+                        if ((event.getMetaState() & KeyEvent.META_SHIFT_ON) != 0) {
+                            hscroll = -event.getAxisValue(MotionEvent.AXIS_VSCROLL);
+                        } else {
+                            hscroll = event.getAxisValue(MotionEvent.AXIS_HSCROLL);
+                        }
+                        if (hscroll != 0) {
+                            final int delta = (int) (hscroll * getHorizontalScrollFactor());
+                            final int range = getScrollRange();
+                            int oldScrollX = mScrollX;
+                            int newScrollX = oldScrollX + delta;
+                            if (newScrollX < 0) {
+                                newScrollX = 0;
+                            } else if (newScrollX > range) {
+                                newScrollX = range;
+                            }
+                            if (newScrollX != oldScrollX) {
+                                super.scrollTo(newScrollX, mScrollY);
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return super.onGenericMotionEvent(event);
+    }
+
     @Override
     protected void onOverScrolled(int scrollX, int scrollY,
             boolean clampedX, boolean clampedY) {
@@ -638,6 +675,7 @@ public class HorizontalScrollView extends FrameLayout {
         if (!mScroller.isFinished()) {
             mScrollX = scrollX;
             mScrollY = scrollY;
+            invalidateParentIfNeeded();
             if (clampedX) {
                 mScroller.springBack(mScrollX, mScrollY, 0, getScrollRange(), 0, 0);
             }
@@ -875,10 +913,7 @@ public class HorizontalScrollView extends FrameLayout {
             doScrollX(delta);
         }
 
-        if (newFocused != findFocus() && newFocused.requestFocus(direction)) {
-            mScrollViewMovedFocus = true;
-            mScrollViewMovedFocus = false;
-        }
+        if (newFocused != findFocus()) newFocused.requestFocus(direction);
 
         return handled;
     }
@@ -912,7 +947,7 @@ public class HorizontalScrollView extends FrameLayout {
             if (direction == View.FOCUS_LEFT && getScrollX() < scrollDelta) {
                 scrollDelta = getScrollX();
             } else if (direction == View.FOCUS_RIGHT && getChildCount() > 0) {
-                
+
                 int daRight = getChildAt(0).getRight();
 
                 int screenRight = getScrollX() + getWidth();
@@ -1028,7 +1063,7 @@ public class HorizontalScrollView extends FrameLayout {
         if (count == 0) {
             return contentWidth;
         }
-        
+
         int scrollRange = getChildAt(0).getRight();
         final int scrollX = mScrollX;
         final int overscrollRight = Math.max(0, scrollRange - contentWidth);
@@ -1040,7 +1075,7 @@ public class HorizontalScrollView extends FrameLayout {
 
         return scrollRange;
     }
-    
+
     @Override
     protected int computeHorizontalScrollOffset() {
         return Math.max(0, super.computeHorizontalScrollOffset());
@@ -1229,13 +1264,11 @@ public class HorizontalScrollView extends FrameLayout {
 
     @Override
     public void requestChildFocus(View child, View focused) {
-        if (!mScrollViewMovedFocus) {
-            if (!mIsLayoutDirty) {
-                scrollToChild(focused);
-            } else {
-                // The child may not be laid out yet, we can't compute the scroll yet
-                mChildToScrollTo = focused;
-            }
+        if (!mIsLayoutDirty) {
+            scrollToChild(focused);
+        } else {
+            // The child may not be laid out yet, we can't compute the scroll yet
+            mChildToScrollTo = focused;
         }
         super.requestChildFocus(child, focused);
     }
@@ -1347,25 +1380,24 @@ public class HorizontalScrollView extends FrameLayout {
         if (getChildCount() > 0) {
             int width = getWidth() - mPaddingRight - mPaddingLeft;
             int right = getChildAt(0).getWidth();
-    
-            mScroller.fling(mScrollX, mScrollY, velocityX, 0, 0, 
+
+            mScroller.fling(mScrollX, mScrollY, velocityX, 0, 0,
                     Math.max(0, right - width), 0, 0, width/2, 0);
-    
+
             final boolean movingRight = velocityX > 0;
-    
+
+            View currentFocused = findFocus();
             View newFocused = findFocusableViewInMyBounds(movingRight,
-                    mScroller.getFinalX(), findFocus());
-    
+                    mScroller.getFinalX(), currentFocused);
+
             if (newFocused == null) {
                 newFocused = this;
             }
-    
-            if (newFocused != findFocus()
-                    && newFocused.requestFocus(movingRight ? View.FOCUS_RIGHT : View.FOCUS_LEFT)) {
-                mScrollViewMovedFocus = true;
-                mScrollViewMovedFocus = false;
+
+            if (newFocused != currentFocused) {
+                newFocused.requestFocus(movingRight ? View.FOCUS_RIGHT : View.FOCUS_LEFT);
             }
-    
+
             invalidate();
         }
     }
@@ -1375,6 +1407,7 @@ public class HorizontalScrollView extends FrameLayout {
      *
      * <p>This version also clamps the scrolling to the bounds of our child.
      */
+    @Override
     public void scrollTo(int x, int y) {
         // we rely on the fact the View.scrollBy calls scrollTo.
         if (getChildCount() > 0) {
@@ -1391,11 +1424,12 @@ public class HorizontalScrollView extends FrameLayout {
     public void setOverScrollMode(int mode) {
         if (mode != OVER_SCROLL_NEVER) {
             if (mEdgeGlowLeft == null) {
-                final Resources res = getContext().getResources();
+                Context context = getContext();
+                final Resources res = context.getResources();
                 final Drawable edge = res.getDrawable(R.drawable.overscroll_edge);
                 final Drawable glow = res.getDrawable(R.drawable.overscroll_glow);
-                mEdgeGlowLeft = new EdgeGlow(edge, glow);
-                mEdgeGlowRight = new EdgeGlow(edge, glow);
+                mEdgeGlowLeft = new EdgeGlow(context, edge, glow);
+                mEdgeGlowRight = new EdgeGlow(context, edge, glow);
             }
         } else {
             mEdgeGlowLeft = null;
@@ -1411,11 +1445,11 @@ public class HorizontalScrollView extends FrameLayout {
             final int scrollX = mScrollX;
             if (!mEdgeGlowLeft.isFinished()) {
                 final int restoreCount = canvas.save();
-                final int height = getHeight();
+                final int height = getHeight() - mPaddingTop - mPaddingBottom;
 
                 canvas.rotate(270);
-                canvas.translate(-height * 1.5f, Math.min(0, scrollX));
-                mEdgeGlowLeft.setSize(getHeight() * 2, getWidth());
+                canvas.translate(-height + mPaddingTop, Math.min(0, scrollX));
+                mEdgeGlowLeft.setSize(height, getWidth());
                 if (mEdgeGlowLeft.draw(canvas)) {
                     invalidate();
                 }
@@ -1424,11 +1458,12 @@ public class HorizontalScrollView extends FrameLayout {
             if (!mEdgeGlowRight.isFinished()) {
                 final int restoreCount = canvas.save();
                 final int width = getWidth();
-                final int height = getHeight();
+                final int height = getHeight() - mPaddingTop - mPaddingBottom;
 
                 canvas.rotate(90);
-                canvas.translate(-height / 2, -(Math.max(getScrollRange(), scrollX) + width));
-                mEdgeGlowRight.setSize(height * 2, width);
+                canvas.translate(-mPaddingTop,
+                        -(Math.max(getScrollRange(), scrollX) + width));
+                mEdgeGlowRight.setSize(height, width);
                 if (mEdgeGlowRight.draw(canvas)) {
                     invalidate();
                 }

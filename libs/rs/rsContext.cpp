@@ -18,21 +18,24 @@
 #include "rsContext.h"
 #include "rsThreadIO.h"
 #include <ui/FramebufferNativeWindow.h>
+#include <ui/PixelFormat.h>
 #include <ui/EGLUtils.h>
 #include <ui/egl/android_natives.h>
 
 #include <sys/types.h>
 #include <sys/resource.h>
+#include <sched.h>
 
 #include <cutils/properties.h>
 
-#include <EGL/eglext.h>
 #include <GLES/gl.h>
 #include <GLES/glext.h>
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
 
 #include <cutils/sched_policy.h>
+#include <sys/syscall.h>
+#include <string.h>
 
 using namespace android;
 using namespace android::renderscript;
@@ -41,6 +44,7 @@ pthread_key_t Context::gThreadTLSKey = 0;
 uint32_t Context::gThreadTLSKeyCount = 0;
 uint32_t Context::gGLContextCount = 0;
 pthread_mutex_t Context::gInitMutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t Context::gLibMutex = PTHREAD_MUTEX_INITIALIZER;
 
 static void checkEglError(const char* op, EGLBoolean returnVal = EGL_TRUE) {
     if (returnVal != EGL_TRUE) {
@@ -54,23 +58,64 @@ static void checkEglError(const char* op, EGLBoolean returnVal = EGL_TRUE) {
     }
 }
 
-void Context::initEGL(bool useGL2)
-{
+void printEGLConfiguration(EGLDisplay dpy, EGLConfig config) {
+
+#define X(VAL) {VAL, #VAL}
+    struct {EGLint attribute; const char* name;} names[] = {
+    X(EGL_BUFFER_SIZE),
+    X(EGL_ALPHA_SIZE),
+    X(EGL_BLUE_SIZE),
+    X(EGL_GREEN_SIZE),
+    X(EGL_RED_SIZE),
+    X(EGL_DEPTH_SIZE),
+    X(EGL_STENCIL_SIZE),
+    X(EGL_CONFIG_CAVEAT),
+    X(EGL_CONFIG_ID),
+    X(EGL_LEVEL),
+    X(EGL_MAX_PBUFFER_HEIGHT),
+    X(EGL_MAX_PBUFFER_PIXELS),
+    X(EGL_MAX_PBUFFER_WIDTH),
+    X(EGL_NATIVE_RENDERABLE),
+    X(EGL_NATIVE_VISUAL_ID),
+    X(EGL_NATIVE_VISUAL_TYPE),
+    X(EGL_SAMPLES),
+    X(EGL_SAMPLE_BUFFERS),
+    X(EGL_SURFACE_TYPE),
+    X(EGL_TRANSPARENT_TYPE),
+    X(EGL_TRANSPARENT_RED_VALUE),
+    X(EGL_TRANSPARENT_GREEN_VALUE),
+    X(EGL_TRANSPARENT_BLUE_VALUE),
+    X(EGL_BIND_TO_TEXTURE_RGB),
+    X(EGL_BIND_TO_TEXTURE_RGBA),
+    X(EGL_MIN_SWAP_INTERVAL),
+    X(EGL_MAX_SWAP_INTERVAL),
+    X(EGL_LUMINANCE_SIZE),
+    X(EGL_ALPHA_MASK_SIZE),
+    X(EGL_COLOR_BUFFER_TYPE),
+    X(EGL_RENDERABLE_TYPE),
+    X(EGL_CONFORMANT),
+   };
+#undef X
+
+    for (size_t j = 0; j < sizeof(names) / sizeof(names[0]); j++) {
+        EGLint value = -1;
+        EGLint returnVal = eglGetConfigAttrib(dpy, config, names[j].attribute, &value);
+        EGLint error = eglGetError();
+        if (returnVal && error == EGL_SUCCESS) {
+            LOGV(" %s: %d (0x%x)", names[j].name, value, value);
+        }
+    }
+}
+
+
+bool Context::initGLThread() {
+    pthread_mutex_lock(&gInitMutex);
+    LOGV("initGLThread start %p", this);
+
     mEGL.mNumConfigs = -1;
     EGLint configAttribs[128];
     EGLint *configAttribsPtr = configAttribs;
-    EGLint context_attribs2[] = { EGL_CONTEXT_CLIENT_VERSION, 2,
-            EGL_NONE, GL_NONE, EGL_NONE };
-
-#ifdef HAS_CONTEXT_PRIORITY
-#ifdef EGL_IMG_context_priority
-#warning "using EGL_IMG_context_priority"
-    if (mThreadPriority > 0) {
-        context_attribs2[2] = EGL_CONTEXT_PRIORITY_LEVEL_IMG;
-        context_attribs2[3] = EGL_CONTEXT_PRIORITY_LOW_IMG;
-    }
-#endif
-#endif
+    EGLint context_attribs2[] = { EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE };
 
     memset(configAttribs, 0, sizeof(configAttribs));
 
@@ -78,15 +123,13 @@ void Context::initEGL(bool useGL2)
     configAttribsPtr[1] = EGL_WINDOW_BIT;
     configAttribsPtr += 2;
 
-    if (useGL2) {
-        configAttribsPtr[0] = EGL_RENDERABLE_TYPE;
-        configAttribsPtr[1] = EGL_OPENGL_ES2_BIT;
-        configAttribsPtr += 2;
-    }
+    configAttribsPtr[0] = EGL_RENDERABLE_TYPE;
+    configAttribsPtr[1] = EGL_OPENGL_ES2_BIT;
+    configAttribsPtr += 2;
 
-    if (mUseDepth) {
+    if (mUserSurfaceConfig.depthMin > 0) {
         configAttribsPtr[0] = EGL_DEPTH_SIZE;
-        configAttribsPtr[1] = 16;
+        configAttribsPtr[1] = mUserSurfaceConfig.depthMin;
         configAttribsPtr += 2;
     }
 
@@ -99,38 +142,125 @@ void Context::initEGL(bool useGL2)
     configAttribsPtr[0] = EGL_NONE;
     rsAssert(configAttribsPtr < (configAttribs + (sizeof(configAttribs) / sizeof(EGLint))));
 
-    LOGV("initEGL start");
+    LOGV("%p initEGL start", this);
     mEGL.mDisplay = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     checkEglError("eglGetDisplay");
 
     eglInitialize(mEGL.mDisplay, &mEGL.mMajorVersion, &mEGL.mMinorVersion);
     checkEglError("eglInitialize");
 
-    status_t err = EGLUtils::selectConfigForNativeWindow(mEGL.mDisplay, configAttribs, mWndSurface, &mEGL.mConfig);
+#if 1
+    PixelFormat pf = PIXEL_FORMAT_RGBA_8888;
+    if (mUserSurfaceConfig.alphaMin == 0) {
+        pf = PIXEL_FORMAT_RGBX_8888;
+    }
+
+    status_t err = EGLUtils::selectConfigForPixelFormat(mEGL.mDisplay, configAttribs, pf, &mEGL.mConfig);
     if (err) {
-       LOGE("couldn't find an EGLConfig matching the screen format\n");
+       LOGE("%p, couldn't find an EGLConfig matching the screen format\n", this);
     }
-    //eglChooseConfig(mEGL.mDisplay, configAttribs, &mEGL.mConfig, 1, &mEGL.mNumConfigs);
-
-
-    if (useGL2) {
-        mEGL.mContext = eglCreateContext(mEGL.mDisplay, mEGL.mConfig, EGL_NO_CONTEXT, context_attribs2);
-    } else {
-        mEGL.mContext = eglCreateContext(mEGL.mDisplay, mEGL.mConfig, EGL_NO_CONTEXT, NULL);
+    if (props.mLogVisual) {
+        printEGLConfiguration(mEGL.mDisplay, mEGL.mConfig);
     }
+#else
+    eglChooseConfig(mEGL.mDisplay, configAttribs, &mEGL.mConfig, 1, &mEGL.mNumConfigs);
+#endif
+
+    mEGL.mContext = eglCreateContext(mEGL.mDisplay, mEGL.mConfig, EGL_NO_CONTEXT, context_attribs2);
     checkEglError("eglCreateContext");
     if (mEGL.mContext == EGL_NO_CONTEXT) {
-        LOGE("eglCreateContext returned EGL_NO_CONTEXT");
+        pthread_mutex_unlock(&gInitMutex);
+        LOGE("%p, eglCreateContext returned EGL_NO_CONTEXT", this);
+        return false;
     }
     gGLContextCount++;
+
+
+    EGLint pbuffer_attribs[] = { EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE };
+    mEGL.mSurfaceDefault = eglCreatePbufferSurface(mEGL.mDisplay, mEGL.mConfig, pbuffer_attribs);
+    checkEglError("eglCreatePbufferSurface");
+    if (mEGL.mSurfaceDefault == EGL_NO_SURFACE) {
+        LOGE("eglCreatePbufferSurface returned EGL_NO_SURFACE");
+        pthread_mutex_unlock(&gInitMutex);
+        deinitEGL();
+        return false;
+    }
+
+    EGLBoolean ret = eglMakeCurrent(mEGL.mDisplay, mEGL.mSurfaceDefault, mEGL.mSurfaceDefault, mEGL.mContext);
+    if (ret == EGL_FALSE) {
+        LOGE("eglMakeCurrent returned EGL_FALSE");
+        checkEglError("eglMakeCurrent", ret);
+        pthread_mutex_unlock(&gInitMutex);
+        deinitEGL();
+        return false;
+    }
+
+    mGL.mVersion = glGetString(GL_VERSION);
+    mGL.mVendor = glGetString(GL_VENDOR);
+    mGL.mRenderer = glGetString(GL_RENDERER);
+    mGL.mExtensions = glGetString(GL_EXTENSIONS);
+
+    //LOGV("EGL Version %i %i", mEGL.mMajorVersion, mEGL.mMinorVersion);
+    //LOGV("GL Version %s", mGL.mVersion);
+    //LOGV("GL Vendor %s", mGL.mVendor);
+    //LOGV("GL Renderer %s", mGL.mRenderer);
+    //LOGV("GL Extensions %s", mGL.mExtensions);
+
+    const char *verptr = NULL;
+    if (strlen((const char *)mGL.mVersion) > 9) {
+        if (!memcmp(mGL.mVersion, "OpenGL ES-CM", 12)) {
+            verptr = (const char *)mGL.mVersion + 12;
+        }
+        if (!memcmp(mGL.mVersion, "OpenGL ES ", 10)) {
+            verptr = (const char *)mGL.mVersion + 9;
+        }
+    }
+
+    if (!verptr) {
+        LOGE("Error, OpenGL ES Lite not supported");
+        pthread_mutex_unlock(&gInitMutex);
+        deinitEGL();
+        return false;
+    } else {
+        sscanf(verptr, " %i.%i", &mGL.mMajorVersion, &mGL.mMinorVersion);
+    }
+
+    glGetIntegerv(GL_MAX_VERTEX_ATTRIBS, &mGL.mMaxVertexAttribs);
+    glGetIntegerv(GL_MAX_VERTEX_UNIFORM_VECTORS, &mGL.mMaxVertexUniformVectors);
+    glGetIntegerv(GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS, &mGL.mMaxVertexTextureUnits);
+
+    glGetIntegerv(GL_MAX_VARYING_VECTORS, &mGL.mMaxVaryingVectors);
+    glGetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &mGL.mMaxTextureImageUnits);
+
+    glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &mGL.mMaxFragmentTextureImageUnits);
+    glGetIntegerv(GL_MAX_FRAGMENT_UNIFORM_VECTORS, &mGL.mMaxFragmentUniformVectors);
+
+    mGL.OES_texture_npot = NULL != strstr((const char *)mGL.mExtensions, "GL_OES_texture_npot");
+    mGL.GL_IMG_texture_npot = NULL != strstr((const char *)mGL.mExtensions, "GL_IMG_texture_npot");
+    mGL.GL_NV_texture_npot_2D_mipmap = NULL != strstr((const char *)mGL.mExtensions, "GL_NV_texture_npot_2D_mipmap");
+    mGL.EXT_texture_max_aniso = 1.0f;
+    bool hasAniso = NULL != strstr((const char *)mGL.mExtensions, "GL_EXT_texture_filter_anisotropic");
+    if (hasAniso) {
+        glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &mGL.EXT_texture_max_aniso);
+    }
+
+    LOGV("initGLThread end %p", this);
+    pthread_mutex_unlock(&gInitMutex);
+    return true;
 }
 
-void Context::deinitEGL()
-{
-    LOGV("deinitEGL");
-    setSurface(0, 0, NULL);
-    eglDestroyContext(mEGL.mDisplay, mEGL.mContext);
-    checkEglError("eglDestroyContext");
+void Context::deinitEGL() {
+    LOGV("%p, deinitEGL", this);
+
+    if (mEGL.mContext != EGL_NO_CONTEXT) {
+        eglMakeCurrent(mEGL.mDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        eglDestroySurface(mEGL.mDisplay, mEGL.mSurfaceDefault);
+        if (mEGL.mSurface != EGL_NO_SURFACE) {
+            eglDestroySurface(mEGL.mDisplay, mEGL.mSurface);
+        }
+        eglDestroyContext(mEGL.mDisplay, mEGL.mContext);
+        checkEglError("eglDestroyContext");
+    }
 
     gGLContextCount--;
     if (!gGLContextCount) {
@@ -138,105 +268,116 @@ void Context::deinitEGL()
     }
 }
 
+Context::PushState::PushState(Context *con) {
+    mRsc = con;
+    if (con->mIsGraphicsContext) {
+        mFragment.set(con->getProgramFragment());
+        mVertex.set(con->getProgramVertex());
+        mStore.set(con->getProgramStore());
+        mRaster.set(con->getProgramRaster());
+        mFont.set(con->getFont());
+    }
+}
 
-uint32_t Context::runScript(Script *s, uint32_t launchID)
-{
-    ObjectBaseRef<ProgramFragment> frag(mFragment);
-    ObjectBaseRef<ProgramVertex> vtx(mVertex);
-    ObjectBaseRef<ProgramFragmentStore> store(mFragmentStore);
-    ObjectBaseRef<ProgramRaster> raster(mRaster);
+Context::PushState::~PushState() {
+    if (mRsc->mIsGraphicsContext) {
+        mRsc->setProgramFragment(mFragment.get());
+        mRsc->setProgramVertex(mVertex.get());
+        mRsc->setProgramStore(mStore.get());
+        mRsc->setProgramRaster(mRaster.get());
+        mRsc->setFont(mFont.get());
+    }
+}
 
-    uint32_t ret = s->run(this, launchID);
 
-    mFragment.set(frag);
-    mVertex.set(vtx);
-    mFragmentStore.set(store);
-    mRaster.set(raster);
+uint32_t Context::runScript(Script *s) {
+    PushState(this);
+
+    uint32_t ret = s->run(this);
     return ret;
 }
 
-void Context::checkError(const char *msg) const
-{
+void Context::checkError(const char *msg, bool isFatal) const {
+
     GLenum err = glGetError();
     if (err != GL_NO_ERROR) {
-        LOGE("GL Error, 0x%x, from %s", err, msg);
+        char buf[1024];
+        snprintf(buf, sizeof(buf), "GL Error = 0x%08x, from: %s", err, msg);
+
+        if (isFatal) {
+            setError(RS_ERROR_FATAL_DRIVER, buf);
+        } else {
+            switch (err) {
+            case GL_OUT_OF_MEMORY:
+                setError(RS_ERROR_OUT_OF_MEMORY, buf);
+                break;
+            default:
+                setError(RS_ERROR_DRIVER, buf);
+                break;
+            }
+        }
+
+        LOGE("%p, %s", this, buf);
     }
 }
 
-uint32_t Context::runRootScript()
-{
-    timerSet(RS_TIMER_CLEAR_SWAP);
-    rsAssert(mRootScript->mEnviroment.mIsRoot);
-
-    eglQuerySurface(mEGL.mDisplay, mEGL.mSurface, EGL_WIDTH, &mEGL.mWidth);
-    eglQuerySurface(mEGL.mDisplay, mEGL.mSurface, EGL_HEIGHT, &mEGL.mHeight);
-    glViewport(0, 0, mEGL.mWidth, mEGL.mHeight);
-    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-
-    glClearColor(mRootScript->mEnviroment.mClearColor[0],
-                 mRootScript->mEnviroment.mClearColor[1],
-                 mRootScript->mEnviroment.mClearColor[2],
-                 mRootScript->mEnviroment.mClearColor[3]);
-    if (mUseDepth) {
-        glDepthMask(GL_TRUE);
-        glClearDepthf(mRootScript->mEnviroment.mClearDepth);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    } else {
-        glClear(GL_COLOR_BUFFER_BIT);
-    }
+uint32_t Context::runRootScript() {
+    glViewport(0, 0, mWidth, mHeight);
 
     timerSet(RS_TIMER_SCRIPT);
     mStateFragmentStore.mLast.clear();
-    uint32_t ret = runScript(mRootScript.get(), 0);
+    uint32_t ret = runScript(mRootScript.get());
 
     checkError("runRootScript");
-    if (mError != RS_ERROR_NONE) {
-        // If we have an error condition we stop rendering until
-        // somthing changes that might fix it.
-        ret = 0;
-    }
     return ret;
 }
 
-uint64_t Context::getTime() const
-{
+uint64_t Context::getTime() const {
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
     return t.tv_nsec + ((uint64_t)t.tv_sec * 1000 * 1000 * 1000);
 }
 
-void Context::timerReset()
-{
+void Context::timerReset() {
     for (int ct=0; ct < _RS_TIMER_TOTAL; ct++) {
         mTimers[ct] = 0;
     }
 }
 
-void Context::timerInit()
-{
+void Context::timerInit() {
     mTimeLast = getTime();
     mTimeFrame = mTimeLast;
     mTimeLastFrame = mTimeLast;
     mTimerActive = RS_TIMER_INTERNAL;
+    mAverageFPSFrameCount = 0;
+    mAverageFPSStartTime = mTimeLast;
+    mAverageFPS = 0;
     timerReset();
 }
 
-void Context::timerFrame()
-{
+void Context::timerFrame() {
     mTimeLastFrame = mTimeFrame;
     mTimeFrame = getTime();
+    // Update average fps
+    const uint64_t averageFramerateInterval = 1000 * 1000000;
+    mAverageFPSFrameCount ++;
+    uint64_t inverval = mTimeFrame - mAverageFPSStartTime;
+    if (inverval >= averageFramerateInterval) {
+        inverval = inverval / 1000000;
+        mAverageFPS = (mAverageFPSFrameCount * 1000) / inverval;
+        mAverageFPSFrameCount = 0;
+        mAverageFPSStartTime = mTimeFrame;
+    }
 }
 
-void Context::timerSet(Timers tm)
-{
+void Context::timerSet(Timers tm) {
     uint64_t last = mTimeLast;
     mTimeLast = getTime();
     mTimers[mTimerActive] += mTimeLast - last;
     mTimerActive = tm;
 }
 
-void Context::timerPrint()
-{
+void Context::timerPrint() {
     double total = 0;
     for (int ct = 0; ct < _RS_TIMER_TOTAL; ct++) {
         total += mTimers[ct];
@@ -248,46 +389,57 @@ void Context::timerPrint()
 
 
     if (props.mLogTimes) {
-        LOGV("RS: Frame (%i),   Script %2.1f (%i),  Clear & Swap %2.1f (%i),  Idle %2.1f (%lli),  Internal %2.1f (%lli)",
+        LOGV("RS: Frame (%i),   Script %2.1f%% (%i),  Swap %2.1f%% (%i),  Idle %2.1f%% (%lli),  Internal %2.1f%% (%lli), Avg fps: %u",
              mTimeMSLastFrame,
              100.0 * mTimers[RS_TIMER_SCRIPT] / total, mTimeMSLastScript,
              100.0 * mTimers[RS_TIMER_CLEAR_SWAP] / total, mTimeMSLastSwap,
              100.0 * mTimers[RS_TIMER_IDLE] / total, mTimers[RS_TIMER_IDLE] / 1000000,
-             100.0 * mTimers[RS_TIMER_INTERNAL] / total, mTimers[RS_TIMER_INTERNAL] / 1000000);
+             100.0 * mTimers[RS_TIMER_INTERNAL] / total, mTimers[RS_TIMER_INTERNAL] / 1000000,
+             mAverageFPS);
     }
 }
 
-bool Context::setupCheck()
-{
-    if (checkVersion2_0()) {
-        if (!mShaderCache.lookup(this, mVertex.get(), mFragment.get())) {
-            LOGE("Context::setupCheck() 1 fail");
-            return false;
-        }
-
-        mFragmentStore->setupGL2(this, &mStateFragmentStore);
-        mFragment->setupGL2(this, &mStateFragment, &mShaderCache);
-        mRaster->setupGL2(this, &mStateRaster);
-        mVertex->setupGL2(this, &mStateVertex, &mShaderCache);
-
-    } else {
-        mFragmentStore->setupGL(this, &mStateFragmentStore);
-        mFragment->setupGL(this, &mStateFragment);
-        mRaster->setupGL(this, &mStateRaster);
-        mVertex->setupGL(this, &mStateVertex);
+bool Context::setupCheck() {
+    if (!mShaderCache.lookup(this, mVertex.get(), mFragment.get())) {
+        LOGE("Context::setupCheck() 1 fail");
+        return false;
     }
+
+    mFragmentStore->setupGL2(this, &mStateFragmentStore);
+    mFragment->setupGL2(this, &mStateFragment, &mShaderCache);
+    mRaster->setupGL2(this, &mStateRaster);
+    mVertex->setupGL2(this, &mStateVertex, &mShaderCache);
     return true;
 }
 
-static bool getProp(const char *str)
-{
+void Context::setupProgramStore() {
+    mFragmentStore->setupGL2(this, &mStateFragmentStore);
+}
+
+static bool getProp(const char *str) {
     char buf[PROPERTY_VALUE_MAX];
     property_get(str, buf, "0");
     return 0 != strcmp(buf, "0");
 }
 
-void * Context::threadProc(void *vrsc)
-{
+void Context::displayDebugStats() {
+    char buffer[128];
+    sprintf(buffer, "Avg fps %u, Frame %i ms, Script %i ms", mAverageFPS, mTimeMSLastFrame, mTimeMSLastScript);
+    float oldR, oldG, oldB, oldA;
+    mStateFont.getFontColor(&oldR, &oldG, &oldB, &oldA);
+    uint32_t bufferLen = strlen(buffer);
+
+    float shadowCol = 0.1f;
+    mStateFont.setFontColor(shadowCol, shadowCol, shadowCol, 1.0f);
+    mStateFont.renderText(buffer, bufferLen, 5, getHeight() - 6);
+
+    mStateFont.setFontColor(1.0f, 0.7f, 0.0f, 1.0f);
+    mStateFont.renderText(buffer, bufferLen, 4, getHeight() - 7);
+
+    mStateFont.setFontColor(oldR, oldG, oldB, oldA);
+}
+
+void * Context::threadProc(void *vrsc) {
      Context *rsc = static_cast<Context *>(vrsc);
      rsc->mNativeThreadId = gettid();
 
@@ -298,28 +450,39 @@ void * Context::threadProc(void *vrsc)
      rsc->props.mLogScripts = getProp("debug.rs.script");
      rsc->props.mLogObjects = getProp("debug.rs.object");
      rsc->props.mLogShaders = getProp("debug.rs.shader");
+     rsc->props.mLogShadersAttr = getProp("debug.rs.shader.attributes");
+     rsc->props.mLogShadersUniforms = getProp("debug.rs.shader.uniforms");
+     rsc->props.mLogVisual = getProp("debug.rs.visual");
 
-     ScriptTLSStruct *tlsStruct = new ScriptTLSStruct;
-     if (!tlsStruct) {
+     rsc->mTlsStruct = new ScriptTLSStruct;
+     if (!rsc->mTlsStruct) {
          LOGE("Error allocating tls storage");
+         rsc->setError(RS_ERROR_OUT_OF_MEMORY, "Failed allocation for TLS");
          return NULL;
      }
-     tlsStruct->mContext = rsc;
-     tlsStruct->mScript = NULL;
-     int status = pthread_setspecific(rsc->gThreadTLSKey, tlsStruct);
+     rsc->mTlsStruct->mContext = rsc;
+     rsc->mTlsStruct->mScript = NULL;
+     int status = pthread_setspecific(rsc->gThreadTLSKey, rsc->mTlsStruct);
      if (status) {
          LOGE("pthread_setspecific %i", status);
      }
 
+     if (!rsc->initGLThread()) {
+         rsc->setError(RS_ERROR_OUT_OF_MEMORY, "Failed initializing GL");
+         return NULL;
+     }
+
      if (rsc->mIsGraphicsContext) {
-         rsc->mStateRaster.init(rsc, rsc->mEGL.mWidth, rsc->mEGL.mHeight);
-         rsc->setRaster(NULL);
-         rsc->mStateVertex.init(rsc, rsc->mEGL.mWidth, rsc->mEGL.mHeight);
-         rsc->setVertex(NULL);
-         rsc->mStateFragment.init(rsc, rsc->mEGL.mWidth, rsc->mEGL.mHeight);
-         rsc->setFragment(NULL);
-         rsc->mStateFragmentStore.init(rsc, rsc->mEGL.mWidth, rsc->mEGL.mHeight);
-         rsc->setFragmentStore(NULL);
+         rsc->mStateRaster.init(rsc);
+         rsc->setProgramRaster(NULL);
+         rsc->mStateVertex.init(rsc);
+         rsc->setProgramVertex(NULL);
+         rsc->mStateFragment.init(rsc);
+         rsc->setProgramFragment(NULL);
+         rsc->mStateFragmentStore.init(rsc);
+         rsc->setProgramStore(NULL);
+         rsc->mStateFont.init(rsc);
+         rsc->setFont(NULL);
          rsc->mStateVertexArray.init(rsc);
      }
 
@@ -333,6 +496,11 @@ void * Context::threadProc(void *vrsc)
          uint32_t targetTime = 0;
          if (mDraw && rsc->mIsGraphicsContext) {
              targetTime = rsc->runRootScript();
+
+             if (rsc->props.mLogVisual) {
+                 rsc->displayDebugStats();
+             }
+
              mDraw = targetTime && !rsc->mPaused;
              rsc->timerSet(RS_TIMER_CLEAR_SWAP);
              eglSwapBuffers(rsc->mEGL.mDisplay, rsc->mEGL.mSurface);
@@ -341,10 +509,7 @@ void * Context::threadProc(void *vrsc)
              rsc->timerPrint();
              rsc->timerReset();
          }
-         if (rsc->mObjDestroy.mNeedToEmpty) {
-             rsc->objDestroyOOBRun();
-         }
-         if (rsc->mThreadPriority > 0 && targetTime) {
+         if (targetTime > 1) {
              int32_t t = (targetTime - (int32_t)(rsc->mTimeMSLastScript + rsc->mTimeMSLastSwap)) * 1000;
              if (t > 0) {
                  usleep(t);
@@ -352,35 +517,91 @@ void * Context::threadProc(void *vrsc)
          }
      }
 
-     LOGV("RS Thread exiting");
-     if (rsc->mIsGraphicsContext) {
-         rsc->mRaster.clear();
-         rsc->mFragment.clear();
-         rsc->mVertex.clear();
-         rsc->mFragmentStore.clear();
-         rsc->mRootScript.clear();
-         rsc->mStateRaster.deinit(rsc);
-         rsc->mStateVertex.deinit(rsc);
-         rsc->mStateFragment.deinit(rsc);
-         rsc->mStateFragmentStore.deinit(rsc);
-     }
-     ObjectBase::zeroAllUserRef(rsc);
-
-     rsc->mObjDestroy.mNeedToEmpty = true;
-     rsc->objDestroyOOBRun();
+     LOGV("%p, RS Thread exiting", rsc);
 
      if (rsc->mIsGraphicsContext) {
          pthread_mutex_lock(&gInitMutex);
          rsc->deinitEGL();
          pthread_mutex_unlock(&gInitMutex);
      }
+     delete rsc->mTlsStruct;
 
-     LOGV("RS Thread exited");
+     LOGV("%p, RS Thread exited", rsc);
      return NULL;
 }
 
-void Context::setPriority(int32_t p)
-{
+void Context::destroyWorkerThreadResources() {
+    //LOGV("destroyWorkerThreadResources 1");
+    ObjectBase::zeroAllUserRef(this);
+    if (mIsGraphicsContext) {
+         mRaster.clear();
+         mFragment.clear();
+         mVertex.clear();
+         mFragmentStore.clear();
+         mFont.clear();
+         mRootScript.clear();
+         mStateRaster.deinit(this);
+         mStateVertex.deinit(this);
+         mStateFragment.deinit(this);
+         mStateFragmentStore.deinit(this);
+         mStateFont.deinit(this);
+         mShaderCache.cleanupAll();
+    }
+    //LOGV("destroyWorkerThreadResources 2");
+    mExit = true;
+}
+
+void * Context::helperThreadProc(void *vrsc) {
+     Context *rsc = static_cast<Context *>(vrsc);
+     uint32_t idx = (uint32_t)android_atomic_inc(&rsc->mWorkers.mLaunchCount);
+
+     //LOGV("RS helperThread starting %p idx=%i", rsc, idx);
+
+     rsc->mWorkers.mLaunchSignals[idx].init();
+     rsc->mWorkers.mNativeThreadId[idx] = gettid();
+
+#if 0
+     typedef struct {uint64_t bits[1024 / 64]; } cpu_set_t;
+     cpu_set_t cpuset;
+     memset(&cpuset, 0, sizeof(cpuset));
+     cpuset.bits[idx / 64] |= 1ULL << (idx % 64);
+     int ret = syscall(241, rsc->mWorkers.mNativeThreadId[idx],
+               sizeof(cpuset), &cpuset);
+     LOGE("SETAFFINITY ret = %i %s", ret, EGLUtils::strerror(ret));
+#endif
+
+     setpriority(PRIO_PROCESS, rsc->mWorkers.mNativeThreadId[idx], rsc->mThreadPriority);
+     int status = pthread_setspecific(rsc->gThreadTLSKey, rsc->mTlsStruct);
+     if (status) {
+         LOGE("pthread_setspecific %i", status);
+     }
+
+     while (!rsc->mExit) {
+         rsc->mWorkers.mLaunchSignals[idx].wait();
+         if (rsc->mWorkers.mLaunchCallback) {
+            rsc->mWorkers.mLaunchCallback(rsc->mWorkers.mLaunchData, idx);
+         }
+         android_atomic_dec(&rsc->mWorkers.mRunningCount);
+         rsc->mWorkers.mCompleteSignal.set();
+     }
+
+     //LOGV("RS helperThread exited %p idx=%i", rsc, idx);
+     return NULL;
+}
+
+void Context::launchThreads(WorkerCallback_t cbk, void *data) {
+    mWorkers.mLaunchData = data;
+    mWorkers.mLaunchCallback = cbk;
+    mWorkers.mRunningCount = (int)mWorkers.mCount;
+    for (uint32_t ct = 0; ct < mWorkers.mCount; ct++) {
+        mWorkers.mLaunchSignals[ct].set();
+    }
+    while (mWorkers.mRunningCount) {
+        mWorkers.mCompleteSignal.wait();
+    }
+}
+
+void Context::setPriority(int32_t p) {
     // Note: If we put this in the proper "background" policy
     // the wallpapers can become completly unresponsive at times.
     // This is probably not what we want for something the user is actively
@@ -395,27 +616,45 @@ void Context::setPriority(int32_t p)
         // success; reset the priority as well
     }
 #else
-        setpriority(PRIO_PROCESS, mNativeThreadId, p);
+    setpriority(PRIO_PROCESS, mNativeThreadId, p);
+    for (uint32_t ct=0; ct < mWorkers.mCount; ct++) {
+        setpriority(PRIO_PROCESS, mWorkers.mNativeThreadId[ct], p);
+    }
 #endif
 }
 
-Context::Context(Device *dev, bool isGraphics, bool useDepth)
-{
+Context::Context() {
+    mDev = NULL;
+    mRunning = false;
+    mExit = false;
+    mPaused = false;
+    mObjHead = NULL;
+    mError = RS_ERROR_NONE;
+}
+
+Context * Context::createContext(Device *dev, const RsSurfaceConfig *sc) {
+    Context * rsc = new Context();
+    if (!rsc->initContext(dev, sc)) {
+        delete rsc;
+        return NULL;
+    }
+    return rsc;
+}
+
+bool Context::initContext(Device *dev, const RsSurfaceConfig *sc) {
     pthread_mutex_lock(&gInitMutex);
 
     dev->addContext(this);
     mDev = dev;
-    mRunning = false;
-    mExit = false;
-    mUseDepth = useDepth;
-    mPaused = false;
-    mObjHead = NULL;
-    mError = RS_ERROR_NONE;
-    mErrorMsg = NULL;
+    if (sc) {
+        mUserSurfaceConfig = *sc;
+    } else {
+        memset(&mUserSurfaceConfig, 0, sizeof(mUserSurfaceConfig));
+    }
 
     memset(&mEGL, 0, sizeof(mEGL));
     memset(&mGL, 0, sizeof(mGL));
-    mIsGraphicsContext = isGraphics;
+    mIsGraphicsContext = sc != NULL;
 
     int status;
     pthread_attr_t threadAttr;
@@ -425,10 +664,11 @@ Context::Context(Device *dev, bool isGraphics, bool useDepth)
         if (status) {
             LOGE("Failed to init thread tls key.");
             pthread_mutex_unlock(&gInitMutex);
-            return;
+            return false;
         }
     }
     gThreadTLSKeyCount++;
+
     pthread_mutex_unlock(&gInitMutex);
 
     // Global init done at this point.
@@ -436,39 +676,74 @@ Context::Context(Device *dev, bool isGraphics, bool useDepth)
     status = pthread_attr_init(&threadAttr);
     if (status) {
         LOGE("Failed to init thread attribute.");
-        return;
+        return false;
     }
 
     mWndSurface = NULL;
 
-    objDestroyOOBInit();
     timerInit();
     timerSet(RS_TIMER_INTERNAL);
 
-    LOGV("RS Launching thread");
+    int cpu = sysconf(_SC_NPROCESSORS_ONLN);
+    LOGV("RS Launching thread(s), reported CPU count %i", cpu);
+    if (cpu < 2) cpu = 0;
+
+    mWorkers.mCount = (uint32_t)cpu;
+    mWorkers.mThreadId = (pthread_t *) calloc(mWorkers.mCount, sizeof(pthread_t));
+    mWorkers.mNativeThreadId = (pid_t *) calloc(mWorkers.mCount, sizeof(pid_t));
+    mWorkers.mLaunchSignals = new Signal[mWorkers.mCount];
+    mWorkers.mLaunchCallback = NULL;
     status = pthread_create(&mThreadId, &threadAttr, threadProc, this);
     if (status) {
         LOGE("Failed to start rs context thread.");
+        return false;
     }
-
-    while(!mRunning) {
+    while (!mRunning && (mError == RS_ERROR_NONE)) {
         usleep(100);
     }
 
+    if (mError != RS_ERROR_NONE) {
+        return false;
+    }
+
+    mWorkers.mCompleteSignal.init();
+    mWorkers.mRunningCount = 0;
+    mWorkers.mLaunchCount = 0;
+    for (uint32_t ct=0; ct < mWorkers.mCount; ct++) {
+        status = pthread_create(&mWorkers.mThreadId[ct], &threadAttr, helperThreadProc, this);
+        if (status) {
+            mWorkers.mCount = ct;
+            LOGE("Created fewer than expected number of RS threads.");
+            break;
+        }
+    }
     pthread_attr_destroy(&threadAttr);
+    return true;
 }
 
-Context::~Context()
-{
+Context::~Context() {
     LOGV("Context::~Context");
+
+    mIO.mToCore.flush();
+    rsAssert(mExit);
     mExit = true;
     mPaused = false;
     void *res;
 
     mIO.shutdown();
     int status = pthread_join(mThreadId, &res);
-    mObjDestroy.mNeedToEmpty = true;
-    objDestroyOOBRun();
+
+    // Cleanup compute threads.
+    mWorkers.mLaunchData = NULL;
+    mWorkers.mLaunchCallback = NULL;
+    mWorkers.mRunningCount = (int)mWorkers.mCount;
+    for (uint32_t ct = 0; ct < mWorkers.mCount; ct++) {
+        mWorkers.mLaunchSignals[ct].set();
+    }
+    for (uint32_t ct = 0; ct < mWorkers.mCount; ct++) {
+        int status = pthread_join(mWorkers.mThreadId[ct], &res);
+    }
+    rsAssert(!mWorkers.mRunningCount);
 
     // Global structure cleanup.
     pthread_mutex_lock(&gInitMutex);
@@ -481,38 +756,31 @@ Context::~Context()
         mDev = NULL;
     }
     pthread_mutex_unlock(&gInitMutex);
-
-    objDestroyOOBDestroy();
+    LOGV("Context::~Context done");
 }
 
-void Context::setSurface(uint32_t w, uint32_t h, ANativeWindow *sur)
-{
+void Context::setSurface(uint32_t w, uint32_t h, ANativeWindow *sur) {
     rsAssert(mIsGraphicsContext);
 
     EGLBoolean ret;
-    if (mEGL.mSurface != NULL) {
-        ret = eglMakeCurrent(mEGL.mDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+    // WAR: Some drivers fail to handle 0 size surfaces correcntly.
+    // Use the pbuffer to avoid this pitfall.
+    if ((mEGL.mSurface != NULL) || (w == 0) || (h == 0)) {
+        ret = eglMakeCurrent(mEGL.mDisplay, mEGL.mSurfaceDefault, mEGL.mSurfaceDefault, mEGL.mContext);
         checkEglError("eglMakeCurrent", ret);
 
         ret = eglDestroySurface(mEGL.mDisplay, mEGL.mSurface);
         checkEglError("eglDestroySurface", ret);
 
         mEGL.mSurface = NULL;
-        mEGL.mWidth = 0;
-        mEGL.mHeight = 0;
-        mWidth = 0;
-        mHeight = 0;
+        mWidth = 1;
+        mHeight = 1;
     }
 
     mWndSurface = sur;
     if (mWndSurface != NULL) {
-        bool first = false;
-        if (!mEGL.mContext) {
-            first = true;
-            pthread_mutex_lock(&gInitMutex);
-            initEGL(true);
-            pthread_mutex_unlock(&gInitMutex);
-        }
+        mWidth = w;
+        mHeight = h;
 
         mEGL.mSurface = eglCreateWindowSurface(mEGL.mDisplay, mEGL.mConfig, mWndSurface, NULL);
         checkEglError("eglCreateWindowSurface");
@@ -523,81 +791,26 @@ void Context::setSurface(uint32_t w, uint32_t h, ANativeWindow *sur)
         ret = eglMakeCurrent(mEGL.mDisplay, mEGL.mSurface, mEGL.mSurface, mEGL.mContext);
         checkEglError("eglMakeCurrent", ret);
 
-        eglQuerySurface(mEGL.mDisplay, mEGL.mSurface, EGL_WIDTH, &mEGL.mWidth);
-        eglQuerySurface(mEGL.mDisplay, mEGL.mSurface, EGL_HEIGHT, &mEGL.mHeight);
-        mWidth = w;
-        mHeight = h;
-        mStateVertex.updateSize(this, w, h);
-
-        if ((int)mWidth != mEGL.mWidth || (int)mHeight != mEGL.mHeight) {
-            LOGE("EGL/Surface mismatch  EGL (%i x %i)  SF (%i x %i)", mEGL.mWidth, mEGL.mHeight, mWidth, mHeight);
-        }
-
-        if (first) {
-            mGL.mVersion = glGetString(GL_VERSION);
-            mGL.mVendor = glGetString(GL_VENDOR);
-            mGL.mRenderer = glGetString(GL_RENDERER);
-            mGL.mExtensions = glGetString(GL_EXTENSIONS);
-
-            //LOGV("EGL Version %i %i", mEGL.mMajorVersion, mEGL.mMinorVersion);
-            LOGV("GL Version %s", mGL.mVersion);
-            //LOGV("GL Vendor %s", mGL.mVendor);
-            LOGV("GL Renderer %s", mGL.mRenderer);
-            //LOGV("GL Extensions %s", mGL.mExtensions);
-
-            const char *verptr = NULL;
-            if (strlen((const char *)mGL.mVersion) > 9) {
-                if (!memcmp(mGL.mVersion, "OpenGL ES-CM", 12)) {
-                    verptr = (const char *)mGL.mVersion + 12;
-                }
-                if (!memcmp(mGL.mVersion, "OpenGL ES ", 10)) {
-                    verptr = (const char *)mGL.mVersion + 9;
-                }
-            }
-
-            if (!verptr) {
-                LOGE("Error, OpenGL ES Lite not supported");
-            } else {
-                sscanf(verptr, " %i.%i", &mGL.mMajorVersion, &mGL.mMinorVersion);
-            }
-
-            glGetIntegerv(GL_MAX_VERTEX_ATTRIBS, &mGL.mMaxVertexAttribs);
-            glGetIntegerv(GL_MAX_VERTEX_UNIFORM_VECTORS, &mGL.mMaxVertexUniformVectors);
-            glGetIntegerv(GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS, &mGL.mMaxVertexTextureUnits);
-
-            glGetIntegerv(GL_MAX_VARYING_VECTORS, &mGL.mMaxVaryingVectors);
-            glGetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &mGL.mMaxTextureImageUnits);
-
-            glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &mGL.mMaxFragmentTextureImageUnits);
-            glGetIntegerv(GL_MAX_FRAGMENT_UNIFORM_VECTORS, &mGL.mMaxFragmentUniformVectors);
-
-            mGL.OES_texture_npot = NULL != strstr((const char *)mGL.mExtensions, "GL_OES_texture_npot");
-            mGL.GL_IMG_texture_npot = NULL != strstr((const char *)mGL.mExtensions, "GL_IMG_texture_npot");
-        }
-
+        mStateVertex.updateSize(this);
     }
 }
 
-void Context::pause()
-{
+void Context::pause() {
     rsAssert(mIsGraphicsContext);
     mPaused = true;
 }
 
-void Context::resume()
-{
+void Context::resume() {
     rsAssert(mIsGraphicsContext);
     mPaused = false;
 }
 
-void Context::setRootScript(Script *s)
-{
+void Context::setRootScript(Script *s) {
     rsAssert(mIsGraphicsContext);
     mRootScript.set(s);
 }
 
-void Context::setFragmentStore(ProgramFragmentStore *pfs)
-{
+void Context::setProgramStore(ProgramStore *pfs) {
     rsAssert(mIsGraphicsContext);
     if (pfs == NULL) {
         mFragmentStore.set(mStateFragmentStore.mDefault);
@@ -606,8 +819,7 @@ void Context::setFragmentStore(ProgramFragmentStore *pfs)
     }
 }
 
-void Context::setFragment(ProgramFragment *pf)
-{
+void Context::setProgramFragment(ProgramFragment *pf) {
     rsAssert(mIsGraphicsContext);
     if (pf == NULL) {
         mFragment.set(mStateFragment.mDefault);
@@ -616,8 +828,7 @@ void Context::setFragment(ProgramFragment *pf)
     }
 }
 
-void Context::setRaster(ProgramRaster *pr)
-{
+void Context::setProgramRaster(ProgramRaster *pr) {
     rsAssert(mIsGraphicsContext);
     if (pr == NULL) {
         mRaster.set(mStateRaster.mDefault);
@@ -626,8 +837,7 @@ void Context::setRaster(ProgramRaster *pr)
     }
 }
 
-void Context::setVertex(ProgramVertex *pv)
-{
+void Context::setProgramVertex(ProgramVertex *pv) {
     rsAssert(mIsGraphicsContext);
     if (pv == NULL) {
         mVertex.set(mStateVertex.mDefault);
@@ -636,16 +846,23 @@ void Context::setVertex(ProgramVertex *pv)
     }
 }
 
-void Context::assignName(ObjectBase *obj, const char *name, uint32_t len)
-{
+void Context::setFont(Font *f) {
+    rsAssert(mIsGraphicsContext);
+    if (f == NULL) {
+        mFont.set(mStateFont.mDefault);
+    } else {
+        mFont.set(f);
+    }
+}
+
+void Context::assignName(ObjectBase *obj, const char *name, uint32_t len) {
     rsAssert(!obj->getName());
     obj->setName(name, len);
     mNames.add(obj);
 }
 
-void Context::removeName(ObjectBase *obj)
-{
-    for(size_t ct=0; ct < mNames.size(); ct++) {
+void Context::removeName(ObjectBase *obj) {
+    for (size_t ct=0; ct < mNames.size(); ct++) {
         if (obj == mNames[ct]) {
             mNames.removeAt(ct);
             return;
@@ -653,174 +870,100 @@ void Context::removeName(ObjectBase *obj)
     }
 }
 
-ObjectBase * Context::lookupName(const char *name) const
-{
-    for(size_t ct=0; ct < mNames.size(); ct++) {
-        if (!strcmp(name, mNames[ct]->getName())) {
-            return mNames[ct];
-        }
-    }
-    return NULL;
-}
-
-void Context::appendNameDefines(String8 *str) const
-{
-    char buf[256];
-    for (size_t ct=0; ct < mNames.size(); ct++) {
-        str->append("#define NAMED_");
-        str->append(mNames[ct]->getName());
-        str->append(" ");
-        sprintf(buf, "%i\n", (int)mNames[ct]);
-        str->append(buf);
-    }
-}
-
-bool Context::objDestroyOOBInit()
-{
-    int status = pthread_mutex_init(&mObjDestroy.mMutex, NULL);
-    if (status) {
-        LOGE("Context::ObjDestroyOOBInit mutex init failure");
-        return false;
-    }
-    return true;
-}
-
-void Context::objDestroyOOBRun()
-{
-    if (mObjDestroy.mNeedToEmpty) {
-        int status = pthread_mutex_lock(&mObjDestroy.mMutex);
-        if (status) {
-            LOGE("Context::ObjDestroyOOBRun: error %i locking for OOBRun.", status);
-            return;
-        }
-
-        for (size_t ct = 0; ct < mObjDestroy.mDestroyList.size(); ct++) {
-            mObjDestroy.mDestroyList[ct]->decUserRef();
-        }
-        mObjDestroy.mDestroyList.clear();
-        mObjDestroy.mNeedToEmpty = false;
-
-        status = pthread_mutex_unlock(&mObjDestroy.mMutex);
-        if (status) {
-            LOGE("Context::ObjDestroyOOBRun: error %i unlocking for set condition.", status);
-        }
-    }
-}
-
-void Context::objDestroyOOBDestroy()
-{
-    rsAssert(!mObjDestroy.mNeedToEmpty);
-    pthread_mutex_destroy(&mObjDestroy.mMutex);
-}
-
-void Context::objDestroyAdd(ObjectBase *obj)
-{
-    int status = pthread_mutex_lock(&mObjDestroy.mMutex);
-    if (status) {
-        LOGE("Context::ObjDestroyOOBRun: error %i locking for OOBRun.", status);
-        return;
+RsMessageToClientType Context::peekMessageToClient(size_t *receiveLen, uint32_t *subID, bool wait) {
+    *receiveLen = 0;
+    if (!wait && mIO.mToClient.isEmpty()) {
+        return RS_MESSAGE_TO_CLIENT_NONE;
     }
 
-    mObjDestroy.mNeedToEmpty = true;
-    mObjDestroy.mDestroyList.add(obj);
-
-    status = pthread_mutex_unlock(&mObjDestroy.mMutex);
-    if (status) {
-        LOGE("Context::ObjDestroyOOBRun: error %i unlocking for set condition.", status);
+    uint32_t bytesData = 0;
+    uint32_t commandID = 0;
+    const uint32_t *d = (const uint32_t *)mIO.mToClient.get(&commandID, &bytesData);
+    *receiveLen = bytesData - sizeof(uint32_t);
+    if (bytesData) {
+        *subID = d[0];
     }
+    return (RsMessageToClientType)commandID;
 }
 
-uint32_t Context::getMessageToClient(void *data, size_t *receiveLen, size_t bufferLen, bool wait)
-{
+RsMessageToClientType Context::getMessageToClient(void *data, size_t *receiveLen, uint32_t *subID, size_t bufferLen, bool wait) {
     //LOGE("getMessageToClient %i %i", bufferLen, wait);
-    if (!wait) {
-        if (mIO.mToClient.isEmpty()) {
-            // No message to get and not going to wait for one.
-            receiveLen = 0;
-            return 0;
-        }
+    *receiveLen = 0;
+    if (!wait && mIO.mToClient.isEmpty()) {
+        return RS_MESSAGE_TO_CLIENT_NONE;
     }
 
     //LOGE("getMessageToClient 2 con=%p", this);
     uint32_t bytesData = 0;
     uint32_t commandID = 0;
-    const void *d = mIO.mToClient.get(&commandID, &bytesData);
+    const uint32_t *d = (const uint32_t *)mIO.mToClient.get(&commandID, &bytesData);
     //LOGE("getMessageToClient 3    %i  %i", commandID, bytesData);
 
-    *receiveLen = bytesData;
+    *receiveLen = bytesData - sizeof(uint32_t);
+    *subID = d[0];
+
+    //LOGE("getMessageToClient  %i %i", commandID, *subID);
     if (bufferLen >= bytesData) {
-        memcpy(data, d, bytesData);
+        memcpy(data, d+1, *receiveLen);
         mIO.mToClient.next();
-        return commandID;
+        return (RsMessageToClientType)commandID;
     }
-    return 0;
+    return RS_MESSAGE_TO_CLIENT_RESIZE;
 }
 
-bool Context::sendMessageToClient(void *data, uint32_t cmdID, size_t len, bool waitForSpace)
-{
-    //LOGE("sendMessageToClient %i %i %i", cmdID, len, waitForSpace);
+bool Context::sendMessageToClient(const void *data, RsMessageToClientType cmdID,
+                                  uint32_t subID, size_t len, bool waitForSpace) const {
+    //LOGE("sendMessageToClient %i %i %i %i", cmdID, subID, len, waitForSpace);
     if (cmdID == 0) {
         LOGE("Attempting to send invalid command 0 to client.");
         return false;
     }
     if (!waitForSpace) {
-        if (mIO.mToClient.getFreeSpace() < len) {
+        if (!mIO.mToClient.makeSpaceNonBlocking(len + 12)) {
             // Not enough room, and not waiting.
             return false;
         }
     }
     //LOGE("sendMessageToClient 2");
-    void *p = mIO.mToClient.reserve(len);
-    memcpy(p, data, len);
-    mIO.mToClient.commit(cmdID, len);
+    uint32_t *p = (uint32_t *)mIO.mToClient.reserve(len + sizeof(subID));
+    p[0] = subID;
+    if (len > 0) {
+        memcpy(p+1, data, len);
+    }
+    mIO.mToClient.commit(cmdID, len + sizeof(subID));
     //LOGE("sendMessageToClient 3");
     return true;
 }
 
-void Context::initToClient()
-{
-    while(!mRunning) {
+void Context::initToClient() {
+    while (!mRunning) {
         usleep(100);
     }
 }
 
-void Context::deinitToClient()
-{
+void Context::deinitToClient() {
     mIO.mToClient.shutdown();
 }
 
-const char * Context::getError(RsError *err)
-{
-    *err = mError;
-    mError = RS_ERROR_NONE;
-    if (*err != RS_ERROR_NONE) {
-        return mErrorMsg;
-    }
-    return NULL;
-}
-
-void Context::setError(RsError e, const char *msg)
-{
+void Context::setError(RsError e, const char *msg) const {
     mError = e;
-    mErrorMsg = msg;
+    sendMessageToClient(msg, RS_MESSAGE_TO_CLIENT_ERROR, e, strlen(msg) + 1, true);
 }
 
 
-void Context::dumpDebug() const
-{
+void Context::dumpDebug() const {
     LOGE("RS Context debug %p", this);
     LOGE("RS Context debug");
 
     LOGE(" EGL ver %i %i", mEGL.mMajorVersion, mEGL.mMinorVersion);
-    LOGE(" EGL context %p  surface %p,  w=%i h=%i  Display=%p", mEGL.mContext,
-         mEGL.mSurface, mEGL.mWidth, mEGL.mHeight, mEGL.mDisplay);
+    LOGE(" EGL context %p  surface %p,  Display=%p", mEGL.mContext, mEGL.mSurface, mEGL.mDisplay);
     LOGE(" GL vendor: %s", mGL.mVendor);
     LOGE(" GL renderer: %s", mGL.mRenderer);
     LOGE(" GL Version: %s", mGL.mVersion);
     LOGE(" GL Extensions: %s", mGL.mExtensions);
     LOGE(" GL int Versions %i %i", mGL.mMajorVersion, mGL.mMinorVersion);
     LOGE(" RS width %i, height %i", mWidth, mHeight);
-    LOGE(" RS running %i, exit %i, useDepth %i, paused %i", mRunning, mExit, mUseDepth, mPaused);
+    LOGE(" RS running %i, exit %i, paused %i", mRunning, mExit, mPaused);
     LOGE(" RS pThreadID %li, nativeThreadID %i", mThreadId, mNativeThreadId);
 
     LOGV("MAX Textures %i, %i  %i", mGL.mMaxVertexTextureUnits, mGL.mMaxFragmentTextureImageUnits, mGL.mMaxTextureImageUnits);
@@ -835,15 +978,15 @@ void Context::dumpDebug() const
 namespace android {
 namespace renderscript {
 
+void rsi_ContextFinish(Context *rsc) {
+}
 
-void rsi_ContextBindRootScript(Context *rsc, RsScript vs)
-{
+void rsi_ContextBindRootScript(Context *rsc, RsScript vs) {
     Script *s = static_cast<Script *>(vs);
     rsc->setRootScript(s);
 }
 
-void rsi_ContextBindSampler(Context *rsc, uint32_t slot, RsSampler vs)
-{
+void rsi_ContextBindSampler(Context *rsc, uint32_t slot, RsSampler vs) {
     Sampler *s = static_cast<Sampler *>(vs);
 
     if (slot > RS_MAX_SAMPLER_SLOT) {
@@ -854,124 +997,115 @@ void rsi_ContextBindSampler(Context *rsc, uint32_t slot, RsSampler vs)
     s->bindToContext(&rsc->mStateSampler, slot);
 }
 
-void rsi_ContextBindProgramFragmentStore(Context *rsc, RsProgramFragmentStore vpfs)
-{
-    ProgramFragmentStore *pfs = static_cast<ProgramFragmentStore *>(vpfs);
-    rsc->setFragmentStore(pfs);
+void rsi_ContextBindProgramStore(Context *rsc, RsProgramStore vpfs) {
+    ProgramStore *pfs = static_cast<ProgramStore *>(vpfs);
+    rsc->setProgramStore(pfs);
 }
 
-void rsi_ContextBindProgramFragment(Context *rsc, RsProgramFragment vpf)
-{
+void rsi_ContextBindProgramFragment(Context *rsc, RsProgramFragment vpf) {
     ProgramFragment *pf = static_cast<ProgramFragment *>(vpf);
-    rsc->setFragment(pf);
+    rsc->setProgramFragment(pf);
 }
 
-void rsi_ContextBindProgramRaster(Context *rsc, RsProgramRaster vpr)
-{
+void rsi_ContextBindProgramRaster(Context *rsc, RsProgramRaster vpr) {
     ProgramRaster *pr = static_cast<ProgramRaster *>(vpr);
-    rsc->setRaster(pr);
+    rsc->setProgramRaster(pr);
 }
 
-void rsi_ContextBindProgramVertex(Context *rsc, RsProgramVertex vpv)
-{
+void rsi_ContextBindProgramVertex(Context *rsc, RsProgramVertex vpv) {
     ProgramVertex *pv = static_cast<ProgramVertex *>(vpv);
-    rsc->setVertex(pv);
+    rsc->setProgramVertex(pv);
 }
 
-void rsi_AssignName(Context *rsc, void * obj, const char *name, uint32_t len)
-{
+void rsi_ContextBindFont(Context *rsc, RsFont vfont) {
+    Font *font = static_cast<Font *>(vfont);
+    rsc->setFont(font);
+}
+
+void rsi_AssignName(Context *rsc, void * obj, const char *name, uint32_t len) {
     ObjectBase *ob = static_cast<ObjectBase *>(obj);
     rsc->assignName(ob, name, len);
 }
 
-void rsi_ObjDestroy(Context *rsc, void *obj)
-{
-    ObjectBase *ob = static_cast<ObjectBase *>(obj);
+void rsi_ObjDestroy(Context *rsc, void *optr) {
+    ObjectBase *ob = static_cast<ObjectBase *>(optr);
     rsc->removeName(ob);
     ob->decUserRef();
 }
 
-void rsi_ContextPause(Context *rsc)
-{
+void rsi_ContextPause(Context *rsc) {
     rsc->pause();
 }
 
-void rsi_ContextResume(Context *rsc)
-{
+void rsi_ContextResume(Context *rsc) {
     rsc->resume();
 }
 
-void rsi_ContextSetSurface(Context *rsc, uint32_t w, uint32_t h, ANativeWindow *sur)
-{
+void rsi_ContextSetSurface(Context *rsc, uint32_t w, uint32_t h, ANativeWindow *sur) {
     rsc->setSurface(w, h, sur);
 }
 
-void rsi_ContextSetPriority(Context *rsc, int32_t p)
-{
+void rsi_ContextSetPriority(Context *rsc, int32_t p) {
     rsc->setPriority(p);
 }
 
-void rsi_ContextDump(Context *rsc, int32_t bits)
-{
+void rsi_ContextDump(Context *rsc, int32_t bits) {
     ObjectBase::dumpAll(rsc);
 }
 
-const char * rsi_ContextGetError(Context *rsc, RsError *e)
-{
-    const char *msg = rsc->getError(e);
-    if (*e != RS_ERROR_NONE) {
-        LOGE("RS Error %i %s", *e, msg);
-    }
-    return msg;
+void rsi_ContextDestroyWorker(Context *rsc) {
+    rsc->destroyWorkerThreadResources();;
 }
 
 }
 }
 
+void rsContextDestroy(RsContext vcon) {
+    LOGV("rsContextDestroy %p", vcon);
+    Context *rsc = static_cast<Context *>(vcon);
+    rsContextDestroyWorker(rsc);
+    delete rsc;
+    LOGV("rsContextDestroy 2 %p", vcon);
+}
 
-RsContext rsContextCreate(RsDevice vdev, uint32_t version)
-{
+RsContext rsContextCreate(RsDevice vdev, uint32_t version) {
     LOGV("rsContextCreate %p", vdev);
     Device * dev = static_cast<Device *>(vdev);
-    Context *rsc = new Context(dev, false, false);
+    Context *rsc = Context::createContext(dev, NULL);
     return rsc;
 }
 
-RsContext rsContextCreateGL(RsDevice vdev, uint32_t version, bool useDepth)
-{
-    LOGV("rsContextCreateGL %p, %i", vdev, useDepth);
+RsContext rsContextCreateGL(RsDevice vdev, uint32_t version, RsSurfaceConfig sc) {
+    LOGV("rsContextCreateGL %p", vdev);
     Device * dev = static_cast<Device *>(vdev);
-    Context *rsc = new Context(dev, true, useDepth);
+    Context *rsc = Context::createContext(dev, &sc);
+    LOGV("rsContextCreateGL ret %p ", rsc);
     return rsc;
 }
 
-void rsContextDestroy(RsContext vrsc)
-{
+RsMessageToClientType rsContextPeekMessage(RsContext vrsc, size_t *receiveLen, uint32_t *subID, bool wait) {
     Context * rsc = static_cast<Context *>(vrsc);
-    delete rsc;
+    return rsc->peekMessageToClient(receiveLen, subID, wait);
 }
 
-void rsObjDestroyOOB(RsContext vrsc, void *obj)
-{
+RsMessageToClientType rsContextGetMessage(RsContext vrsc, void *data, size_t *receiveLen, uint32_t *subID, size_t bufferLen, bool wait) {
     Context * rsc = static_cast<Context *>(vrsc);
-    rsc->objDestroyAdd(static_cast<ObjectBase *>(obj));
+    return rsc->getMessageToClient(data, receiveLen, subID, bufferLen, wait);
 }
 
-uint32_t rsContextGetMessage(RsContext vrsc, void *data, size_t *receiveLen, size_t bufferLen, bool wait)
-{
-    Context * rsc = static_cast<Context *>(vrsc);
-    return rsc->getMessageToClient(data, receiveLen, bufferLen, wait);
-}
-
-void rsContextInitToClient(RsContext vrsc)
-{
+void rsContextInitToClient(RsContext vrsc) {
     Context * rsc = static_cast<Context *>(vrsc);
     rsc->initToClient();
 }
 
-void rsContextDeinitToClient(RsContext vrsc)
-{
+void rsContextDeinitToClient(RsContext vrsc) {
     Context * rsc = static_cast<Context *>(vrsc);
     rsc->deinitToClient();
 }
 
+// Only to be called at a3d load time, before object is visible to user
+// not thread safe
+void rsaGetName(RsContext con, void * obj, const char **name) {
+    ObjectBase *ob = static_cast<ObjectBase *>(obj);
+    (*name) = ob->getName();
+}

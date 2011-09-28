@@ -30,7 +30,6 @@ import android.content.pm.IPackageMoveObserver;
 import android.content.pm.IPackageStatsObserver;
 import android.content.pm.InstrumentationInfo;
 import android.content.pm.PackageInfo;
-import android.content.pm.ParceledListSlice;
 import android.content.pm.ProviderInfo;
 import android.content.pm.PermissionGroupInfo;
 import android.content.pm.PermissionInfo;
@@ -110,21 +109,9 @@ interface IPackageManager {
     List<ResolveInfo> queryIntentServices(in Intent intent,
             String resolvedType, int flags);
 
-    /**
-     * This implements getInstalledPackages via a "last returned row"
-     * mechanism that is not exposed in the API. This is to get around the IPC
-     * limit that kicks in when flags are included that bloat up the data
-     * returned.
-     */
-    ParceledListSlice getInstalledPackages(int flags, in String lastRead);
+    List<PackageInfo> getInstalledPackages(int flags);
 
-    /**
-     * This implements getInstalledApplications via a "last returned row"
-     * mechanism that is not exposed in the API. This is to get around the IPC
-     * limit that kicks in when flags are included that bloat up the data
-     * returned.
-     */
-    ParceledListSlice getInstalledApplications(int flags, in String lastRead);
+    List<ApplicationInfo> getInstalledApplications(int flags);
 
     /**
      * Retrieve all applications that are marked as persistent.
@@ -170,6 +157,8 @@ interface IPackageManager {
             in String installerPackageName);
 
     void finishPackageInstall(int token);
+
+    void setInstallerPackageName(in String targetPackage, in String installerPackageName);
 
     /**
      * Delete a package.
@@ -220,6 +209,12 @@ interface IPackageManager {
      */
     int getApplicationEnabledSetting(in String packageName);
     
+    /**
+     * Set whether the given package should be considered stopped, making
+     * it not visible to implicit intents that filter out stopped packages.
+     */
+    void setPackageStoppedState(String packageName, boolean stopped);
+
     /**
      * Free storage by deleting LRU sorted list of cache files across
      * all applications. If the currently available free storage

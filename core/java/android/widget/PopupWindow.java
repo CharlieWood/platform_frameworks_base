@@ -19,22 +19,24 @@ package android.widget;
 import com.android.internal.R;
 
 import android.content.Context;
+import android.content.res.Resources;
 import android.content.res.TypedArray;
-import android.view.KeyEvent;
-import android.view.MotionEvent;
-import android.view.View;
-import android.view.WindowManager;
-import android.view.Gravity;
-import android.view.ViewGroup;
-import android.view.ViewTreeObserver;
-import android.view.ViewTreeObserver.OnScrollChangedListener;
-import android.view.View.OnTouchListener;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.StateListDrawable;
+import android.os.Build;
 import android.os.IBinder;
 import android.util.AttributeSet;
+import android.view.Gravity;
+import android.view.KeyEvent;
+import android.view.MotionEvent;
+import android.view.View;
+import android.view.View.OnTouchListener;
+import android.view.ViewGroup;
+import android.view.ViewTreeObserver;
+import android.view.ViewTreeObserver.OnScrollChangedListener;
+import android.view.WindowManager;
 
 import java.lang.ref.WeakReference;
 
@@ -81,12 +83,14 @@ public class PopupWindow {
     private View mPopupView;
     private boolean mFocusable;
     private int mInputMethodMode = INPUT_METHOD_FROM_FOCUSABLE;
-    private int mSoftInputMode;
+    private int mSoftInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_UNCHANGED;
     private boolean mTouchable = true;
     private boolean mOutsideTouchable = false;
     private boolean mClippingEnabled = true;
-    private boolean mSplitTouchEnabled;
+    private int mSplitTouchEnabled = -1;
     private boolean mLayoutInScreen;
+    private boolean mClipToScreen;
+    private boolean mAllowScrollingAnchorParent = true;
 
     private OnTouchListener mTouchInterceptor;
     
@@ -99,7 +103,7 @@ public class PopupWindow {
 
     private int mPopupWidth;
     private int mPopupHeight;
-    
+
     private int[] mDrawingLocation = new int[2];
     private int[] mScreenLocation = new int[2];
     private Rect mTempRect = new Rect();
@@ -124,7 +128,7 @@ public class PopupWindow {
     private OnScrollChangedListener mOnScrollChangedListener =
         new OnScrollChangedListener() {
             public void onScrollChanged() {
-                View anchor = mAnchor.get();
+                View anchor = mAnchor != null ? mAnchor.get() : null;
                 if (anchor != null && mPopupView != null) {
                     WindowManager.LayoutParams p = (WindowManager.LayoutParams)
                             mPopupView.getLayoutParams();
@@ -160,12 +164,21 @@ public class PopupWindow {
      * <p>The popup does provide a background.</p>
      */
     public PopupWindow(Context context, AttributeSet attrs, int defStyle) {
+        this(context, attrs, defStyle, 0);
+    }
+    
+    /**
+     * <p>Create a new, empty, non focusable popup window of dimension (0,0).</p>
+     * 
+     * <p>The popup does not provide a background.</p>
+     */
+    public PopupWindow(Context context, AttributeSet attrs, int defStyleAttr, int defStyleRes) {
         mContext = context;
         mWindowManager = (WindowManager)context.getSystemService(Context.WINDOW_SERVICE);
 
         TypedArray a =
             context.obtainStyledAttributes(
-                attrs, com.android.internal.R.styleable.PopupWindow, defStyle, 0);
+                attrs, com.android.internal.R.styleable.PopupWindow, defStyleAttr, defStyleRes);
 
         mBackground = a.getDrawable(R.styleable.PopupWindow_popupBackground);
 
@@ -365,8 +378,7 @@ public class PopupWindow {
      * <p>Change the popup's content. The content is represented by an instance
      * of {@link android.view.View}.</p>
      *
-     * <p>This method has no effect if called when the popup is showing.  To
-     * apply it while a popup is showing, call </p>
+     * <p>This method has no effect if called when the popup is showing.</p>
      *
      * @param contentView the new content for the popup
      *
@@ -571,22 +583,45 @@ public class PopupWindow {
     }
 
     /**
+     * Clip this popup window to the screen, but not to the containing window.
+     *
+     * @param enabled True to clip to the screen.
+     * @hide
+     */
+    public void setClipToScreenEnabled(boolean enabled) {
+        mClipToScreen = enabled;
+        setClippingEnabled(!enabled);
+    }
+
+    /**
+     * Allow PopupWindow to scroll the anchor's parent to provide more room
+     * for the popup. Enabled by default.
+     *
+     * @param enabled True to scroll the anchor's parent when more room is desired by the popup.
+     */
+    void setAllowScrollingAnchorParent(boolean enabled) {
+        mAllowScrollingAnchorParent = enabled;
+    }
+    
+    /**
      * <p>Indicates whether the popup window supports splitting touches.</p>
      * 
      * @return true if the touch splitting is enabled, false otherwise
      * 
      * @see #setSplitTouchEnabled(boolean)
-     * @hide
      */
     public boolean isSplitTouchEnabled() {
-        return mSplitTouchEnabled;
+        if (mSplitTouchEnabled < 0 && mContext != null) {
+            return mContext.getApplicationInfo().targetSdkVersion >= Build.VERSION_CODES.HONEYCOMB;
+        }
+        return mSplitTouchEnabled == 1;
     }
 
     /**
      * <p>Allows the popup window to split touches across other windows that also
-     * support split touch.  When this flag is not set, the first pointer
+     * support split touch.  When this flag is false, the first pointer
      * that goes down determines the window to which all subsequent touches
-     * go until all pointers go up.  When this flag is set, each pointer
+     * go until all pointers go up.  When this flag is true, each pointer
      * (not necessarily the first) that goes down determines the window
      * to which all subsequent touches of that pointer will go until that
      * pointer goes up thereby enabling touches with multiple pointers
@@ -594,10 +629,9 @@ public class PopupWindow {
      *
      * @param enabled true if the split touches should be enabled, false otherwise
      * @see #isSplitTouchEnabled()
-     * @hide
      */
     public void setSplitTouchEnabled(boolean enabled) {
-        mSplitTouchEnabled = enabled;
+        mSplitTouchEnabled = enabled ? 1 : 0;
     }
 
     /**
@@ -764,6 +798,8 @@ public class PopupWindow {
         p.gravity = gravity;
         p.x = x;
         p.y = y;
+        if (mHeightMode < 0) p.height = mLastHeight = mHeightMode;
+        if (mWidthMode < 0) p.width = mLastWidth = mWidthMode;
         invokePopup(p);
     }
 
@@ -968,7 +1004,7 @@ public class PopupWindow {
         if (!mClippingEnabled) {
             curFlags |= WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS;
         }
-        if (mSplitTouchEnabled) {
+        if (isSplitTouchEnabled()) {
             curFlags |= WindowManager.LayoutParams.FLAG_SPLIT_TOUCH;
         }
         if (mLayoutInScreen) {
@@ -1003,7 +1039,7 @@ public class PopupWindow {
      *
      * @return true if the popup is translated upwards to fit on screen
      */
-    private boolean findDropDownPosition(View anchor, WindowManager.LayoutParams p,
+    boolean findDropDownPosition(View anchor, WindowManager.LayoutParams p,
             int xoff, int yoff) {
 
         anchor.getLocationInWindow(mDrawingLocation);
@@ -1023,11 +1059,13 @@ public class PopupWindow {
             // if the drop down disappears at the bottom of the screen. we try to
             // scroll a parent scrollview or move the drop down back up on top of
             // the edit box
-            int scrollX = anchor.getScrollX();
-            int scrollY = anchor.getScrollY();
-            Rect r = new Rect(scrollX, scrollY,  scrollX + mPopupWidth + xoff,
-                    scrollY + mPopupHeight + anchor.getHeight() + yoff);
-            anchor.requestRectangleOnScreen(r, true);
+            if (mAllowScrollingAnchorParent) {
+                int scrollX = anchor.getScrollX();
+                int scrollY = anchor.getScrollY();
+                Rect r = new Rect(scrollX, scrollY,  scrollX + mPopupWidth + xoff,
+                        scrollY + mPopupHeight + anchor.getHeight() + yoff);
+                anchor.requestRectangleOnScreen(r, true);
+            }
 
             // now we re-evaluate the space available, and decide from that
             // whether the pop-up will go above or below the anchor.
@@ -1045,6 +1083,28 @@ public class PopupWindow {
                 p.y = root.getHeight() - mDrawingLocation[1] + yoff;
             } else {
                 p.y = mDrawingLocation[1] + anchor.getHeight() + yoff;
+            }
+        }
+
+        if (mClipToScreen) {
+            final int displayFrameWidth = displayFrame.right - displayFrame.left;
+
+            int right = p.x + p.width;
+            if (right > displayFrameWidth) {
+                p.x -= right - displayFrameWidth;
+            }
+            if (p.x < displayFrame.left) {
+                p.x = displayFrame.left;
+                p.width = Math.min(p.width, displayFrameWidth);
+            }
+
+            if (onTop) {
+                int popupTop = mScreenLocation[1] + yoff - mPopupHeight;
+                if (popupTop < 0) {
+                    p.y += popupTop;
+                }
+            } else {
+                p.y = Math.max(p.y, displayFrame.top);
             }
         }
 
@@ -1108,7 +1168,9 @@ public class PopupWindow {
         
         int bottomEdge = displayFrame.bottom;
         if (ignoreBottomDecorations) {
-            bottomEdge = anchor.getContext().getResources().getDisplayMetrics().heightPixels;
+            Resources res = anchor.getContext().getResources();
+            bottomEdge = res.getDisplayMetrics().heightPixels -
+                    (int) res.getDimension(com.android.internal.R.dimen.screen_margin_bottom);
         }
         final int distanceToBottom = bottomEdge - (anchorPos[1] + anchor.getHeight()) - yOffset;
         final int distanceToTop = anchorPos[1] - displayFrame.top + yOffset;
@@ -1311,6 +1373,7 @@ public class PopupWindow {
      * height can be set to -1 to update location only.  Calling this function
      * also updates the window with the current popup state as
      * described for {@link #update()}.</p>
+     *
      * <p>If the view later scrolls to move <code>anchor</code> to a different
      * location, the popup will be moved correspondingly.</p>
      *
@@ -1332,9 +1395,13 @@ public class PopupWindow {
         }
 
         WeakReference<View> oldAnchor = mAnchor;
-        if (oldAnchor == null || oldAnchor.get() != anchor ||
-                (updateLocation && (mAnchorXoff != xoff || mAnchorYoff != yoff))) {
+        final boolean needsUpdate = updateLocation && (mAnchorXoff != xoff || mAnchorYoff != yoff);
+        if (oldAnchor == null || oldAnchor.get() != anchor || (needsUpdate && !mIsDropdown)) {
             registerForScrollChanged(anchor, xoff, yoff);
+        } else if (needsUpdate) {
+            // No need to register again if this is a DropDown, showAsDropDown already did.
+            mAnchorXoff = xoff;
+            mAnchorYoff = yoff;
         }
 
         WindowManager.LayoutParams p = (WindowManager.LayoutParams) mPopupView.getLayoutParams();
@@ -1401,6 +1468,7 @@ public class PopupWindow {
     }
 
     private class PopupViewContainer extends FrameLayout {
+        private static final String TAG = "PopupWindow.PopupViewContainer";
 
         public PopupViewContainer(Context context) {
             super(context);
@@ -1423,12 +1491,17 @@ public class PopupWindow {
             if (event.getKeyCode() == KeyEvent.KEYCODE_BACK) {
                 if (event.getAction() == KeyEvent.ACTION_DOWN
                         && event.getRepeatCount() == 0) {
-                    getKeyDispatcherState().startTracking(event, this);
+                    KeyEvent.DispatcherState state = getKeyDispatcherState();
+                    if (state != null) {
+                        state.startTracking(event, this);
+                    }
                     return true;
-                } else if (event.getAction() == KeyEvent.ACTION_UP
-                        && getKeyDispatcherState().isTracking(event) && !event.isCanceled()) {
-                    dismiss();
-                    return true;
+                } else if (event.getAction() == KeyEvent.ACTION_UP) {
+                    KeyEvent.DispatcherState state = getKeyDispatcherState();
+                    if (state != null && state.isTracking(event) && !event.isCanceled()) {
+                        dismiss();
+                        return true;
+                    }
                 }
                 return super.dispatchKeyEvent(event);
             } else {

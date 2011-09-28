@@ -27,6 +27,8 @@ import android.app.PendingIntent;
 import android.app.Notification;
 import android.app.NotificationManager;
 import android.app.StatusBarManager;
+import android.content.Context;
+import android.util.AttributeSet;
 import android.os.Vibrator;
 import android.os.Bundle;
 import android.os.Handler;
@@ -36,6 +38,7 @@ import android.os.SystemClock;
 import android.widget.RemoteViews;
 import android.widget.Toast;
 import android.os.PowerManager;
+import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
 
@@ -45,6 +48,13 @@ public class StatusBarTest extends TestActivity
     StatusBarManager mStatusBarManager;
     NotificationManager mNotificationManager;
     Handler mHandler = new Handler();
+
+    View.OnSystemUiVisibilityChangeListener mOnSystemUiVisibilityChangeListener
+            = new View.OnSystemUiVisibilityChangeListener() {
+        public void onSystemUiVisibilityChange(int visibility) {
+            Log.d(TAG, "onSystemUiVisibilityChange visibility=" + visibility);
+        }
+    };
 
     @Override
     protected String tag() {
@@ -60,6 +70,26 @@ public class StatusBarTest extends TestActivity
     }
 
     private Test[] mTests = new Test[] {
+        new Test("DISABLE_NAVIGATION") {
+            public void run() {
+                View v = findViewById(android.R.id.list);
+                v.setSystemUiVisibility(View.STATUS_BAR_DISABLE_NAVIGATION);
+            }
+        },
+        new Test("STATUS_BAR_HIDDEN") {
+            public void run() {
+                View v = findViewById(android.R.id.list);
+                v.setSystemUiVisibility(View.STATUS_BAR_HIDDEN);
+                v.setOnSystemUiVisibilityChangeListener(mOnSystemUiVisibilityChangeListener);
+            }
+        },
+        new Test("no setSystemUiVisibility") {
+            public void run() {
+                View v = findViewById(android.R.id.list);
+                v.setSystemUiVisibility(View.STATUS_BAR_VISIBLE);
+                v.setOnSystemUiVisibilityChangeListener(null);
+            }
+        },
         new Test("Double Remove") {
             public void run() {
                 Log.d(TAG, "set 0");
@@ -81,23 +111,32 @@ public class StatusBarTest extends TestActivity
                 mStatusBarManager.setIcon("speakerphone", R.drawable.stat_sys_phone, 0);
             }
         },
-        new Test("Hide") {
+        new Test("Hide (FLAG_FULLSCREEN)") {
             public void run() {
                 Window win = getWindow();
-                WindowManager.LayoutParams winParams = win.getAttributes();
-                winParams.flags |= WindowManager.LayoutParams.FLAG_FULLSCREEN;
-                win.setAttributes(winParams);
+                win.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                        WindowManager.LayoutParams.FLAG_FULLSCREEN);
+                Log.d(TAG, "flags=" + Integer.toHexString(win.getAttributes().flags));
             }
         },
-        new Test("Show") {
+        new Test("Show (~FLAG_FULLSCREEN)") {
             public void run() {
                 Window win = getWindow();
-                WindowManager.LayoutParams winParams = win.getAttributes();
-                winParams.flags &= ~WindowManager.LayoutParams.FLAG_FULLSCREEN;
-                win.setAttributes(winParams);
+                win.setFlags(0, WindowManager.LayoutParams.FLAG_FULLSCREEN);
+                Log.d(TAG, "flags=" + Integer.toHexString(win.getAttributes().flags));
             }
         },
-        new Test("fullScreenIntent") {
+        new Test("Immersive: Enter") {
+            public void run() {
+                setImmersive(true);
+            }
+        },
+        new Test("Immersive: Exit") {
+            public void run() {
+                setImmersive(false);
+            }
+        },
+        new Test("Priority notification") {
             public void run() {
                 Notification not = new Notification(StatusBarTest.this,
                                 R.drawable.stat_sys_phone,
@@ -107,8 +146,9 @@ public class StatusBarTest extends TestActivity
                                 "(888) 555-5038",
                                 null
                                 );
+                not.flags |= Notification.FLAG_HIGH_PRIORITY;
                 Intent fullScreenIntent = new Intent(StatusBarTest.this, TestAlertActivity.class);
-                int id = (int)System.currentTimeMillis();
+                int id = (int)System.currentTimeMillis(); // XXX HAX
                 fullScreenIntent.putExtra("id", id);
                 not.fullScreenIntent = PendingIntent.getActivity(
                     StatusBarTest.this,
@@ -158,9 +198,33 @@ public class StatusBarTest extends TestActivity
                     }, 3000);
             }
         },
+        new Test("Disable Navigation") {
+            public void run() {
+                mStatusBarManager.disable(StatusBarManager.DISABLE_NAVIGATION);
+            }
+        },
+        new Test("Disable Clock") {
+            public void run() {
+                mStatusBarManager.disable(StatusBarManager.DISABLE_CLOCK);
+            }
+        },
+        new Test("Disable System Info") {
+            public void run() {
+                mStatusBarManager.disable(StatusBarManager.DISABLE_SYSTEM_INFO);
+            }
+        },
+        new Test("Disable everything in 3 sec") {
+            public void run() {
+                mHandler.postDelayed(new Runnable() {
+                        public void run() {
+                            mStatusBarManager.disable(~StatusBarManager.DISABLE_NONE);
+                        }
+                    }, 3000);
+            }
+        },
         new Test("Enable everything") {
             public void run() {
-                mStatusBarManager.disable(0);
+                mStatusBarManager.disable(StatusBarManager.DISABLE_NONE);
             }
         },
         new Test("Enable everything in 3 sec.") {

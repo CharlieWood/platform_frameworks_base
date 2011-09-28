@@ -25,6 +25,7 @@ import android.content.Intent;
 import android.database.Cursor;
 import android.database.sqlite.SqliteWrapper;
 import android.net.Uri;
+import android.os.Environment;
 import android.telephony.SmsMessage;
 import android.text.TextUtils;
 import android.util.Config;
@@ -541,7 +542,7 @@ public final class Telephony {
              * values:</p>
              *
              * <ul>
-             *   <li><em>pdus</em> - An Object[] of byte[]s containing the PDUs
+             *   <li><em>pdus</em> - An Object[] od byte[]s containing the PDUs
              *   that make up the message.</li>
              * </ul>
              *
@@ -561,59 +562,28 @@ public final class Telephony {
              * values:</p>
              *
              * <ul>
-             *   <li><em>transactionId (Integer)</em> - The WAP transaction
-             *    ID</li>
+             *   <li><em>transactionId (Integer)</em> - The WAP transaction ID</li>
              *   <li><em>pduType (Integer)</em> - The WAP PDU type</li>
              *   <li><em>header (byte[])</em> - The header of the message</li>
              *   <li><em>data (byte[])</em> - The data payload of the message</li>
+             *   <li><em>contentTypeParameters (HashMap&lt;String,String&gt;)</em>
+             *   - Any parameters associated with the content type
+             *   (decoded from the WSP Content-Type header)</li>
              * </ul>
              *
              * <p>If a BroadcastReceiver encounters an error while processing
              * this intent it should set the result code appropriately.</p>
+             *
+             * <p>The contentTypeParameters extra value is map of content parameters keyed by
+             * their names.</p>
+             *
+             * <p>If any unassigned well-known parameters are encountered, the key of the map will
+             * be 'unassigned/0x...', where '...' is the hex value of the unassigned parameter.  If
+             * a parameter has No-Value the value in the map will be null.</p>
              */
             @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
             public static final String WAP_PUSH_RECEIVED_ACTION =
                     "android.provider.Telephony.WAP_PUSH_RECEIVED";
-
-            /**
-             * Broadcast Action: A new Cell Broadcast message has been received
-             * by the device. The intent will have the following extra
-             * values:</p>
-             *
-             * <ul>
-             *   <li><em>pdus</em> - An Object[] of byte[]s containing the PDUs
-             *   that make up the message.</li>
-             * </ul>
-             *
-             * <p>The extra values can be extracted using
-             * {@link #getMessagesFromIntent(Intent)}.</p>
-             *
-             * <p>If a BroadcastReceiver encounters an error while processing
-             * this intent it should set the result code appropriately.</p>
-             */
-            @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
-            public static final String SMS_CB_RECEIVED_ACTION =
-                    "android.provider.Telephony.SMS_CB_RECEIVED";
-
-            /**
-             * Broadcast Action: A new Emergency Broadcast message has been received
-             * by the device. The intent will have the following extra
-             * values:</p>
-             *
-             * <ul>
-             *   <li><em>pdus</em> - An Object[] of byte[]s containing the PDUs
-             *   that make up the message.</li>
-             * </ul>
-             *
-             * <p>The extra values can be extracted using
-             * {@link #getMessagesFromIntent(Intent)}.</p>
-             *
-             * <p>If a BroadcastReceiver encounters an error while processing
-             * this intent it should set the result code appropriately.</p>
-             */
-            @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
-            public static final String SMS_EMERGENCY_CB_RECEIVED_ACTION =
-                    "android.provider.Telephony.SMS_EMERGENCY_CB_RECEIVED";
 
             /**
              * Broadcast Action: The SIM storage for SMS messages is full.  If
@@ -622,7 +592,7 @@ public final class Telephony {
              */
             @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
             public static final String SIM_FULL_ACTION =
-                "android.provider.Telephony.SIM_FULL";
+                    "android.provider.Telephony.SIM_FULL";
 
             /**
              * Broadcast Action: An incoming SMS has been rejected by the
@@ -648,7 +618,7 @@ public final class Telephony {
              * @param intent the intent to read from
              * @return an array of SmsMessages for the PDUs
              */
-            public static SmsMessage[] getMessagesFromIntent(
+            public static final SmsMessage[] getMessagesFromIntent(
                     Intent intent) {
                 Object[] messages = (Object[]) intent.getSerializableExtra("pdus");
                 byte[][] pduObjs = new byte[messages.length][];
@@ -1565,7 +1535,8 @@ public final class Telephony {
              * which streams the captured image to the uri. Internally we write the media content
              * to this file. It's named '.temp.jpg' so Gallery won't pick it up.
              */
-            public static final String SCRAP_FILE_PATH = "/sdcard/mms/scrapSpace/.temp.jpg";
+            public static final String SCRAP_FILE_PATH =
+                Environment.getExternalStorageDirectory().getPath() + "/mms/scrapSpace/.temp.jpg";
         }
 
         public static final class Intents {
@@ -1751,6 +1722,14 @@ public final class Telephony {
         public static final String AUTH_TYPE = "authtype";
 
         public static final String TYPE = "type";
+
+        public static final String INACTIVE_TIMER = "inactivetimer";
+
+        // Only if enabled try Data Connection.
+        public static final String ENABLED = "enabled";
+
+        // Rules apply based on class.
+        public static final String CLASS = "class";
 
         /**
          * The protocol to be used to connect to this APN.

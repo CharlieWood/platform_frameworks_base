@@ -45,6 +45,10 @@ public abstract class ServiceStateTracker extends Handler {
     protected static final int DATA_ACCESS_HSUPA = 10;
     protected static final int DATA_ACCESS_HSPA = 11;
     protected static final int DATA_ACCESS_CDMA_EvDo_B = 12;
+    protected static final int DATA_ACCESS_EHRPD = 13;
+    protected static final int DATA_ACCESS_LTE = 14;
+    protected static final int DATA_ACCESS_HSPAP = 15;
+
 
     protected CommandsInterface cm;
 
@@ -52,6 +56,12 @@ public abstract class ServiceStateTracker extends Handler {
     protected ServiceState newSS;
 
     public SignalStrength mSignalStrength;
+
+    /* The otaspMode passed to PhoneStateListener#onOtaspChanged */
+    static public final int OTASP_UNINITIALIZED = 0;
+    static public final int OTASP_UNKNOWN = 1;
+    static public final int OTASP_NEEDED = 2;
+    static public final int OTASP_NOT_NEEDED = 3;
 
     /**
      * A unique identifier to track requests associated with a poll
@@ -268,16 +278,57 @@ public abstract class ServiceStateTracker extends Handler {
 
     public abstract void handleMessage(Message msg);
 
+    protected abstract Phone getPhone();
     protected abstract void handlePollStateResult(int what, AsyncResult ar);
     protected abstract void updateSpnDisplay();
     protected abstract void setPowerStateToDesired();
+    protected abstract void log(String s);
+
+    private void logUnexpectedGsmMethodCall(String name) {
+        log("SSST" + "Error! " + name + "() in ServiceStateTracker should not be " +
+        "called, GsmServiceStateTracker inactive.");
+    }
+
+    public abstract int getCurrentDataConnectionState();
+    public abstract boolean isConcurrentVoiceAndDataAllowed();
+    public void registerForDataConnectionAttached(Handler h, int what, Object obj) {
+        logUnexpectedGsmMethodCall("registerForDataConnectionAttached");
+    }
+
+    public void unregisterForDataConnectionAttached(Handler h) {
+        logUnexpectedGsmMethodCall("unregisterForDataConnectionAttached");
+    }
+
+    public void registerForDataConnectionDetached(Handler h, int what, Object obj) {
+        logUnexpectedGsmMethodCall("registerForDataConnectionDetached");
+    }
+
+    public void unregisterForDataConnectionDetached(Handler h) {
+        logUnexpectedGsmMethodCall("unregisterForDataConnectionDetached");
+    }
+
+    public void registerForPsRestrictedEnabled(Handler h, int what, Object obj) {
+        logUnexpectedGsmMethodCall("registerForPsRestrictedEnabled");
+    }
+
+    public void unregisterForPsRestrictedEnabled(Handler h) {
+        logUnexpectedGsmMethodCall("unregisterForPsRestrictedEnabled");
+    }
+
+    public void registerForPsRestrictedDisabled(Handler h, int what, Object obj) {
+        logUnexpectedGsmMethodCall("registerForPsRestrictedDisabled");
+    }
+
+    public void unregisterForPsRestrictedDisabled(Handler h) {
+        logUnexpectedGsmMethodCall("registerForPsRestrictedDisabled");
+    }
 
     /**
      * Clean up existing voice and data connection then turn off radio power.
      *
      * Hang up the existing voice calls to decrease call drop rate.
      */
-    protected abstract void powerOffRadioSafely();
+    public abstract void powerOffRadioSafely();
 
     /** Cancel a pending (if any) pollState() operation */
     protected void cancelPollState() {

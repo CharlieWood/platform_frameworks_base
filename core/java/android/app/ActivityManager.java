@@ -22,15 +22,25 @@ import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.ConfigurationInfo;
 import android.content.pm.IPackageDataObserver;
+import android.content.res.Configuration;
+import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.os.Debug;
 import android.os.RemoteException;
 import android.os.Handler;
 import android.os.Parcel;
 import android.os.Parcelable;
+import android.os.ServiceManager;
 import android.os.SystemProperties;
 import android.text.TextUtils;
+import android.util.DisplayMetrics;
+import android.util.Log;
+import com.android.internal.app.IUsageStats;
+import com.android.internal.os.PkgUsageStats;
+
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Interact with the overall activities running in the system.
@@ -64,6 +74,34 @@ public class ActivityManager {
     static public int staticGetMemoryClass() {
         // Really brain dead right now -- just take this from the configured
         // vm heap size, and assume it is in megabytes and thus ends with "m".
+        String vmHeapSize = SystemProperties.get("dalvik.vm.growthlimit", "");
+        if (vmHeapSize != null && !"".equals(vmHeapSize)) {
+            return Integer.parseInt(vmHeapSize.substring(0, vmHeapSize.length()-1));
+        }
+        return staticGetLargeMemoryClass();
+    }
+    
+    /**
+     * Return the approximate per-application memory class of the current
+     * device when an application is running with a large heap.  This is the
+     * space available for memory-intensive applications; most applications
+     * should not need this amount of memory, and should instead stay with the
+     * {@link #getMemoryClass()} limit.  The returned value is in megabytes.
+     * This may be the same size as {@link #getMemoryClass()} on memory
+     * constrained devices, or it may be significantly larger on devices with
+     * a large amount of available RAM.
+     *
+     * <p>The is the size of the application's Dalvik heap if it has
+     * specified <code>android:largeHeap="true"</code> in its manifest.
+     */
+    public int getLargeMemoryClass() {
+        return staticGetLargeMemoryClass();
+    }
+    
+    /** @hide */
+    static public int staticGetLargeMemoryClass() {
+        // Really brain dead right now -- just take this from the configured
+        // vm heap size, and assume it is in megabytes and thus ends with "m".
         String vmHeapSize = SystemProperties.get("dalvik.vm.heapsize", "16m");
         return Integer.parseInt(vmHeapSize.substring(0, vmHeapSize.length()-1));
     }
@@ -80,6 +118,11 @@ public class ActivityManager {
         public int id;
 
         /**
+         * The true identifier of this task, valid even if it is not running.
+         */
+        public int persistentId;
+        
+        /**
          * The original Intent used to launch the task.  You can use this
          * Intent to re-launch the task (if it is no longer running) or bring
          * the current task to the front.
@@ -93,6 +136,11 @@ public class ActivityManager {
          * implementation that the alias referred to.  Otherwise, this is null.
          */
         public ComponentName origActivity;
+
+        /**
+         * Description of the task's last state.
+         */
+        public CharSequence description;
         
         public RecentTaskInfo() {
         }
@@ -103,6 +151,7 @@ public class ActivityManager {
 
         public void writeToParcel(Parcel dest, int flags) {
             dest.writeInt(id);
+            dest.writeInt(persistentId);
             if (baseIntent != null) {
                 dest.writeInt(1);
                 baseIntent.writeToParcel(dest, 0);
@@ -110,16 +159,20 @@ public class ActivityManager {
                 dest.writeInt(0);
             }
             ComponentName.writeToParcel(origActivity, dest);
+            TextUtils.writeToParcel(description, dest,
+                    Parcelable.PARCELABLE_WRITE_RETURN_VALUE);
         }
 
         public void readFromParcel(Parcel source) {
             id = source.readInt();
+            persistentId = source.readInt();
             if (source.readInt() != 0) {
                 baseIntent = Intent.CREATOR.createFromParcel(source);
             } else {
                 baseIntent = null;
             }
             origActivity = ComponentName.readFromParcel(source);
+            description = TextUtils.CHAR_SEQUENCE_CREATOR.createFromParcel(source);
         }
         
         public static final Creator<RecentTaskInfo> CREATOR
@@ -145,11 +198,17 @@ public class ActivityManager {
     public static final int RECENT_WITH_EXCLUDED = 0x0001;
     
     /**
-     * @hide
-     * TODO: Make this public.  Provides a list that does not contain any
+     * Provides a list that does not contain any
      * recent tasks that currently are not available to the user.
      */
     public static final int RECENT_IGNORE_UNAVAILABLE = 0x0002;
+
+    /**
+     * Flag for use with {@link #getRecentTasks}: also return the thumbnail
+     * bitmap (if available) for each recent task.
+     * @hide
+     */
+    public static final int TASKS_GET_THUMBNAILS = 0x0001000;
     
     /**
      * Return a list of the tasks that the user has recently launched, with
@@ -158,6 +217,8 @@ public class ActivityManager {
      * @param maxNum The maximum number of entries to return in the list.  The
      * actual number returned may be smaller, depending on how many tasks the
      * user has started and the maximum number the system can remember.
+     * @param flags Information about what to return.  May be any combination
+     * of {@link #RECENT_WITH_EXCLUDED} and {@link #RECENT_IGNORE_UNAVAILABLE}.
      * 
      * @return Returns a list of RecentTaskInfo records describing each of
      * the recent tasks.
@@ -203,7 +264,8 @@ public class ActivityManager {
         public ComponentName topActivity;
 
         /**
-         * Thumbnail representation of the task's current state.
+         * Thumbnail representation of the task's current state.  Currently
+         * always null.
          */
         public Bitmap thumbnail;
 
@@ -273,7 +335,7 @@ public class ActivityManager {
             readFromParcel(source);
         }
     }
-
+    
     /**
      * Return a list of the tasks that are currently running, with
      * the most recent being first and older ones after in order.  Note that
@@ -331,6 +393,49 @@ public class ActivityManager {
     public List<RunningTaskInfo> getRunningTasks(int maxNum)
             throws SecurityException {
         return getRunningTasks(maxNum, 0, null);
+    }
+
+    /** @hide */
+    public Bitmap getTaskThumbnail(int id) throws SecurityException {
+        try {
+            return ActivityManagerNative.getDefault().getTaskThumbnail(id);
+        } catch (RemoteException e) {
+            // System dead, we will be dead too soon!
+            return null;
+        }
+    }
+    
+    /**
+     * Flag for {@link #moveTaskToFront(int, int)}: also move the "home"
+     * activity along with the task, so it is positioned immediately behind
+     * the task.
+     */
+    public static final int MOVE_TASK_WITH_HOME = 0x00000001;
+
+    /**
+     * Flag for {@link #moveTaskToFront(int, int)}: don't count this as a
+     * user-instigated action, so the current activity will not receive a
+     * hint that the user is leaving.
+     */
+    public static final int MOVE_TASK_NO_USER_ACTION = 0x00000002;
+
+    /**
+     * Ask that the task associated with a given task ID be moved to the
+     * front of the stack, so it is now visible to the user.  Requires that
+     * the caller hold permission {@link android.Manifest.permission#REORDER_TASKS}
+     * or a SecurityException will be thrown.
+     *
+     * @param taskId The identifier of the task to be moved, as found in
+     * {@link RunningTaskInfo} or {@link RecentTaskInfo}.
+     * @param flags Additional operational flags, 0 or more of
+     * {@link #MOVE_TASK_WITH_HOME}.
+     */
+    public void moveTaskToFront(int taskId, int flags) {
+        try {
+            ActivityManagerNative.getDefault().moveTaskToFront(taskId, flags);
+        } catch (RemoteException e) {
+            // System dead, we will be dead too soon!
+        }
     }
 
     /**
@@ -1055,7 +1160,67 @@ public class ActivityManager {
         }
         return null;
     }
-    
+
+    /**
+     * Get the preferred density of icons for the launcher. This is used when
+     * custom drawables are created (e.g., for shortcuts).
+     *
+     * @return density in terms of DPI
+     */
+    public int getLauncherLargeIconDensity() {
+        final Resources res = mContext.getResources();
+        final int density = res.getDisplayMetrics().densityDpi;
+
+        if ((res.getConfiguration().screenLayout & Configuration.SCREENLAYOUT_SIZE_MASK)
+                != Configuration.SCREENLAYOUT_SIZE_XLARGE) {
+            return density;
+        }
+
+        switch (density) {
+            case DisplayMetrics.DENSITY_LOW:
+                return DisplayMetrics.DENSITY_MEDIUM;
+            case DisplayMetrics.DENSITY_MEDIUM:
+                return DisplayMetrics.DENSITY_HIGH;
+            case DisplayMetrics.DENSITY_HIGH:
+                return DisplayMetrics.DENSITY_XHIGH;
+            case DisplayMetrics.DENSITY_XHIGH:
+                return DisplayMetrics.DENSITY_MEDIUM * 2;
+            default:
+                return density;
+        }
+    }
+
+    /**
+     * Get the preferred launcher icon size. This is used when custom drawables
+     * are created (e.g., for shortcuts).
+     *
+     * @return dimensions of square icons in terms of pixels
+     */
+    public int getLauncherLargeIconSize() {
+        final Resources res = mContext.getResources();
+        final int size = res.getDimensionPixelSize(android.R.dimen.app_icon_size);
+
+        if ((res.getConfiguration().screenLayout & Configuration.SCREENLAYOUT_SIZE_MASK)
+                != Configuration.SCREENLAYOUT_SIZE_XLARGE) {
+            return size;
+        }
+
+        final int density = res.getDisplayMetrics().densityDpi;
+
+        switch (density) {
+            case DisplayMetrics.DENSITY_LOW:
+                return (size * DisplayMetrics.DENSITY_MEDIUM) / DisplayMetrics.DENSITY_LOW;
+            case DisplayMetrics.DENSITY_MEDIUM:
+                return (size * DisplayMetrics.DENSITY_HIGH) / DisplayMetrics.DENSITY_MEDIUM;
+            case DisplayMetrics.DENSITY_HIGH:
+                return (size * DisplayMetrics.DENSITY_XHIGH) / DisplayMetrics.DENSITY_HIGH;
+            case DisplayMetrics.DENSITY_XHIGH:
+                return (size * DisplayMetrics.DENSITY_MEDIUM * 2) / DisplayMetrics.DENSITY_XHIGH;
+            default:
+                return size;
+        }
+    }
+
     /**
      * Returns "true" if the user interface is currently being messed with
      * by a monkey.
@@ -1066,5 +1231,37 @@ public class ActivityManager {
         } catch (RemoteException e) {
         }
         return false;
+    }
+
+    /**
+     * Returns "true" if device is running in a test harness.
+     */
+    public static boolean isRunningInTestHarness() {
+        return SystemProperties.getBoolean("ro.test_harness", false);
+    }
+
+    /**
+     * Returns the launch count of each installed package.
+     *
+     * @hide
+     */
+    public Map<String, Integer> getAllPackageLaunchCounts() {
+        try {
+            IUsageStats usageStatsService = IUsageStats.Stub.asInterface(
+                    ServiceManager.getService("usagestats"));
+            if (usageStatsService == null) {
+                return new HashMap<String, Integer>();
+            }
+
+            Map<String, Integer> launchCounts = new HashMap<String, Integer>();
+            for (PkgUsageStats pkgUsageStats : usageStatsService.getAllPkgUsageStats()) {
+                launchCounts.put(pkgUsageStats.packageName, pkgUsageStats.launchCount);
+            }
+
+            return launchCounts;
+        } catch (RemoteException e) {
+            Log.w(TAG, "Could not query launch counts", e);
+            return new HashMap<String, Integer>();
+        }
     }
 }

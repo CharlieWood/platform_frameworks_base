@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+//#define LOG_NDEBUG 0
+#define LOG_TAG "avc_utils"
+#include <utils/Log.h>
+
 #include "include/avc_utils.h"
 
 #include <media/stagefright/foundation/ABitReader.h>
@@ -218,6 +222,28 @@ static sp<ABuffer> FindNAL(
     return NULL;
 }
 
+const char *AVCProfileToString(uint8_t profile) {
+    switch (profile) {
+        case kAVCProfileBaseline:
+            return "Baseline";
+        case kAVCProfileMain:
+            return "Main";
+        case kAVCProfileExtended:
+            return "Extended";
+        case kAVCProfileHigh:
+            return "High";
+        case kAVCProfileHigh10:
+            return "High 10";
+        case kAVCProfileHigh422:
+            return "High 422";
+        case kAVCProfileHigh444:
+            return "High 444";
+        case kAVCProfileCAVLC444Intra:
+            return "CAVLC 444 Intra";
+        default:   return "Unknown";
+    }
+}
+
 sp<MetaData> MakeAVCCodecSpecificData(const sp<ABuffer> &accessUnit) {
     const uint8_t *data = accessUnit->data();
     size_t size = accessUnit->size();
@@ -244,6 +270,10 @@ sp<MetaData> MakeAVCCodecSpecificData(const sp<ABuffer> &accessUnit) {
 
     *out++ = 0x01;  // configurationVersion
     memcpy(out, seqParamSet->data() + 1, 3);  // profile/level...
+
+    uint8_t profile = out[0];
+    uint8_t level = out[2];
+
     out += 3;
     *out++ = (0x3f << 2) | 1;  // lengthSize == 2 bytes
     *out++ = 0xe0 | 1;
@@ -271,7 +301,8 @@ sp<MetaData> MakeAVCCodecSpecificData(const sp<ABuffer> &accessUnit) {
     meta->setInt32(kKeyWidth, width);
     meta->setInt32(kKeyHeight, height);
 
-    LOGI("found AVC codec config (%d x %d)", width, height);
+    LOGI("found AVC codec config (%d x %d, %s-profile level %d.%d)",
+         width, height, AVCProfileToString(profile), level / 10, level % 10);
 
     return meta;
 }
@@ -296,6 +327,53 @@ bool IsIDR(const sp<ABuffer> &buffer) {
     }
 
     return foundIDR;
+}
+
+sp<MetaData> MakeAACCodecSpecificData(
+        unsigned profile, unsigned sampling_freq_index,
+        unsigned channel_configuration) {
+    sp<MetaData> meta = new MetaData;
+    meta->setCString(kKeyMIMEType, MEDIA_MIMETYPE_AUDIO_AAC);
+
+    CHECK_LE(sampling_freq_index, 11u);
+    static const int32_t kSamplingFreq[] = {
+        96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050,
+        16000, 12000, 11025, 8000
+    };
+    meta->setInt32(kKeySampleRate, kSamplingFreq[sampling_freq_index]);
+    meta->setInt32(kKeyChannelCount, channel_configuration);
+
+    static const uint8_t kStaticESDS[] = {
+        0x03, 22,
+        0x00, 0x00,     // ES_ID
+        0x00,           // streamDependenceFlag, URL_Flag, OCRstreamFlag
+
+        0x04, 17,
+        0x40,                       // Audio ISO/IEC 14496-3
+        0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+
+        0x05, 2,
+        // AudioSpecificInfo follows
+
+        // oooo offf fccc c000
+        // o - audioObjectType
+        // f - samplingFreqIndex
+        // c - channelConfig
+    };
+    sp<ABuffer> csd = new ABuffer(sizeof(kStaticESDS) + 2);
+    memcpy(csd->data(), kStaticESDS, sizeof(kStaticESDS));
+
+    csd->data()[sizeof(kStaticESDS)] =
+        ((profile + 1) << 3) | (sampling_freq_index >> 1);
+
+    csd->data()[sizeof(kStaticESDS) + 1] =
+        ((sampling_freq_index << 7) & 0x80) | (channel_configuration << 3);
+
+    meta->setData(kKeyESDS, 0, csd->data(), csd->size());
+
+    return meta;
 }
 
 }  // namespace android

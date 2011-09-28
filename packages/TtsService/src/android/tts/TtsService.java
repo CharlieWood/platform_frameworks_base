@@ -121,7 +121,6 @@ public class TtsService extends Service implements OnCompletionListener {
     private static final int SPEECHQUEUELOCK_TIMEOUT = 5000;
     private static final int MAX_SPEECH_ITEM_CHAR_LENGTH = 4000;
     private static final int MAX_FILENAME_LENGTH = 250;
-    // TODO use the TTS stream type when available
     private static final int DEFAULT_STREAM_TYPE = AudioManager.STREAM_MUSIC;
     // TODO use TextToSpeech.DEFAULT_SYNTH once it is unhidden
     private static final String DEFAULT_SYNTH = "com.svox.pico";
@@ -496,7 +495,7 @@ public class TtsService extends Service implements OnCompletionListener {
      *            engines.
      */
     private int speak(String callingApp, String text, int queueMode, ArrayList<String> params) {
-        Log.v(SERVICE_TAG, "TTS service received " + text);
+        // Log.v(SERVICE_TAG, "TTS service received " + text);
         if (queueMode == TextToSpeech.QUEUE_FLUSH) {
             stop(callingApp);
         } else if (queueMode == 2) {
@@ -791,6 +790,8 @@ public class TtsService extends Service implements OnCompletionListener {
                     String speechRate = "";
                     String engine = "";
                     String pitch = "";
+                    float volume = TextToSpeech.Engine.DEFAULT_VOLUME;
+                    float pan = TextToSpeech.Engine.DEFAULT_PAN;
                     if (speechItem.mParams != null){
                         for (int i = 0; i < speechItem.mParams.size() - 1; i = i + 2){
                             String param = speechItem.mParams.get(i);
@@ -816,6 +817,18 @@ public class TtsService extends Service implements OnCompletionListener {
                                     engine = speechItem.mParams.get(i + 1);
                                 } else if (param.equals(TextToSpeech.Engine.KEY_PARAM_PITCH)) {
                                     pitch = speechItem.mParams.get(i + 1);
+                                } else if (param.equals(TextToSpeech.Engine.KEY_PARAM_VOLUME)) {
+                                    try {
+                                        volume = Float.parseFloat(speechItem.mParams.get(i + 1));
+                                    } catch (NumberFormatException e) {
+                                        volume = TextToSpeech.Engine.DEFAULT_VOLUME;
+                                    }
+                                } else if (param.equals(TextToSpeech.Engine.KEY_PARAM_PAN)) {
+                                    try {
+                                        pan = Float.parseFloat(speechItem.mParams.get(i + 1));
+                                    } catch (NumberFormatException e) {
+                                        pan = TextToSpeech.Engine.DEFAULT_PAN;
+                                    }
                                 }
                             }
                         }
@@ -844,7 +857,7 @@ public class TtsService extends Service implements OnCompletionListener {
                             setPitch("", getDefaultPitch());
                         }
                         try {
-                            sNativeSynth.speak(speechItem.mText, streamType);
+                            sNativeSynth.speak(speechItem.mText, streamType, volume, pan);
                         } catch (NullPointerException e) {
                             // synth will become null during onDestroy()
                             Log.v(SERVICE_TAG, " null synth, can't speak");
@@ -1064,7 +1077,7 @@ public class TtsService extends Service implements OnCompletionListener {
             SoundResource sr = getSoundResource(mCurrentSpeechItem);
             // Synth speech as needed - synthesizer should call
             // processSpeechQueue to continue running the queue
-            Log.v(SERVICE_TAG, "TTS processing: " + mCurrentSpeechItem.mText);
+            // Log.v(SERVICE_TAG, "TTS processing: " + mCurrentSpeechItem.mText);
             if (sr == null) {
                 if (mCurrentSpeechItem.mType == SpeechItem.TEXT) {
                     mCurrentSpeechItem = splitCurrentTextIfNeeded(mCurrentSpeechItem);

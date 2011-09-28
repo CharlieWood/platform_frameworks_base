@@ -19,12 +19,15 @@ ifneq ($(USE_CUSTOM_RUNTIME_HEAP_MAX),)
   LOCAL_CFLAGS += -DCUSTOM_RUNTIME_HEAP_MAX=$(USE_CUSTOM_RUNTIME_HEAP_MAX)
 endif
 
+ifeq ($(USE_OPENGL_RENDERER),true)
+	LOCAL_CFLAGS += -DUSE_OPENGL_RENDERER
+endif
+
 LOCAL_CFLAGS += -DGL_GLEXT_PROTOTYPES -DEGL_EGLEXT_PROTOTYPES
 
 LOCAL_SRC_FILES:= \
 	ActivityManager.cpp \
 	AndroidRuntime.cpp \
-	CursorWindow.cpp \
 	Time.cpp \
 	com_google_android_gles_jni_EGLImpl.cpp \
 	com_google_android_gles_jni_GLImpl.cpp.arm \
@@ -48,10 +51,11 @@ LOCAL_SRC_FILES:= \
 	android_view_InputChannel.cpp \
 	android_view_InputQueue.cpp \
 	android_view_KeyEvent.cpp \
+	android_view_KeyCharacterMap.cpp \
+	android_view_GLES20Canvas.cpp \
 	android_view_MotionEvent.cpp \
 	android_text_AndroidCharacter.cpp \
 	android_text_AndroidBidi.cpp \
-	android_text_KeyCharacterMap.cpp \
 	android_os_Debug.cpp \
 	android_os_FileUtils.cpp \
 	android_os_MemoryFile.cpp \
@@ -71,7 +75,6 @@ LOCAL_SRC_FILES:= \
 	android_nfc_NdefRecord.cpp \
 	android_pim_EventRecurrence.cpp \
 	android_text_format_Time.cpp \
-	android_security_Md5MessageDigest.cpp \
 	android_util_AssetManager.cpp \
 	android_util_Binder.cpp \
 	android_util_EventLog.cpp \
@@ -107,6 +110,8 @@ LOCAL_SRC_FILES:= \
 	android/graphics/Rasterizer.cpp \
 	android/graphics/Region.cpp \
 	android/graphics/Shader.cpp \
+	android/graphics/SurfaceTexture.cpp \
+	android/graphics/TextLayout.cpp \
 	android/graphics/Typeface.cpp \
 	android/graphics/Utils.cpp \
 	android/graphics/Xfermode.cpp \
@@ -118,6 +123,8 @@ LOCAL_SRC_FILES:= \
 	android_media_ToneGenerator.cpp \
 	android_hardware_Camera.cpp \
 	android_hardware_SensorManager.cpp \
+	android_hardware_UsbDevice.cpp \
+	android_hardware_UsbRequest.cpp \
 	android_debug_JNITest.cpp \
 	android_util_FileObserver.cpp \
 	android/opengl/poly_clip.cpp.arm \
@@ -126,12 +133,10 @@ LOCAL_SRC_FILES:= \
 	android_bluetooth_common.cpp \
 	android_bluetooth_BluetoothAudioGateway.cpp \
 	android_bluetooth_BluetoothSocket.cpp \
-	android_bluetooth_ScoSocket.cpp \
 	android_server_BluetoothService.cpp \
 	android_server_BluetoothEventLoop.cpp \
 	android_server_BluetoothA2dpService.cpp \
 	android_server_Watchdog.cpp \
-	android_message_digest_sha1.cpp \
 	android_ddm_DdmHandleNativeHeap.cpp \
 	com_android_internal_os_ZygoteInit.cpp \
 	com_android_internal_graphics_NativeUtils.cpp \
@@ -140,11 +145,13 @@ LOCAL_SRC_FILES:= \
 	android_backup_FileBackupHelperBase.cpp \
 	android_backup_BackupHelperDispatcher.cpp \
 	android_content_res_ObbScanner.cpp \
-    android_content_res_Configuration.cpp
+	android_content_res_Configuration.cpp \
+    android_animation_PropertyValuesHolder.cpp
 
 LOCAL_C_INCLUDES += \
 	$(JNI_H_INCLUDE) \
 	$(LOCAL_PATH)/android/graphics \
+	$(LOCAL_PATH)/../../libs/hwui \
 	$(call include-path-for, bluedroid) \
 	$(call include-path-for, libhardware)/hardware \
 	$(call include-path-for, libhardware_legacy)/hardware_legacy \
@@ -176,7 +183,6 @@ LOCAL_SHARED_LIBRARIES := \
 	libgui \
 	libsurfaceflinger_client \
 	libcamera_client \
-	libskiagl \
 	libskia \
 	libsqlite \
 	libdvm \
@@ -194,7 +200,12 @@ LOCAL_SHARED_LIBRARIES := \
 	libmedia \
 	libwpa_client \
 	libjpeg \
-	libnfc_ndef
+	libnfc_ndef \
+	libusbhost \
+
+ifeq ($(USE_OPENGL_RENDERER),true)
+	LOCAL_SHARED_LIBRARIES += libhwui
+endif
 
 ifeq ($(BOARD_HAVE_BLUETOOTH),true)
 LOCAL_C_INCLUDES += \

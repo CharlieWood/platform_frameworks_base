@@ -61,20 +61,21 @@ protected:
 private:
     class Track;
 
-    FILE *mFile;
+    int  mFd;
+    status_t mInitCheck;
     bool mUse4ByteNalLength;
     bool mUse32BitOffset;
     bool mIsFileSizeLimitExplicitlyRequested;
     bool mPaused;
     bool mStarted;
-    off_t mOffset;
+    off64_t mOffset;
     off_t mMdatOffset;
     uint8_t *mMoovBoxBuffer;
-    off_t mMoovBoxBufferOffset;
+    off64_t mMoovBoxBufferOffset;
     bool  mWriteMoovBoxToMemory;
-    off_t mFreeBoxOffset;
+    off64_t mFreeBoxOffset;
     bool mStreamableFile;
-    off_t mEstimatedMoovBoxSize;
+    off64_t mEstimatedMoovBoxSize;
     uint32_t mInterleaveDurationUs;
     int32_t mTimeScale;
     int64_t mStartTimestampUs;
@@ -83,7 +84,7 @@ private:
 
     List<Track *> mTracks;
 
-    List<off_t> mBoxes;
+    List<off64_t> mBoxes;
 
     void setStartTimestampUs(int64_t timeUs);
     int64_t getStartTimestampUs();  // Not const
@@ -97,6 +98,8 @@ private:
         List<MediaBuffer *> mSamples;       // Sample data
 
         // Convenient constructor
+        Chunk(): mTrack(NULL), mTimeStampUs(0) {}
+
         Chunk(Track *track, int64_t timeUs, List<MediaBuffer *> samples)
             : mTrack(track), mTimeStampUs(timeUs), mSamples(samples) {
         }
@@ -123,13 +126,14 @@ private:
     void bufferChunk(const Chunk& chunk);
 
     // Write all buffered chunks from all tracks
-    void writeChunks();
+    void writeAllChunks();
 
-    // Write a chunk if there is one
-    status_t writeOneChunk();
+    // Retrieve the proper chunk to write if there is one
+    // Return true if a chunk is found; otherwise, return false.
+    bool findChunkToWrite(Chunk *chunk);
 
-    // Write the first chunk from the given ChunkInfo.
-    void writeFirstChunk(ChunkInfo* info);
+    // Actually write the given chunk to the file.
+    void writeChunkToFile(Chunk* chunk);
 
     // Adjust other track media clock (presumably wall clock)
     // based on audio track media clock with the drift time.
@@ -145,10 +149,10 @@ private:
     void unlock();
 
     // Acquire lock before calling these methods
-    off_t addSample_l(MediaBuffer *buffer);
-    off_t addLengthPrefixedSample_l(MediaBuffer *buffer);
+    off64_t addSample_l(MediaBuffer *buffer);
+    off64_t addLengthPrefixedSample_l(MediaBuffer *buffer);
 
-    inline size_t write(const void *ptr, size_t size, size_t nmemb, FILE* stream);
+    inline size_t write(const void *ptr, size_t size, size_t nmemb);
     bool exceedsFileSizeLimit();
     bool use32BitFileOffset() const;
     bool exceedsFileDurationLimit();

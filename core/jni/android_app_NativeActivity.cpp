@@ -150,12 +150,12 @@ int32_t AInputQueue::hasEvents() {
     pfd[0].events = POLLIN;
     pfd[0].revents = 0;
     pfd[1].fd = mDispatchKeyRead;
-    pfd[0].events = POLLIN;
-    pfd[0].revents = 0;
+    pfd[1].events = POLLIN;
+    pfd[1].revents = 0;
     
     int nfd = poll(pfd, 2, 0);
     if (nfd <= 0) return 0;
-    return (pfd[0].revents == POLLIN || pfd[1].revents == POLLIN) ? 1 : -1;
+    return ((pfd[0].revents & POLLIN) || (pfd[1].revents & POLLIN)) ? 1 : -1;
 }
 
 int32_t AInputQueue::getEvent(AInputEvent** outEvent) {
@@ -195,7 +195,7 @@ int32_t AInputQueue::getEvent(AInputEvent** outEvent) {
         mLock.unlock();
 
         if (finishNow) {
-            finishEvent(*outEvent, true);
+            finishEvent(*outEvent, true, false);
             *outEvent = NULL;
             return -1;
         } else if (*outEvent != NULL) {
@@ -215,7 +215,7 @@ int32_t AInputQueue::getEvent(AInputEvent** outEvent) {
     if (res != android::OK) {
         LOGW("channel '%s' ~ Failed to consume input event.  status=%d",
                 mConsumer.getChannel()->getName().string(), res);
-        mConsumer.sendFinishedSignal();
+        mConsumer.sendFinishedSignal(false);
         return -1;
     }
 
@@ -245,10 +245,12 @@ bool AInputQueue::preDispatchEvent(AInputEvent* event) {
     return preDispatchKey((KeyEvent*)event);
 }
 
-void AInputQueue::finishEvent(AInputEvent* event, bool handled) {
-    LOG_TRACE("finishEvent: %p handled=%d", event, handled ? 1 : 0);
+void AInputQueue::finishEvent(AInputEvent* event, bool handled, bool didDefaultHandling) {
+    LOG_TRACE("finishEvent: %p handled=%d, didDefaultHandling=%d", event,
+            handled ? 1 : 0, didDefaultHandling ? 1 : 0);
 
-    if (!handled && ((InputEvent*)event)->getType() == AINPUT_EVENT_TYPE_KEY
+    if (!handled && !didDefaultHandling
+            && ((InputEvent*)event)->getType() == AINPUT_EVENT_TYPE_KEY
             && ((KeyEvent*)event)->hasDefaultAction()) {
         // The app didn't handle this, but it may have a default action
         // associated with it.  We need to hand this back to Java to be
@@ -263,7 +265,7 @@ void AInputQueue::finishEvent(AInputEvent* event, bool handled) {
         const in_flight_event& inflight(mInFlightEvents[i]);
         if (inflight.event == event) {
             if (inflight.doFinish) {
-                int32_t res = mConsumer.sendFinishedSignal();
+                int32_t res = mConsumer.sendFinishedSignal(handled);
                 if (res != android::OK) {
                     LOGW("Failed to send finished signal on channel '%s'.  status=%d",
                             mConsumer.getChannel()->getName().string(), res);
@@ -498,8 +500,9 @@ struct NativeCode : public ANativeActivity {
     void* dlhandle;
     ANativeActivity_createFunc* createActivityFunc;
     
-    String8 internalDataPath;
-    String8 externalDataPath;
+    String8 internalDataPathObj;
+    String8 externalDataPathObj;
+    String8 obbPathObj;
     
     sp<ANativeWindow> nativeWindow;
     int32_t lastWindowWidth;
@@ -577,20 +580,30 @@ static int mainWorkCallback(int fd, int events, void* data) {
             while ((keyEvent=code->nativeInputQueue->consumeUnhandledEvent()) != NULL) {
                 jobject inputEventObj = android_view_KeyEvent_fromNative(
                         code->env, keyEvent);
-                code->env->CallVoidMethod(code->clazz,
-                        gNativeActivityClassInfo.dispatchUnhandledKeyEvent, inputEventObj);
-                checkAndClearExceptionFromCallback(code->env, "dispatchUnhandledKeyEvent");
-                code->env->DeleteLocalRef(inputEventObj);
-                code->nativeInputQueue->finishEvent(keyEvent, true);
+                jboolean handled;
+                if (inputEventObj) {
+                    handled = code->env->CallBooleanMethod(code->clazz,
+                            gNativeActivityClassInfo.dispatchUnhandledKeyEvent, inputEventObj);
+                    checkAndClearExceptionFromCallback(code->env, "dispatchUnhandledKeyEvent");
+                    code->env->DeleteLocalRef(inputEventObj);
+                } else {
+                    LOGE("Failed to obtain key event for dispatchUnhandledKeyEvent.");
+                    handled = false;
+                }
+                code->nativeInputQueue->finishEvent(keyEvent, handled, true);
             }
             int seq;
             while ((keyEvent=code->nativeInputQueue->consumePreDispatchingEvent(&seq)) != NULL) {
                 jobject inputEventObj = android_view_KeyEvent_fromNative(
                         code->env, keyEvent);
-                code->env->CallVoidMethod(code->clazz,
-                        gNativeActivityClassInfo.preDispatchKeyEvent, inputEventObj, seq);
-                checkAndClearExceptionFromCallback(code->env, "preDispatchKeyEvent");
-                code->env->DeleteLocalRef(inputEventObj);
+                if (inputEventObj) {
+                    code->env->CallVoidMethod(code->clazz,
+                            gNativeActivityClassInfo.preDispatchKeyEvent, inputEventObj, seq);
+                    checkAndClearExceptionFromCallback(code->env, "preDispatchKeyEvent");
+                    code->env->DeleteLocalRef(inputEventObj);
+                } else {
+                    LOGE("Failed to obtain key event for preDispatchKeyEvent.");
+                }
             }
         } break;
         case CMD_FINISH: {
@@ -629,8 +642,8 @@ static int mainWorkCallback(int fd, int events, void* data) {
 
 static jint
 loadNativeCode_native(JNIEnv* env, jobject clazz, jstring path, jstring funcName,
-        jobject messageQueue,
-        jstring internalDataDir, jstring externalDataDir, int sdkVersion,
+        jobject messageQueue, jstring internalDataDir, jstring obbDir,
+        jstring externalDataDir, int sdkVersion,
         jobject jAssetMgr, jbyteArray savedState)
 {
     LOG_TRACE("loadNativeCode_native");
@@ -687,18 +700,23 @@ loadNativeCode_native(JNIEnv* env, jobject clazz, jstring path, jstring funcName
         code->clazz = env->NewGlobalRef(clazz);
 
         const char* dirStr = env->GetStringUTFChars(internalDataDir, NULL);
-        code->internalDataPath = dirStr;
-        code->internalDataPath = code->internalDataPath.string();
-        env->ReleaseStringUTFChars(path, dirStr);
+        code->internalDataPathObj = dirStr;
+        code->internalDataPath = code->internalDataPathObj.string();
+        env->ReleaseStringUTFChars(internalDataDir, dirStr);
     
         dirStr = env->GetStringUTFChars(externalDataDir, NULL);
-        code->externalDataPath = dirStr;
-        code->externalDataPath = code->externalDataPath.string();
-        env->ReleaseStringUTFChars(path, dirStr);
+        code->externalDataPathObj = dirStr;
+        code->externalDataPath = code->externalDataPathObj.string();
+        env->ReleaseStringUTFChars(externalDataDir, dirStr);
 
         code->sdkVersion = sdkVersion;
         
         code->assetManager = assetManagerForJavaObject(env, jAssetMgr);
+
+        dirStr = env->GetStringUTFChars(obbDir, NULL);
+        code->obbPathObj = dirStr;
+        code->obbPath = code->obbPathObj.string();
+        env->ReleaseStringUTFChars(obbDir, dirStr);
 
         jbyte* rawSavedState = NULL;
         jsize rawSavedSize = 0;
@@ -985,7 +1003,12 @@ dispatchKeyEvent_native(JNIEnv* env, jobject clazz, jint handle, jobject eventOb
         NativeCode* code = (NativeCode*)handle;
         if (code->nativeInputQueue != NULL) {
             KeyEvent* event = code->nativeInputQueue->createKeyEvent();
-            android_view_KeyEvent_toNative(env, eventObj, event);
+            status_t status = android_view_KeyEvent_toNative(env, eventObj, event);
+            if (status) {
+                delete event;
+                jniThrowRuntimeException(env, "Could not read contents of KeyEvent object.");
+                return;
+            }
             code->nativeInputQueue->dispatchEvent(event);
         }
     }
@@ -1005,7 +1028,7 @@ finishPreDispatchKeyEvent_native(JNIEnv* env, jobject clazz, jint handle,
 }
 
 static const JNINativeMethod g_methods[] = {
-    { "loadNativeCode", "(Ljava/lang/String;Ljava/lang/String;Landroid/os/MessageQueue;Ljava/lang/String;Ljava/lang/String;ILandroid/content/res/AssetManager;[B)I",
+    { "loadNativeCode", "(Ljava/lang/String;Ljava/lang/String;Landroid/os/MessageQueue;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILandroid/content/res/AssetManager;[B)I",
             (void*)loadNativeCode_native },
     { "unloadNativeCode", "(I)V", (void*)unloadNativeCode_native },
     { "onStartNative", "(I)V", (void*)onStart_native },
@@ -1031,7 +1054,7 @@ static const char* const kNativeActivityPathName = "android/app/NativeActivity";
 
 #define FIND_CLASS(var, className) \
         var = env->FindClass(className); \
-        LOG_FATAL_IF(! var, "Unable to find class " className); \
+        LOG_FATAL_IF(! var, "Unable to find class %s", className); \
         var = jclass(env->NewGlobalRef(var));
 
 #define GET_METHOD_ID(var, clazz, methodName, fieldDescriptor) \
@@ -1046,7 +1069,7 @@ int register_android_app_NativeActivity(JNIEnv* env)
     
     GET_METHOD_ID(gNativeActivityClassInfo.dispatchUnhandledKeyEvent,
             gNativeActivityClassInfo.clazz,
-            "dispatchUnhandledKeyEvent", "(Landroid/view/KeyEvent;)V");
+            "dispatchUnhandledKeyEvent", "(Landroid/view/KeyEvent;)Z");
     GET_METHOD_ID(gNativeActivityClassInfo.preDispatchKeyEvent,
             gNativeActivityClassInfo.clazz,
             "preDispatchKeyEvent", "(Landroid/view/KeyEvent;I)V");

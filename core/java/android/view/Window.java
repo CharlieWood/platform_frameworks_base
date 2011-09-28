@@ -56,11 +56,28 @@ public abstract class Window {
     public static final int FEATURE_CONTEXT_MENU = 6;
     /** Flag for custom title. You cannot combine this feature with other title features. */
     public static final int FEATURE_CUSTOM_TITLE = 7;
-    /** Flag for asking for an OpenGL enabled window.
-        All 2D graphics will be handled by OpenGL ES.
-        @hide
-    */
-    public static final int FEATURE_OPENGL = 8;
+    /**
+     * Flag for enabling the Action Bar.
+     * This is enabled by default for some devices. The Action Bar
+     * replaces the title bar and provides an alternate location
+     * for an on-screen menu button on some devices.
+     */
+    public static final int FEATURE_ACTION_BAR = 8;
+    /**
+     * Flag for requesting an Action Bar that overlays window content.
+     * Normally an Action Bar will sit in the space above window content, but if this
+     * feature is requested along with {@link #FEATURE_ACTION_BAR} it will be layered over
+     * the window content itself. This is useful if you would like your app to have more control
+     * over how the Action Bar is displayed, such as letting application content scroll beneath
+     * an Action Bar with a transparent background or otherwise displaying a transparent/translucent
+     * Action Bar over application content.
+     */
+    public static final int FEATURE_ACTION_BAR_OVERLAY = 9;
+    /**
+     * Flag for specifying the behavior of action modes when an Action Bar is not present.
+     * If overlay is enabled, the action mode UI will be allowed to cover existing window content.
+     */
+    public static final int FEATURE_ACTION_MODE_OVERLAY = 10;
     /** Flag for setting the progress bar's visibility to VISIBLE */
     public static final int PROGRESS_VISIBILITY_ON = -1;
     /** Flag for setting the progress bar's visibility to GONE */
@@ -99,6 +116,8 @@ public abstract class Window {
     private Window mActiveChild;
     private boolean mIsActive = false;
     private boolean mHasChildren = false;
+    private boolean mCloseOnTouchOutside = false;
+    private boolean mSetCloseOnTouchOutside = false;
     private int mForcedWindowFlags = 0;
 
     private int mFeatures = DEFAULT_FEATURES;
@@ -109,6 +128,8 @@ public abstract class Window {
 
     private boolean mHasSoftInputMode = false;
     
+    private boolean mDestroyed;
+
     // The current window attributes.
     private final WindowManager.LayoutParams mWindowAttributes =
         new WindowManager.LayoutParams();
@@ -129,6 +150,17 @@ public abstract class Window {
          * @return boolean Return true if this event was consumed.
          */
         public boolean dispatchKeyEvent(KeyEvent event);
+
+        /**
+         * Called to process a key shortcut event.
+         * At the very least your implementation must call
+         * {@link android.view.Window#superDispatchKeyShortcutEvent} to do the
+         * standard key shortcut processing.
+         *
+         * @param event The key shortcut event.
+         * @return True if this event was consumed.
+         */
+        public boolean dispatchKeyShortcutEvent(KeyEvent event);
 
         /**
          * Called to process touch screen events.  At the very least your
@@ -153,6 +185,18 @@ public abstract class Window {
          * @return boolean Return true if this event was consumed.
          */
         public boolean dispatchTrackballEvent(MotionEvent event);
+
+        /**
+         * Called to process generic motion events.  At the very least your
+         * implementation must call
+         * {@link android.view.Window#superDispatchGenericMotionEvent} to do the
+         * standard processing.
+         *
+         * @param event The generic motion event.
+         *
+         * @return boolean Return true if this event was consumed.
+         */
+        public boolean dispatchGenericMotionEvent(MotionEvent event);
 
         /**
          * Called to process population of {@link AccessibilityEvent}s.
@@ -292,6 +336,33 @@ public abstract class Window {
          * @see android.app.Activity#onSearchRequested() 
          */
         public boolean onSearchRequested();
+
+        /**
+         * Called when an action mode is being started for this window. Gives the
+         * callback an opportunity to handle the action mode in its own unique and
+         * beautiful way. If this method returns null the system can choose a way
+         * to present the mode or choose not to start the mode at all.
+         *
+         * @param callback Callback to control the lifecycle of this action mode
+         * @return The ActionMode that was started, or null if the system should present it
+         */
+        public ActionMode onWindowStartingActionMode(ActionMode.Callback callback);
+
+        /**
+         * Called when an action mode has been started. The appropriate mode callback
+         * method will have already been invoked.
+         *
+         * @param mode The new mode that has just been started.
+         */
+        public void onActionModeStarted(ActionMode mode);
+
+        /**
+         * Called when an action mode has been finished. The appropriate mode callback
+         * method will have already been invoked.
+         *
+         * @param mode The mode that was just finished.
+         */
+        public void onActionModeFinished(ActionMode mode);
     }
 
     public Window(Context context) {
@@ -353,6 +424,16 @@ public abstract class Window {
         return mHasChildren;
     }
     
+    /** @hide */
+    public final void destroy() {
+        mDestroyed = true;
+    }
+
+    /** @hide */
+    public final boolean isDestroyed() {
+        return mDestroyed;
+    }
+
     /**
      * Set the window manager for use by this Window to, for example,
      * display panels.  This is <em>not</em> used for displaying the
@@ -360,23 +441,41 @@ public abstract class Window {
      *
      * @param wm The ViewManager for adding new windows.
      */
-    public void setWindowManager(WindowManager wm,
-            IBinder appToken, String appName) {
+    public void setWindowManager(WindowManager wm, IBinder appToken, String appName) {
+        setWindowManager(wm, appToken, appName, false);
+    }
+
+    /**
+     * Set the window manager for use by this Window to, for example,
+     * display panels.  This is <em>not</em> used for displaying the
+     * Window itself -- that must be done by the client.
+     *
+     * @param wm The ViewManager for adding new windows.
+     */
+    public void setWindowManager(WindowManager wm, IBinder appToken, String appName,
+            boolean hardwareAccelerated) {
         mAppToken = appToken;
         mAppName = appName;
         if (wm == null) {
             wm = WindowManagerImpl.getDefault();
         }
-        mWindowManager = new LocalWindowManager(wm);
+        mWindowManager = new LocalWindowManager(wm, hardwareAccelerated);
     }
 
     private class LocalWindowManager implements WindowManager {
-        LocalWindowManager(WindowManager wm) {
+        private boolean mHardwareAccelerated;
+
+        LocalWindowManager(WindowManager wm, boolean hardwareAccelerated) {
             mWindowManager = wm;
             mDefaultDisplay = mContext.getResources().getDefaultDisplay(
                     mWindowManager.getDefaultDisplay());
+            mHardwareAccelerated = hardwareAccelerated;
         }
 
+        public boolean isHardwareAccelerated() {
+            return mHardwareAccelerated;
+        }
+        
         public final void addView(View view, ViewGroup.LayoutParams params) {
             // Let this throw an exception on a bad params.
             WindowManager.LayoutParams wp = (WindowManager.LayoutParams)params;
@@ -420,6 +519,9 @@ public abstract class Window {
            }
             if (wp.packageName == null) {
                 wp.packageName = mContext.getPackageName();
+            }
+            if (mHardwareAccelerated) {
+                wp.flags |= WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED;
             }
             mWindowManager.addView(view, params);
         }
@@ -499,14 +601,16 @@ public abstract class Window {
 
     /**
      * Set the width and height layout parameters of the window.  The default
-     * for both of these is MATCH_PARENT; you can change them to WRAP_CONTENT to
-     * make a window that is not full-screen.
+     * for both of these is MATCH_PARENT; you can change them to WRAP_CONTENT
+     * or an absolute value to make a window that is not full-screen.
      *
      * @param width The desired layout width of the window.
      * @param height The desired layout height of the window.
+     *
+     * @see ViewGroup.LayoutParams#height
+     * @see ViewGroup.LayoutParams#width
      */
-    public void setLayout(int width, int height)
-    {
+    public void setLayout(int width, int height) {
         final WindowManager.LayoutParams attrs = getAttributes();
         attrs.width = width;
         attrs.height = height;
@@ -696,6 +800,42 @@ public abstract class Window {
         return mHasSoftInputMode;
     }
     
+    /** @hide */
+    public void setCloseOnTouchOutside(boolean close) {
+        mCloseOnTouchOutside = close;
+        mSetCloseOnTouchOutside = true;
+    }
+    
+    /** @hide */
+    public void setCloseOnTouchOutsideIfNotSet(boolean close) {
+        if (!mSetCloseOnTouchOutside) {
+            mCloseOnTouchOutside = close;
+            mSetCloseOnTouchOutside = true;
+        }
+    }
+    
+    /** @hide */
+    public abstract void alwaysReadCloseOnTouchAttr();
+    
+    /** @hide */
+    public boolean shouldCloseOnTouch(Context context, MotionEvent event) {
+        if (mCloseOnTouchOutside && event.getAction() == MotionEvent.ACTION_DOWN
+                && isOutOfBounds(context, event) && peekDecorView() != null) {
+            return true;
+        }
+        return false;
+    }
+    
+    private boolean isOutOfBounds(Context context, MotionEvent event) {
+        final int x = (int) event.getX();
+        final int y = (int) event.getY();
+        final int slop = ViewConfiguration.get(context).getScaledWindowTouchSlop();
+        final View decorView = getDecorView();
+        return (x < -slop) || (y < -slop)
+                || (x > (decorView.getWidth()+slop))
+                || (y > (decorView.getHeight()+slop));
+    }
+    
     /**
      * Enable extended screen features.  This must be called before
      * setContentView().  May be called as many times as desired as long as it
@@ -711,6 +851,15 @@ public abstract class Window {
         mFeatures |= flag;
         mLocalFeatures |= mContainer != null ? (flag&~mContainer.mFeatures) : flag;
         return (mFeatures&flag) != 0;
+    }
+
+    /**
+     * @hide Used internally to help resolve conflicting features.
+     */
+    protected void removeFeature(int featureId) {
+        final int flag = 1<<featureId;
+        mFeatures &= ~flag;
+        mLocalFeatures &= ~(mContainer != null ? (flag&~mContainer.mFeatures) : flag);
     }
 
     public final void makeActive() {
@@ -817,6 +966,8 @@ public abstract class Window {
 
     public abstract void togglePanel(int featureId, KeyEvent event);
 
+    public abstract void invalidatePanelMenu(int featureId);
+    
     public abstract boolean performPanelShortcut(int featureId,
                                                  int keyCode,
                                                  KeyEvent event,
@@ -938,6 +1089,14 @@ public abstract class Window {
     public abstract boolean superDispatchKeyEvent(KeyEvent event);
 
     /**
+     * Used by custom windows, such as Dialog, to pass the key shortcut press event
+     * further down the view hierarchy. Application developers should
+     * not need to implement or call this.
+     *
+     */
+    public abstract boolean superDispatchKeyShortcutEvent(KeyEvent event);
+
+    /**
      * Used by custom windows, such as Dialog, to pass the touch screen event
      * further down the view hierarchy. Application developers should
      * not need to implement or call this.
@@ -953,6 +1112,14 @@ public abstract class Window {
      */
     public abstract boolean superDispatchTrackballEvent(MotionEvent event);
     
+    /**
+     * Used by custom windows, such as Dialog, to pass the generic motion event
+     * further down the view hierarchy. Application developers should
+     * not need to implement or call this.
+     *
+     */
+    public abstract boolean superDispatchGenericMotionEvent(MotionEvent event);
+
     /**
      * Retrieve the top-level window decor view (containing the standard
      * window frame/decorations and the client's content inside of that), which
@@ -995,6 +1162,16 @@ public abstract class Window {
     protected final int getFeatures()
     {
         return mFeatures;
+    }
+    
+    /**
+     * Query for the availability of a certain feature.
+     * 
+     * @param feature The feature ID to check
+     * @return true if the feature is enabled, false otherwise.
+     */
+    public boolean hasFeature(int feature) {
+        return (getFeatures() & (1 << feature)) != 0;
     }
 
     /**

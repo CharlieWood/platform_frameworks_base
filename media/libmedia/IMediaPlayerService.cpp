@@ -23,6 +23,7 @@
 #include <media/IMediaPlayerService.h>
 #include <media/IMediaRecorder.h>
 #include <media/IOMX.h>
+#include <media/IStreamSource.h>
 
 #include <utils/Errors.h>  // for status_t
 
@@ -31,11 +32,14 @@ namespace android {
 enum {
     CREATE_URL = IBinder::FIRST_CALL_TRANSACTION,
     CREATE_FD,
+    CREATE_STREAM,
     DECODE_URL,
     DECODE_FD,
     CREATE_MEDIA_RECORDER,
     CREATE_METADATA_RETRIEVER,
-    GET_OMX
+    GET_OMX,
+    ADD_BATTERY_DATA,
+    PULL_BATTERY_DATA
 };
 
 class BpMediaPlayerService: public BpInterface<IMediaPlayerService>
@@ -107,6 +111,21 @@ public:
         return interface_cast<IMediaPlayer>(reply.readStrongBinder());;
     }
 
+    virtual sp<IMediaPlayer> create(
+            pid_t pid, const sp<IMediaPlayerClient> &client,
+            const sp<IStreamSource> &source, int audioSessionId) {
+        Parcel data, reply;
+        data.writeInterfaceToken(IMediaPlayerService::getInterfaceDescriptor());
+        data.writeInt32(static_cast<int32_t>(pid));
+        data.writeStrongBinder(client->asBinder());
+        data.writeStrongBinder(source->asBinder());
+        data.writeInt32(static_cast<int32_t>(audioSessionId));
+
+        remote()->transact(CREATE_STREAM, data, &reply);
+
+        return interface_cast<IMediaPlayer>(reply.readStrongBinder());;
+    }
+
     virtual sp<IMemory> decode(const char* url, uint32_t *pSampleRate, int* pNumChannels, int* pFormat)
     {
         Parcel data, reply;
@@ -138,6 +157,19 @@ public:
         data.writeInterfaceToken(IMediaPlayerService::getInterfaceDescriptor());
         remote()->transact(GET_OMX, data, &reply);
         return interface_cast<IOMX>(reply.readStrongBinder());
+    }
+
+    virtual void addBatteryData(uint32_t params) {
+        Parcel data, reply;
+        data.writeInterfaceToken(IMediaPlayerService::getInterfaceDescriptor());
+        data.writeInt32(params);
+        remote()->transact(ADD_BATTERY_DATA, data, &reply);
+    }
+
+    virtual status_t pullBatteryData(Parcel* reply) {
+        Parcel data;
+        data.writeInterfaceToken(IMediaPlayerService::getInterfaceDescriptor());
+        return remote()->transact(PULL_BATTERY_DATA, data, reply);
     }
 };
 
@@ -184,6 +216,27 @@ status_t BnMediaPlayerService::onTransact(
             reply->writeStrongBinder(player->asBinder());
             return NO_ERROR;
         } break;
+        case CREATE_STREAM:
+        {
+            CHECK_INTERFACE(IMediaPlayerService, data, reply);
+
+            pid_t pid = static_cast<pid_t>(data.readInt32());
+
+            sp<IMediaPlayerClient> client =
+                interface_cast<IMediaPlayerClient>(data.readStrongBinder());
+
+            sp<IStreamSource> source =
+                interface_cast<IStreamSource>(data.readStrongBinder());
+
+            int audioSessionId = static_cast<int>(data.readInt32());
+
+            sp<IMediaPlayer> player =
+                create(pid, client, source, audioSessionId);
+
+            reply->writeStrongBinder(player->asBinder());
+            return OK;
+            break;
+        }
         case DECODE_URL: {
             CHECK_INTERFACE(IMediaPlayerService, data, reply);
             const char* url = data.readCString();
@@ -230,6 +283,17 @@ status_t BnMediaPlayerService::onTransact(
             CHECK_INTERFACE(IMediaPlayerService, data, reply);
             sp<IOMX> omx = getOMX();
             reply->writeStrongBinder(omx->asBinder());
+            return NO_ERROR;
+        } break;
+        case ADD_BATTERY_DATA: {
+            CHECK_INTERFACE(IMediaPlayerService, data, reply);
+            uint32_t params = data.readInt32();
+            addBatteryData(params);
+            return NO_ERROR;
+        } break;
+        case PULL_BATTERY_DATA: {
+            CHECK_INTERFACE(IMediaPlayerService, data, reply);
+            pullBatteryData(reply);
             return NO_ERROR;
         } break;
         default:

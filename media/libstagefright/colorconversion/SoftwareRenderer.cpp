@@ -21,91 +21,130 @@
 
 #include <binder/MemoryHeapBase.h>
 #include <binder/MemoryHeapPmem.h>
-#include <media/stagefright/MediaDebug.h>
-#include <surfaceflinger/ISurface.h>
+#include <media/stagefright/foundation/ADebug.h>
+#include <media/stagefright/MetaData.h>
+#include <surfaceflinger/Surface.h>
+#include <ui/android_native_buffer.h>
+#include <ui/GraphicBufferMapper.h>
+#include <gui/ISurfaceTexture.h>
 
 namespace android {
 
 SoftwareRenderer::SoftwareRenderer(
-        OMX_COLOR_FORMATTYPE colorFormat,
-        const sp<ISurface> &surface,
-        size_t displayWidth, size_t displayHeight,
-        size_t decodedWidth, size_t decodedHeight,
-        int32_t rotationDegrees)
-    : mInitCheck(NO_INIT),
-      mColorFormat(colorFormat),
-      mConverter(colorFormat, OMX_COLOR_Format16bitRGB565),
-      mISurface(surface),
-      mDisplayWidth(displayWidth),
-      mDisplayHeight(displayHeight),
-      mDecodedWidth(decodedWidth),
-      mDecodedHeight(decodedHeight),
-      mFrameSize(mDecodedWidth * mDecodedHeight * 2),  // RGB565
-      mIndex(0) {
-    mMemoryHeap = new MemoryHeapBase("/dev/pmem_adsp", 2 * mFrameSize);
-    if (mMemoryHeap->heapID() < 0) {
-        LOGI("Creating physical memory heap failed, reverting to regular heap.");
-        mMemoryHeap = new MemoryHeapBase(2 * mFrameSize);
-    } else {
-        sp<MemoryHeapPmem> pmemHeap = new MemoryHeapPmem(mMemoryHeap);
-        pmemHeap->slap();
-        mMemoryHeap = pmemHeap;
+        const sp<ANativeWindow> &nativeWindow, const sp<MetaData> &meta)
+    : mConverter(NULL),
+      mYUVMode(None),
+      mNativeWindow(nativeWindow) {
+    int32_t tmp;
+    CHECK(meta->findInt32(kKeyColorFormat, &tmp));
+    mColorFormat = (OMX_COLOR_FORMATTYPE)tmp;
+
+    CHECK(meta->findInt32(kKeyWidth, &mWidth));
+    CHECK(meta->findInt32(kKeyHeight, &mHeight));
+
+    if (!meta->findRect(
+                kKeyCropRect,
+                &mCropLeft, &mCropTop, &mCropRight, &mCropBottom)) {
+        mCropLeft = mCropTop = 0;
+        mCropRight = mWidth - 1;
+        mCropBottom = mHeight - 1;
     }
 
-    CHECK(mISurface.get() != NULL);
-    CHECK(mDecodedWidth > 0);
-    CHECK(mDecodedHeight > 0);
-    CHECK(mMemoryHeap->heapID() >= 0);
-    CHECK(mConverter.isValid());
+    int32_t rotationDegrees;
+    if (!meta->findInt32(kKeyRotation, &rotationDegrees)) {
+        rotationDegrees = 0;
+    }
 
-    uint32_t orientation;
+    int halFormat;
+    switch (mColorFormat) {
+        default:
+            halFormat = HAL_PIXEL_FORMAT_RGB_565;
+
+            mConverter = new ColorConverter(
+                    mColorFormat, OMX_COLOR_Format16bitRGB565);
+            CHECK(mConverter->isValid());
+            break;
+    }
+
+    CHECK(mNativeWindow != NULL);
+    CHECK(mWidth > 0);
+    CHECK(mHeight > 0);
+    CHECK(mConverter == NULL || mConverter->isValid());
+
+    CHECK_EQ(0,
+            native_window_set_usage(
+            mNativeWindow.get(),
+            GRALLOC_USAGE_SW_READ_NEVER | GRALLOC_USAGE_SW_WRITE_OFTEN
+            | GRALLOC_USAGE_HW_TEXTURE | GRALLOC_USAGE_EXTERNAL_DISP));
+
+    CHECK_EQ(0, native_window_set_buffer_count(mNativeWindow.get(), 2));
+
+    // Width must be multiple of 32???
+    CHECK_EQ(0, native_window_set_buffers_geometry(
+                mNativeWindow.get(),
+                mCropRight - mCropLeft + 1,
+                mCropBottom - mCropTop + 1,
+                halFormat));
+
+    uint32_t transform;
     switch (rotationDegrees) {
-        case 0: orientation = ISurface::BufferHeap::ROT_0; break;
-        case 90: orientation = ISurface::BufferHeap::ROT_90; break;
-        case 180: orientation = ISurface::BufferHeap::ROT_180; break;
-        case 270: orientation = ISurface::BufferHeap::ROT_270; break;
-        default: orientation = ISurface::BufferHeap::ROT_0; break;
+        case 0: transform = 0; break;
+        case 90: transform = HAL_TRANSFORM_ROT_90; break;
+        case 180: transform = HAL_TRANSFORM_ROT_180; break;
+        case 270: transform = HAL_TRANSFORM_ROT_270; break;
+        default: transform = 0; break;
     }
 
-    ISurface::BufferHeap bufferHeap(
-            mDisplayWidth, mDisplayHeight,
-            mDecodedWidth, mDecodedHeight,
-            PIXEL_FORMAT_RGB_565,
-            orientation, 0,
-            mMemoryHeap);
-
-    status_t err = mISurface->registerBuffers(bufferHeap);
-
-    if (err != OK) {
-        LOGW("ISurface failed to register buffers (0x%08x)", err);
+    if (transform) {
+        CHECK_EQ(0, native_window_set_buffers_transform(
+                    mNativeWindow.get(), transform));
     }
-
-    mInitCheck = err;
 }
 
 SoftwareRenderer::~SoftwareRenderer() {
-    mISurface->unregisterBuffers();
-}
-
-status_t SoftwareRenderer::initCheck() const {
-    return mInitCheck;
+    delete mConverter;
+    mConverter = NULL;
 }
 
 void SoftwareRenderer::render(
         const void *data, size_t size, void *platformPrivate) {
-    if (mInitCheck != OK) {
+    android_native_buffer_t *buf;
+    int err;
+    if ((err = mNativeWindow->dequeueBuffer(mNativeWindow.get(), &buf)) != 0) {
+        LOGW("Surface::dequeueBuffer returned error %d", err);
         return;
     }
 
-    size_t offset = mIndex * mFrameSize;
-    void *dst = (uint8_t *)mMemoryHeap->getBase() + offset;
+    CHECK_EQ(0, mNativeWindow->lockBuffer(mNativeWindow.get(), buf));
 
-    mConverter.convert(
-            mDecodedWidth, mDecodedHeight,
-            data, 0, dst, 2 * mDecodedWidth);
+    GraphicBufferMapper &mapper = GraphicBufferMapper::get();
 
-    mISurface->postBuffer(offset);
-    mIndex = 1 - mIndex;
+    Rect bounds(mWidth, mHeight);
+
+    void *dst;
+    CHECK_EQ(0, mapper.lock(
+                buf->handle, GRALLOC_USAGE_SW_WRITE_OFTEN, bounds, &dst));
+
+    if (mConverter) {
+        mConverter->convert(
+                data,
+                mWidth, mHeight,
+                mCropLeft, mCropTop, mCropRight, mCropBottom,
+                dst,
+                buf->stride, buf->height,
+                0, 0,
+                mCropRight - mCropLeft,
+                mCropBottom - mCropTop);
+    } else {
+        TRESPASS();
+    }
+
+    CHECK_EQ(0, mapper.unlock(buf->handle));
+
+    if ((err = mNativeWindow->queueBuffer(mNativeWindow.get(), buf)) != 0) {
+        LOGW("Surface::queueBuffer returned error %d", err);
+    }
+    buf = NULL;
 }
 
 }  // namespace android

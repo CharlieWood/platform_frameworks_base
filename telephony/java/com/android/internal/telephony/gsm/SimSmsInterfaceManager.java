@@ -17,6 +17,7 @@
 package com.android.internal.telephony.gsm;
 
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.os.AsyncResult;
 import android.os.Binder;
 import android.os.Handler;
@@ -26,7 +27,6 @@ import android.util.Log;
 import com.android.internal.telephony.IccConstants;
 import com.android.internal.telephony.IccSmsInterfaceManager;
 import com.android.internal.telephony.IccUtils;
-import com.android.internal.telephony.IntRangeManager;
 import com.android.internal.telephony.SMSDispatcher;
 import com.android.internal.telephony.SmsRawData;
 
@@ -50,9 +50,8 @@ public class SimSmsInterfaceManager extends IccSmsInterfaceManager {
     private final Object mLock = new Object();
     private boolean mSuccess;
     private List<SmsRawData> mSms;
-
-    private CellBroadcastRangeManager mCellBroadcastRangeManager =
-            new CellBroadcastRangeManager();
+    private HashMap<Integer, HashSet<String>> mCellBroadcastSubscriptions =
+            new HashMap<Integer, HashSet<String>>();
 
     private static final int EVENT_LOAD_DONE = 1;
     private static final int EVENT_UPDATE_DONE = 2;
@@ -107,6 +106,7 @@ public class SimSmsInterfaceManager extends IccSmsInterfaceManager {
     public void dispose() {
     }
 
+    @Override
     protected void finalize() {
         try {
             super.finalize();
@@ -213,15 +213,7 @@ public class SimSmsInterfaceManager extends IccSmsInterfaceManager {
     }
 
     public boolean enableCellBroadcast(int messageIdentifier) {
-        return enableCellBroadcastRange(messageIdentifier, messageIdentifier);
-    }
-
-    public boolean disableCellBroadcast(int messageIdentifier) {
-        return disableCellBroadcastRange(messageIdentifier, messageIdentifier);
-    }
-
-    public boolean enableCellBroadcastRange(int startMessageId, int endMessageId) {
-        if (DBG) log("enableCellBroadcastRange");
+        if (DBG) log("enableCellBroadcast");
 
         Context context = mPhone.getContext();
 
@@ -231,22 +223,30 @@ public class SimSmsInterfaceManager extends IccSmsInterfaceManager {
 
         String client = context.getPackageManager().getNameForUid(
                 Binder.getCallingUid());
+        HashSet<String> clients = mCellBroadcastSubscriptions.get(messageIdentifier);
 
-        if (!mCellBroadcastRangeManager.enableRange(startMessageId, endMessageId, client)) {
-            log("Failed to add cell broadcast subscription for MID range " + startMessageId
-                    + " to " + endMessageId + " from client " + client);
-            return false;
+        if (clients == null) {
+            // This is a new message identifier
+            clients = new HashSet<String>();
+            mCellBroadcastSubscriptions.put(messageIdentifier, clients);
+
+            if (!updateCellBroadcastConfig()) {
+                mCellBroadcastSubscriptions.remove(messageIdentifier);
+                return false;
+            }
         }
 
+        clients.add(client);
+
         if (DBG)
-            log("Added cell broadcast subscription for MID range " + startMessageId
-                    + " to " + endMessageId + " from client " + client);
+            log("Added cell broadcast subscription for MID " + messageIdentifier
+                    + " from client " + client);
 
         return true;
     }
 
-    public boolean disableCellBroadcastRange(int startMessageId, int endMessageId) {
-        if (DBG) log("disableCellBroadcastRange");
+    public boolean disableCellBroadcast(int messageIdentifier) {
+        if (DBG) log("disableCellBroadcast");
 
         Context context = mPhone.getContext();
 
@@ -256,56 +256,39 @@ public class SimSmsInterfaceManager extends IccSmsInterfaceManager {
 
         String client = context.getPackageManager().getNameForUid(
                 Binder.getCallingUid());
+        HashSet<String> clients = mCellBroadcastSubscriptions.get(messageIdentifier);
 
-        if (!mCellBroadcastRangeManager.disableRange(startMessageId, endMessageId, client)) {
-            log("Failed to remove cell broadcast subscription for MID range " + startMessageId
-                    + " to " + endMessageId + " from client " + client);
-            return false;
+        if (clients != null && clients.remove(client)) {
+            if (DBG)
+                log("Removed cell broadcast subscription for MID " + messageIdentifier
+                        + " from client " + client);
+
+            if (clients.isEmpty()) {
+                mCellBroadcastSubscriptions.remove(messageIdentifier);
+                updateCellBroadcastConfig();
+            }
+            return true;
         }
 
-        if (DBG)
-            log("Removed cell broadcast subscription for MID range " + startMessageId
-                    + " to " + endMessageId + " from client " + client);
-
-        return true;
+        return false;
     }
 
-    class CellBroadcastRangeManager extends IntRangeManager {
-        private ArrayList<SmsBroadcastConfigInfo> mConfigList =
-                new ArrayList<SmsBroadcastConfigInfo>();
+    private boolean updateCellBroadcastConfig() {
+        Set<Integer> messageIdentifiers = mCellBroadcastSubscriptions.keySet();
 
-        /**
-         * Called when the list of enabled ranges has changed. This will be
-         * followed by zero or more calls to {@link #addRange} followed by
-         * a call to {@link #finishUpdate}.
-         */
-        protected void startUpdate() {
-            mConfigList.clear();
-        }
+        if (messageIdentifiers.size() > 0) {
+            SmsBroadcastConfigInfo[] configs =
+                    new SmsBroadcastConfigInfo[messageIdentifiers.size()];
+            int i = 0;
 
-        /**
-         * Called after {@link #startUpdate} to indicate a range of enabled
-         * values.
-         * @param startId the first id included in the range
-         * @param endId the last id included in the range
-         */
-        protected void addRange(int startId, int endId, boolean selected) {
-            mConfigList.add(new SmsBroadcastConfigInfo(startId, endId,
-                        SMS_CB_CODE_SCHEME_MIN, SMS_CB_CODE_SCHEME_MAX, selected));
-        }
-
-        /**
-         * Called to indicate the end of a range update started by the
-         * previous call to {@link #startUpdate}.
-         */
-        protected boolean finishUpdate() {
-            if (mConfigList.isEmpty()) {
-                return setCellBroadcastActivation(false);
-            } else {
-                SmsBroadcastConfigInfo[] configs =
-                        mConfigList.toArray(new SmsBroadcastConfigInfo[mConfigList.size()]);
-                return setCellBroadcastConfig(configs) && setCellBroadcastActivation(true);
+            for (int messageIdentifier : messageIdentifiers) {
+                configs[i++] = new SmsBroadcastConfigInfo(messageIdentifier, messageIdentifier,
+                        SMS_CB_CODE_SCHEME_MIN, SMS_CB_CODE_SCHEME_MAX, true);
             }
+
+            return setCellBroadcastConfig(configs) && setCellBroadcastActivation(true);
+        } else {
+            return setCellBroadcastActivation(false);
         }
     }
 
@@ -331,7 +314,7 @@ public class SimSmsInterfaceManager extends IccSmsInterfaceManager {
 
     private boolean setCellBroadcastActivation(boolean activate) {
         if (DBG)
-            log("Calling setCellBroadcastActivation(" + activate + ')');
+            log("Calling setCellBroadcastActivation(" + activate + ")");
 
         synchronized (mLock) {
             Message response = mHandler.obtainMessage(EVENT_SET_BROADCAST_ACTIVATION_DONE);

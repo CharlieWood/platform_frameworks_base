@@ -5,12 +5,10 @@ LOCAL_SRC_FILES:= \
     clz.cpp.arm \
     DisplayHardware/DisplayHardware.cpp \
     DisplayHardware/DisplayHardwareBase.cpp \
-    BlurFilter.cpp.arm \
+    DisplayHardware/HWComposer.cpp \
     GLExtensions.cpp \
     Layer.cpp \
     LayerBase.cpp \
-    LayerBuffer.cpp \
-    LayerBlur.cpp \
     LayerDim.cpp \
     MessageQueue.cpp \
     SurfaceFlinger.cpp \

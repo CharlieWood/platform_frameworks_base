@@ -35,7 +35,12 @@ public:
             const char *url, const KeyedVector<String8, String8> *headers);
 
     virtual status_t setDataSource(int fd, int64_t offset, int64_t length);
-    virtual status_t setVideoSurface(const sp<ISurface> &surface);
+
+    virtual status_t setDataSource(const sp<IStreamSource> &source);
+
+    virtual status_t setVideoSurface(const sp<Surface> &surface);
+    virtual status_t setVideoSurfaceTexture(
+            const sp<ISurfaceTexture> &surfaceTexture);
     virtual status_t prepare();
     virtual status_t prepareAsync();
     virtual status_t start();
@@ -50,8 +55,6 @@ public:
     virtual player_type playerType();
     virtual status_t invoke(const Parcel &request, Parcel *reply);
     virtual void setAudioSink(const sp<AudioSink> &audioSink);
-    virtual status_t suspend();
-    virtual status_t resume();
 
     virtual status_t getMetadata(
             const media::Metadata::Filter& ids, Parcel *records);

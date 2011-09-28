@@ -40,7 +40,6 @@
 #include <pixelflinger/pixelflinger.h>
 
 #include <private/ui/android_natives_priv.h>
-#include <private/ui/sw_gralloc_handle.h>
 
 #include <hardware/copybit.h>
 
@@ -83,6 +82,11 @@ static GLint getError() {
     if (ggl_unlikely(gEGLErrorKey == -1))
         return EGL_SUCCESS;
     GLint error = (GLint)pthread_getspecific(gEGLErrorKey);
+    if (error == 0) {
+        // The TLS key has been created by another thread, but the value for
+        // this thread has not been initialized.
+        return EGL_SUCCESS;
+    }
     pthread_setspecific(gEGLErrorKey, (void*)EGL_SUCCESS);
     return error;
 }
@@ -446,15 +450,10 @@ status_t egl_window_surface_v2_t::lock(
         android_native_buffer_t* buf, int usage, void** vaddr)
 {
     int err;
-    if (sw_gralloc_handle_t::validate(buf->handle) < 0) {
-        err = module->lock(module, buf->handle,
-                usage, 0, 0, buf->width, buf->height, vaddr);
-    } else {
-        sw_gralloc_handle_t const* hnd =
-                reinterpret_cast<sw_gralloc_handle_t const*>(buf->handle);
-        *vaddr = (void*)hnd->base;
-        err = NO_ERROR;
-    }
+
+    err = module->lock(module, buf->handle,
+            usage, 0, 0, buf->width, buf->height, vaddr);
+
     return err;
 }
 
@@ -462,9 +461,9 @@ status_t egl_window_surface_v2_t::unlock(android_native_buffer_t* buf)
 {
     if (!buf) return BAD_VALUE;
     int err = NO_ERROR;
-    if (sw_gralloc_handle_t::validate(buf->handle) < 0) {
-        err = module->unlock(module, buf->handle);
-    }
+
+    err = module->unlock(module, buf->handle);
+
     return err;
 }
 
@@ -480,13 +479,13 @@ void egl_window_surface_v2_t::copyBlt(
     copybit_device_t* const copybit = blitengine;
     if (copybit)  {
         copybit_image_t simg;
-        simg.w = src->width;
+        simg.w = src->stride;
         simg.h = src->height;
         simg.format = src->format;
         simg.handle = const_cast<native_handle_t*>(src->handle);
 
         copybit_image_t dimg;
-        dimg.w = dst->width;
+        dimg.w = dst->stride;
         dimg.h = dst->height;
         dimg.format = dst->format;
         dimg.handle = const_cast<native_handle_t*>(dst->handle);
@@ -546,7 +545,9 @@ EGLBoolean egl_window_surface_v2_t::swapBuffers()
     if (!dirtyRegion.isEmpty()) {
         dirtyRegion.andSelf(Rect(buffer->width, buffer->height));
         if (previousBuffer) {
-            const Region copyBack(Region::subtract(oldDirtyRegion, dirtyRegion));
+            // This was const Region copyBack, but that causes an
+            // internal compile error on simulator builds
+            /*const*/ Region copyBack(Region::subtract(oldDirtyRegion, dirtyRegion));
             if (!copyBack.isEmpty()) {
                 void* prevBits;
                 if (lock(previousBuffer, 
@@ -1980,7 +1981,7 @@ EGLBoolean eglSwapInterval(EGLDisplay dpy, EGLint interval)
     if (egl_display_t::is_valid(dpy) == EGL_FALSE)
         return setError(EGL_BAD_DISPLAY, EGL_FALSE);
     // TODO: eglSwapInterval()
-    return setError(EGL_BAD_PARAMETER, EGL_FALSE);
+    return EGL_TRUE;
 }
 
 // ----------------------------------------------------------------------------

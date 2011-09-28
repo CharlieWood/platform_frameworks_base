@@ -172,16 +172,6 @@ status_t MediaPlayer::invoke(const Parcel& request, Parcel *reply)
     return INVALID_OPERATION;
 }
 
-status_t MediaPlayer::suspend() {
-    Mutex::Autolock _l(mLock);
-    return mPlayer->suspend();
-}
-
-status_t MediaPlayer::resume() {
-    Mutex::Autolock _l(mLock);
-    return mPlayer->resume();
-}
-
 status_t MediaPlayer::setMetadataFilter(const Parcel& filter)
 {
     LOGD("setMetadataFilter");
@@ -207,10 +197,18 @@ status_t MediaPlayer::setVideoSurface(const sp<Surface>& surface)
     LOGV("setVideoSurface");
     Mutex::Autolock _l(mLock);
     if (mPlayer == 0) return NO_INIT;
-    if (surface != NULL)
-        return  mPlayer->setVideoSurface(surface->getISurface());
-    else
-        return  mPlayer->setVideoSurface(NULL);
+
+    return mPlayer->setVideoSurface(surface);
+}
+
+status_t MediaPlayer::setVideoSurfaceTexture(
+        const sp<ISurfaceTexture>& surfaceTexture)
+{
+    LOGV("setVideoSurfaceTexture");
+    Mutex::Autolock _l(mLock);
+    if (mPlayer == 0) return NO_INIT;
+
+    return mPlayer->setVideoSurfaceTexture(surfaceTexture);
 }
 
 // must call with lock held
@@ -449,6 +447,9 @@ status_t MediaPlayer::reset()
         } else {
             mCurrentState = MEDIA_PLAYER_IDLE;
         }
+        // setDataSource has to be called again to create a
+        // new mediaplayer.
+        mPlayer = 0;
         return ret;
     }
     clear_l();
@@ -616,7 +617,9 @@ void MediaPlayer::notify(int msg, int ext1, int ext2)
     case MEDIA_INFO:
         // ext1: Media framework error code.
         // ext2: Implementation dependant error code.
-        LOGW("info/warning (%d, %d)", ext1, ext2);
+        if (ext1 != MEDIA_INFO_VIDEO_TRACK_LAGGING) {
+            LOGW("info/warning (%d, %d)", ext1, ext2);
+        }
         break;
     case MEDIA_SEEK_COMPLETE:
         LOGV("Received seek complete");

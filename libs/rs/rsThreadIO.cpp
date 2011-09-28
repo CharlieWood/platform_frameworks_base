@@ -21,25 +21,21 @@
 using namespace android;
 using namespace android::renderscript;
 
-ThreadIO::ThreadIO()
-{
+ThreadIO::ThreadIO() {
     mToCore.init(16 * 1024);
     mToClient.init(1024);
 }
 
-ThreadIO::~ThreadIO()
-{
+ThreadIO::~ThreadIO() {
 }
 
-void ThreadIO::shutdown()
-{
+void ThreadIO::shutdown() {
     mToCore.shutdown();
 }
 
-bool ThreadIO::playCoreCommands(Context *con, bool waitForCommand)
-{
+bool ThreadIO::playCoreCommands(Context *con, bool waitForCommand) {
     bool ret = false;
-    while(!mToCore.isEmpty() || waitForCommand) {
+    while (!mToCore.isEmpty() || waitForCommand) {
         uint32_t cmdID = 0;
         uint32_t cmdSize = 0;
         ret = true;
@@ -57,6 +53,11 @@ bool ThreadIO::playCoreCommands(Context *con, bool waitForCommand)
         waitForCommand = false;
         //LOGV("playCoreCommands 3 %i %i", cmdID, cmdSize);
 
+        if (cmdID >= (sizeof(gPlaybackFuncs) / sizeof(void *))) {
+            rsAssert(cmdID < (sizeof(gPlaybackFuncs) / sizeof(void *)));
+            LOGE("playCoreCommands error con %p, cmd %i", con, cmdID);
+            mToCore.printDebugData();
+        }
         gPlaybackFuncs[cmdID](con, data);
         mToCore.next();
     }

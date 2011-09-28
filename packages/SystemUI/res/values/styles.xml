@@ -19,10 +19,37 @@
     <style name="TextAppearance.StatusBar.Title" parent="@android:style/TextAppearance.StatusBar">
         <item name="android:textAppearance">?android:attr/textAppearanceSmall</item>
         <item name="android:textStyle">bold</item>
-        <item name="android:textColor">@drawable/notification_header_text_color</item>
+        <item name="android:textColor">?android:attr/textColorPrimary</item>
     </style>
 
     <style name="TextAppearance.StatusBar.IntruderAlert"
         parent="@android:style/TextAppearance.StatusBar">
     </style>
+
+    <style name="TextAppearance.StatusBar.SystemPanel"
+        parent="@android:style/TextAppearance.StatusBar">
+        <item name="android:textAppearance">?android:attr/textAppearance</item>
+        <item name="android:textStyle">normal</item>
+        <item name="android:textColor">#FF808080</item>
+    </style>
+
+    <style name="TextAppearance.StatusBar.TextButton"
+        parent="@android:style/TextAppearance.StatusBar">
+        <item name="android:textAppearance">?android:attr/textAppearance</item>
+        <item name="android:textStyle">normal</item>
+        <item name="android:textColor">#FFFFFFFF</item>
+    </style>
+
+    <style name="Animation" />
+
+    <style name="Animation.ShirtPocketPanel">
+        <item name="android:windowEnterAnimation">@*android:anim/grow_fade_in_from_bottom</item>
+        <item name="android:windowExitAnimation">@*android:anim/shrink_fade_out_from_bottom</item>
+    </style>
+
+    <style name="Animation.RecentPanel">
+        <item name="android:windowEnterAnimation">@*android:anim/grow_fade_in_from_bottom</item>
+        <item name="android:windowExitAnimation">@*android:anim/shrink_fade_out_from_bottom</item>
+    </style>
+
 </resources>

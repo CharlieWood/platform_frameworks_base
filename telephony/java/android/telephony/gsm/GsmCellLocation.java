@@ -150,4 +150,11 @@ public class GsmCellLocation extends CellLocation {
     public boolean isEmpty() {
         return (mLac == -1 && mCid == -1 && mPsc == -1);
     }
+
+    /**
+     * @hide
+     */
+    public int getCellId() {
+        return getCid();
+    }
 }
